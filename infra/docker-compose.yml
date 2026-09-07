@@ -1,0 +1,49 @@
+# Dev/staging convenience stack. On the real lab server (design doc §2.7,
+# "if Docker is not permitted") these run as native Windows services
+# instead — see infra/README.md for that path. This file exists for local
+# development on the build machine and for sites where Docker IS allowed.
+name: lab-portal
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: labportal
+      POSTGRES_PASSWORD: labportal
+      POSTGRES_DB: labportal
+    ports:
+      - '5432:5432'
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U labportal']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redis-data:/data
+
+  livekit:
+    image: livekit/livekit-server:v1.13.6
+    restart: unless-stopped
+    command: ['--config', '/etc/livekit.yaml']
+    volumes:
+      - ./livekit/livekit.yaml:/etc/livekit.yaml:ro
+    ports:
+      - '7880:7880' # HTTP/WS signalling
+      - '7881:7881' # TCP fallback
+      - '7882-7892:7882-7892/udp' # RTC media (design doc §2.7)
+    depends_on:
+      - redis
+
+volumes:
+  postgres-data:
+  redis-data:

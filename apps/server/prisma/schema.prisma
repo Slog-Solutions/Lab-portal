@@ -1,0 +1,440 @@
+// Digital Language Lab — core data model (build plan "Data model").
+// Design note: entity names/relations mirror packages/shared/src/types
+// enums so the server never re-derives what a status or role means.
+
+generator client {
+  provider = "prisma-client-js"
+  output   = "../generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================ Identity ===
+
+enum UserRole {
+  ADMIN
+  TEACHER
+  STUDENT
+}
+
+model User {
+  id            String   @id @default(cuid())
+  role          UserRole
+  serviceNumber String   @unique
+  rank          String?
+  fullName      String
+  passwordHash  String
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  enrollments      Enrollment[]
+  taughtSessions    ClassSession[]     @relation("SessionTeacher")
+  mediaAssets       MediaAsset[]
+  curricula         Curriculum[]
+  assignmentsGiven  Assignment[]       @relation("AssignmentTeacher")
+  attempts          Attempt[]
+  scoreOverrides    ScoreOverride[]
+  auditLogs         AuditLog[]
+  claimedStation    Station?
+  studyProgress     SkillProgress[]
+
+  @@index([role])
+}
+
+model Batch {
+  id        String   @id @default(cuid())
+  name      String
+  createdAt DateTime @default(now())
+
+  enrollments   Enrollment[]
+  classSessions ClassSession[]
+}
+
+model Enrollment {
+  id      String @id @default(cuid())
+  userId  String
+  batchId String
+  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  batch   Batch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, batchId])
+}
+
+// ================================================================ Lab ===
+
+enum StationLifecycle {
+  UNCLAIMED
+  OFFLINE
+  JOINING
+  READY
+  ACTIVE
+  LOCKED
+  ERROR
+}
+
+// Identity is machineGuid (HKLM MachineGuid — stable across rename/NIC
+// swap, see design doc §3.7), NOT hostname or MAC. Seat 1 = teacher.
+model Station {
+  id           String            @id @default(cuid())
+  machineGuid  String            @unique
+  hostname     String
+  macs         String[]
+  seatNo       Int?              @unique
+  lifecycle    StationLifecycle  @default(UNCLAIMED)
+  appVersion   String?
+  osBuild      String?
+  lastIp       String?
+  lastSeenAt   DateTime?
+  currentUserId String?          @unique
+  currentUser  User?             @relation(fields: [currentUserId], references: [id])
+  enabled      Boolean           @default(true)
+  archivedAt   DateTime?         // set when "replace station" supersedes this row
+  createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
+
+  sessionMembers SessionMember[]
+  recordings     Recording[]
+  auditLogs      AuditLog[]
+
+  @@index([lifecycle])
+  @@index([seatNo])
+}
+
+// ============================================================ Runtime ===
+
+enum SessionState {
+  DRAFT
+  ARMED
+  RUNNING
+  PAUSED
+  ENDED
+  ABANDONED
+}
+
+enum SessionRole {
+  MEMBER
+  CHAIRMAN
+  INTERPRETER
+  DELEGATE
+  OBSERVER
+}
+
+enum ActivityType {
+  MODEL_IMITATION
+  ROUND_TABLE
+  CONTENT_EXERCISE
+  VOCABULARY_TEST
+  TELEPHONE
+  PRONUNCIATION
+  CONFERENCE_INTERPRETING
+  PRESENTATION_RECORDING
+  SELF_STUDY
+}
+
+// A teacher-defined set of stations partitioned into up to 6 groups
+// (Annexure-I Ser 1: "divided into six different sessions... controlled
+// separately and can simultaneously perform different activities").
+model ClassSession {
+  id        String       @id @default(cuid())
+  title     String
+  state     SessionState @default(DRAFT)
+  seq       Int          @default(0) // monotonic, guards snapshot reordering
+  teacherId String
+  teacher   User         @relation("SessionTeacher", fields: [teacherId], references: [id])
+  batchId   String
+  batch     Batch        @relation(fields: [batchId], references: [id])
+  startedAt DateTime?
+  endedAt   DateTime?
+  createdAt DateTime     @default(now())
+  updatedAt DateTime     @updatedAt
+
+  groups SessionGroup[]
+
+  @@index([state])
+}
+
+model SessionGroup {
+  id          String   @id @default(cuid())
+  sessionId   String
+  session     ClassSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  index       Int      // 1-6, position within the session
+  chairmanId  String?  // SessionMember.id of the designated chairman (Ser 3)
+  createdAt   DateTime @default(now())
+
+  members  SessionMember[]
+  activity ActivityInstance?
+
+  @@unique([sessionId, index])
+}
+
+model SessionMember {
+  id        String       @id @default(cuid())
+  groupId   String
+  group     SessionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  stationId String
+  station   Station      @relation(fields: [stationId], references: [id])
+  role      SessionRole  @default(MEMBER)
+
+  @@unique([groupId, stationId])
+}
+
+// One group runs exactly one activity at a time; config/state are opaque
+// JSON validated at the boundary against that ActivityType's zod schema
+// in packages/shared/src/activities (Activity Type Registry).
+model ActivityInstance {
+  id        String       @id @default(cuid())
+  groupId   String       @unique
+  group     SessionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  type      ActivityType
+  config    Json
+  state     Json         @default("{}")
+  startedAt DateTime?
+  endedAt   DateTime?
+
+  attempts   Attempt[]
+  recordings Recording[]
+}
+
+// ============================================================ Content ===
+
+enum MediaAssetScope {
+  PRIVATE
+  DEPARTMENT
+  INSTITUTION
+}
+
+// Ser 1: "media library... multi teacher access facility for sharing and
+// collaborating content resources remotely across the campus."
+model MediaAsset {
+  id          String          @id @default(cuid())
+  ownerId     String
+  owner       User            @relation(fields: [ownerId], references: [id])
+  scope       MediaAssetScope @default(PRIVATE)
+  kind        String          // 'audio' | 'video' | 'text' | 'image'
+  filename    String
+  path        String          // relative to LabData root
+  sizeBytes   Int
+  mimeType    String
+  durationMs  Int?
+  createdAt   DateTime        @default(now())
+
+  @@index([scope])
+  @@index([ownerId])
+}
+
+// SCORM/xAPI/HTML import (build plan "engine + import + seed pack" decision)
+model ContentPackage {
+  id         String   @id @default(cuid())
+  title      String
+  format     String   // 'SCORM12' | 'SCORM2004' | 'XAPI' | 'HTML'
+  entryPoint String
+  path       String
+  importedAt DateTime @default(now())
+
+  lessons Lesson[]
+}
+
+model Curriculum {
+  id        String   @id @default(cuid())
+  title     String
+  cefrLevel String?  // A1-C1, per Ser 10 "should follow CEFR"
+  ownerId   String
+  owner     User     @relation(fields: [ownerId], references: [id])
+  createdAt DateTime @default(now())
+
+  units Unit[]
+}
+
+model Unit {
+  id           String     @id @default(cuid())
+  curriculumId String
+  curriculum   Curriculum @relation(fields: [curriculumId], references: [id], onDelete: Cascade)
+  title        String
+  order        Int
+
+  lessons Lesson[]
+}
+
+model Lesson {
+  id               String          @id @default(cuid())
+  unitId           String
+  unit             Unit            @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  title            String
+  order            Int
+  contentPackageId String?
+  contentPackage   ContentPackage? @relation(fields: [contentPackageId], references: [id])
+
+  exercises Exercise[]
+}
+
+// Self-study (Ser 1: "session modules for students... self-study even
+// when teacher not present")
+model StudyModule {
+  id          String   @id @default(cuid())
+  title       String
+  exerciseIds String[]
+  createdAt   DateTime @default(now())
+}
+
+// ========================================================= Assessment ===
+
+// Polymorphic by ActivityType; `config` validated against that type's
+// configSchema from the Activity Type Registry.
+model Exercise {
+  id        String       @id @default(cuid())
+  lessonId  String?
+  lesson    Lesson?      @relation(fields: [lessonId], references: [id])
+  type      ActivityType
+  title     String
+  config    Json
+  createdAt DateTime     @default(now())
+
+  itemBank    ItemBank?
+  assignments Assignment[]
+  attempts    Attempt[]
+}
+
+// Ser 10 "Large Test Bank": a different set of questions each attempt.
+model ItemBank {
+  id         String @id @default(cuid())
+  exerciseId String @unique
+  exercise   Exercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
+
+  items Item[]
+}
+
+model Item {
+  id         String   @id @default(cuid())
+  itemBankId String
+  itemBank   ItemBank @relation(fields: [itemBankId], references: [id], onDelete: Cascade)
+  prompt     String
+  answer     String
+  choices    String[]
+  cefrTag    String?
+
+  responses ItemResponse[]
+}
+
+// Ser 10 "teachers can create a special course... set hours... specify
+// the score for students to attain"
+model Assignment {
+  id             String    @id @default(cuid())
+  teacherId      String
+  teacher        User      @relation("AssignmentTeacher", fields: [teacherId], references: [id])
+  exerciseId     String
+  exercise       Exercise  @relation(fields: [exerciseId], references: [id])
+  studentId      String
+  targetScore    Float?
+  allocatedHours Float?
+  dueAt          DateTime?
+  createdAt      DateTime  @default(now())
+
+  @@index([studentId])
+}
+
+model Attempt {
+  id                 String            @id @default(cuid())
+  exerciseId         String
+  exercise           Exercise          @relation(fields: [exerciseId], references: [id])
+  studentId          String
+  student            User              @relation(fields: [studentId], references: [id])
+  activityInstanceId String?
+  activityInstance   ActivityInstance? @relation(fields: [activityInstanceId], references: [id])
+  rawScore           Float?
+  startedAt          DateTime          @default(now())
+  submittedAt        DateTime?
+
+  itemResponses  ItemResponse[]
+  scoreOverride  ScoreOverride?
+  recordings     Recording[]
+
+  @@index([studentId])
+  @@index([exerciseId])
+}
+
+model ItemResponse {
+  id        String  @id @default(cuid())
+  attemptId String
+  attempt   Attempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  itemId    String
+  item      Item    @relation(fields: [itemId], references: [id])
+  given     String
+  correct   Boolean?
+}
+
+enum RecordingKind {
+  MODEL_IMITATION
+  GROUP_DISCUSSION
+  PRESENTATION
+  INTERPRETATION
+}
+
+// Row is created BEFORE capture starts and reconciled via LiveKit webhook
+// or client upload completion — never derived by parsing a filename
+// (design doc §2.6).
+model Recording {
+  id                 String            @id @default(cuid())
+  kind               RecordingKind
+  sessionId          String?
+  activityInstanceId String?
+  activityInstance   ActivityInstance? @relation(fields: [activityInstanceId], references: [id])
+  attemptId          String?
+  attempt            Attempt?          @relation(fields: [attemptId], references: [id])
+  stationId          String?
+  station            Station?          @relation(fields: [stationId], references: [id])
+  studentIds         String[]
+  path               String?           // null until finalized
+  durationMs         Int?
+  sizeBytes          Int?
+  status             String            @default("pending") // pending | recording | finalizing | ready | failed
+  createdAt          DateTime          @default(now())
+  finalizedAt         DateTime?
+}
+
+model SkillProgress {
+  id        String   @id @default(cuid())
+  studentId String
+  student   User     @relation(fields: [studentId], references: [id])
+  skill     String   // 'pronunciation' | 'listening' | 'reading' | 'grammar' | ...
+  score     Float
+  recordedAt DateTime @default(now())
+
+  @@index([studentId, skill])
+}
+
+// ========================================================= Governance ===
+
+// Ser 4: "Report tool... allow teachers to view, edit and save" — an edit
+// is never a silent overwrite, it's an audited override.
+model ScoreOverride {
+  id        String   @id @default(cuid())
+  attemptId String   @unique
+  attempt   Attempt  @relation(fields: [attemptId], references: [id])
+  teacherId String
+  teacher   User     @relation(fields: [teacherId], references: [id])
+  oldScore  Float?
+  newScore  Float
+  reason    String
+  createdAt DateTime @default(now())
+}
+
+// Every privileged action — screen viewed, remote control started,
+// station shut down, score edited — writes here (design doc §3.6).
+model AuditLog {
+  id        String   @id @default(cuid())
+  actorId   String?
+  actor     User?    @relation(fields: [actorId], references: [id])
+  stationId String?
+  station   Station? @relation(fields: [stationId], references: [id])
+  action    String
+  detail    Json?
+  createdAt DateTime @default(now())
+
+  @@index([action])
+  @@index([actorId])
+  @@index([stationId])
+}

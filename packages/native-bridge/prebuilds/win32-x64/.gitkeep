@@ -1,0 +1,3 @@
+Placeholder — lab_native.node lands here once the Phase 1 native-bridge
+spike (see ../../README.md) is complete. Intentionally committed to git
+(not gitignored) so the offline install never needs to compile on site.

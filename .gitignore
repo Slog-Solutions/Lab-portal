@@ -1,0 +1,59 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build outputs
+dist/
+build/
+release/
+out/
+*.tsbuildinfo
+.turbo/
+
+# Native build artifacts (prebuilds/ committed intentionally, raw build dirs are not)
+packages/native-bridge/build/
+packages/native-bridge/CMakeFiles/
+
+# Electron
+apps/desktop/out/
+apps/desktop/release/
+
+# Env
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# Prisma
+apps/server/prisma/*.db
+apps/server/generated/
+
+# Logs
+*.log
+npm-debug.log*
+logs/
+
+# OS
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/*
+!.vscode/extensions.json
+.idea/
+
+# Test / coverage
+coverage/
+
+# Local data (recordings, uploads) — never commit trainee data
+infra/data/
+LabData/
+
+# Certs (generated locally, never committed)
+infra/caddy/*.crt
+infra/caddy/*.key
+infra/offline/certs/
+
+# Offline vendor installers (large binaries, fetched by a script not git)
+infra/offline/vendor/

@@ -1,0 +1,21 @@
+{
+  "name": "@lab/native-bridge",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Win32 input-lock (WH_KEYBOARD_LL/WH_MOUSE_LL) and remote-control (SendInput) native addon for the student Electron client. See build plan 'week one spike' — the hook's behavior under LowLevelHooksTimeout and elevation requirements must be verified on the real Windows 11 Pro image before this package's C++ is written.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc --noEmit",
+    "clean": "rimraf dist"
+  },
+  "dependencies": {
+    "@lab/shared": "*"
+  },
+  "devDependencies": {
+    "typescript": "5.9.2",
+    "@types/node": "24.13.3",
+    "rimraf": "6.0.1"
+  }
+}

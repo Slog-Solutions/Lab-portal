@@ -1,0 +1,48 @@
+appId: com.slogsolutions.labportal
+productName: LabPortal
+directories:
+  output: release
+  buildResources: build
+
+files:
+  - dist/main/**/*
+  - dist/preload/**/*
+  - package.json
+
+# The web build is a build-time artifact, not a source dependency, so it
+# is shipped via extraResources rather than `files` — process.resourcesPath
+# is exactly where apps/desktop/src/main/index.ts looks for it
+# (design doc §1.4 "one React bundle, two hosts").
+extraResources:
+  - from: ../web/dist
+    to: web
+
+# Native modules must be unpacked from the asar archive — `bindings`
+# (used by @nut-tree-fork/nut-js, added in Phase 1) does a runtime
+# filesystem search that cannot see inside asar (design doc §1.5, §3.4).
+asarUnpack:
+  - '**/node_modules/@nut-tree-fork/**'
+  - '**/prebuilds/**'
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  # No code signing cert configured yet — set this up before any real
+  # deployment; electron-updater needs it too (design doc §3.8).
+  signAndEditExecutable: false
+
+nsis:
+  oneClick: false
+  perMachine: true
+  allowToChangeInstallationDirectory: false
+  # Elevation happens exactly once, at install (design doc §3.6) — the
+  # service registration, root CA import and firewall rules all land here
+  # in Phase 1's services/lab-agent-svc integration, not at runtime.
+  include: build/installer.nsh
+
+publish:
+  # LAN auto-update, no internet (design doc §3.8) — points at the lab
+  # server's own /updates/win/ path, never a public endpoint.
+  provider: generic
+  url: https://labserver.lab.local/updates/win/

@@ -1,0 +1,36 @@
+{
+  "name": "lab-portal",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Digital Language Lab platform — ACTC No 2 TRG BN, ASC Centre (South)",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "tools/*"
+  ],
+  "packageManager": "npm@11.11.0",
+  "engines": {
+    "node": ">=24.14.0"
+  },
+  "scripts": {
+    "build": "turbo run build",
+    "dev": "turbo run dev",
+    "typecheck": "turbo run typecheck",
+    "lint": "turbo run lint",
+    "test": "turbo run test",
+    "clean": "turbo run clean && rimraf node_modules",
+    "prisma:generate": "npm run prisma:generate --workspace=apps/server",
+    "prisma:migrate": "npm run prisma:migrate --workspace=apps/server",
+    "sim": "npm run start --workspace=tools/sim"
+  },
+  "devDependencies": {
+    "turbo": "2.10.12",
+    "typescript": "5.9.2",
+    "rimraf": "6.0.1",
+    "prettier": "3.6.2"
+  },
+  "overrides": {
+    "zod": "4.5.4",
+    "deepmerge-ts": "8.0.2"
+  }
+}
