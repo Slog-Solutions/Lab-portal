@@ -26,20 +26,27 @@
       "types": "./dist/activities/index.d.ts",
       "import": "./dist/activities/index.js",
       "require": "./dist/activities/index.cjs"
+    },
+    "./agent": {
+      "types": "./dist/agent/index.d.ts",
+      "import": "./dist/agent/index.js",
+      "require": "./dist/agent/index.cjs"
     }
   },
   "scripts": {
     "build": "tsup",
     "dev": "tsup --watch",
     "typecheck": "tsc --noEmit",
+    "test": "vitest run",
     "clean": "rimraf dist"
   },
   "dependencies": {
     "zod": "4.5.4"
   },
   "devDependencies": {
+    "rimraf": "6.0.1",
     "tsup": "8.5.0",
     "typescript": "5.9.2",
-    "rimraf": "6.0.1"
+    "vitest": "5.0.0"
   }
 }

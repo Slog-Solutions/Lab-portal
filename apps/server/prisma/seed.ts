@@ -1,11 +1,19 @@
 import { PrismaClient } from '../generated/prisma';
 import { AuthService } from '../src/modules/auth/auth.service';
+import { seedCefrContent } from './seed-cefr-content';
 
 /**
- * Seeds enough data to exercise Phase 0 end to end: one admin, one
- * teacher, one batch, and 40 student users pre-enrolled — matching the
- * 40-student-seat shape from Annexure-I so tools/sim (Phase 1) can drive
- * a realistic load test without further fixture work.
+ * Seeds exactly one clean test dataset to exercise Phase 0 end to end:
+ * one admin, three teachers, one batch, and 40 student users pre-enrolled
+ * — matching the 40-student-seat shape from Annexure-I so tools/sim
+ * (Phase 1) can drive a realistic load test without further fixture work.
+ *
+ * Meant to be the ONLY data in a dev database: run against a database
+ * that has just been through `prisma migrate reset` (drops + recreates
+ * every table) rather than layered on top of whatever testing debris
+ * accumulated previously — this script is idempotent (upsert-based) but
+ * does not delete unrelated rows (sessions, stations, ad hoc exercises,
+ * attempts) created outside of it.
  */
 const prisma = new PrismaClient();
 
@@ -23,17 +31,32 @@ async function main(): Promise<void> {
   });
 
   const teacherPasswordHash = await AuthService.hashPassword('Teacher@12345');
-  const teacher = await prisma.user.upsert({
-    where: { serviceNumber: 'TCH-001' },
-    update: {},
-    create: {
-      serviceNumber: 'TCH-001',
-      fullName: 'R.S. Shekhawat',
-      rank: 'Lt Col',
-      role: 'TEACHER',
-      passwordHash: teacherPasswordHash,
-    },
-  });
+  const teacherSeeds = [
+    { serviceNumber: 'TCH-001', fullName: 'R.S. Shekhawat', rank: 'Lt Col' },
+    { serviceNumber: 'TCH-002', fullName: 'A.K. Mehta', rank: 'Maj' },
+    { serviceNumber: 'TCH-003', fullName: 'P. Iyer', rank: 'Capt' },
+  ];
+  const teachers = [];
+  for (const t of teacherSeeds) {
+    teachers.push(
+      await prisma.user.upsert({
+        where: { serviceNumber: t.serviceNumber },
+        update: {},
+        create: {
+          serviceNumber: t.serviceNumber,
+          fullName: t.fullName,
+          rank: t.rank,
+          role: 'TEACHER',
+          passwordHash: teacherPasswordHash,
+        },
+      }),
+    );
+  }
+  // CEFR content pack is owned by the first teacher; the batch is shared
+  // by all three (any teacher can start a ClassSession against any batch
+  // — see sessions.service.ts's listBatches — so one shared cohort is
+  // enough to test all three teacher logins against the same 40 students).
+  const teacher = teachers[0]!;
 
   const batch = await prisma.batch.upsert({
     // Hyphen-free: every API DTO validates IDs against a cuid2-shaped
@@ -64,8 +87,17 @@ async function main(): Promise<void> {
     });
   }
 
+  // Phase 4 — original CEFR seed pack (Ser 4/10), owned by the seeded
+  // teacher so it shows up in their own Exercises/Study Library pages
+  // exactly like anything they'd author themselves.
+  await seedCefrContent(prisma, teacher.id);
+
   // eslint-disable-next-line no-console
-  console.log(`Seeded: admin=${admin.serviceNumber} teacher=${teacher.serviceNumber} batch=${batch.name} + 40 students`);
+  console.log(
+    `Seeded: admin=${admin.serviceNumber} teachers=${teachers.map((t) => t.serviceNumber).join(',')} batch=${batch.name} + 40 students`,
+  );
+  // eslint-disable-next-line no-console
+  console.log('Seeded: CEFR A1/A2/B1 original content pack (Listening/Speaking/Reading/Grammar) + Study Library modules');
   // eslint-disable-next-line no-console
   console.log('Default passwords: Admin@12345 / Teacher@12345 / Student@12345 — rotate before any real deployment.');
 }

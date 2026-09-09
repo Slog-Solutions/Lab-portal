@@ -12,11 +12,20 @@ import type { StationHelloAck } from '@lab/shared';
  * mocking.
  *
  * Usage: npm run sim -- --count 40 --server http://localhost:3000
+ * Phase 5: npm run sim -- --count 40 --with-session
+ *   also arms a real 6-group session across every connected station
+ *   (Ser 1 "six independent, simultaneous sessions" at full 40-seat
+ *   scale) with a real mix of activity types, and times how long
+ *   SessionsService.arm()'s full snapshot fan-out to every station takes
+ *   — this pass's actual load-test gap: prior runs only ever proved
+ *   connection/presence/heartbeat at 41 seats (see Phase 0 close-out),
+ *   never a real session touching every seat at once.
  */
 
 interface SimArgs {
   count: number;
   server: string;
+  withSession: boolean;
 }
 
 function parseArgs(): SimArgs {
@@ -28,6 +37,7 @@ function parseArgs(): SimArgs {
   return {
     count: parseInt(get('--count', '40'), 10),
     server: get('--server', 'http://localhost:3000'),
+    withSession: args.includes('--with-session'),
   };
 }
 
@@ -38,10 +48,95 @@ interface VirtualStation {
   connectedAt?: number;
   stationId?: string;
   seatNo?: number | null;
+  snapshotSeq?: number;
+}
+
+async function api<T>(server: string, path: string, token: string | null, init?: RequestInit): Promise<T> {
+  const res = await fetch(`${server}/api${path}`, {
+    ...init,
+    headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(init?.headers ?? {}) },
+  });
+  const body = await res.json().catch(() => undefined);
+  if (!res.ok) throw new Error(`${init?.method ?? 'GET'} ${path} -> ${res.status}: ${JSON.stringify(body)}`);
+  return body as T;
+}
+
+/** Arms one real 6-group session across every connected station (Ser 1
+ * at full scale), with a real mix of activity types, and reports how
+ * long the full snapshot fan-out actually took. */
+async function armLoadTestSession(server: string, stations: VirtualStation[]): Promise<void> {
+  const ready = stations.filter((s) => s.stationId);
+  if (ready.length < 2) {
+    console.warn('[sim] --with-session needs at least 2 acked stations, skipping');
+    return;
+  }
+
+  const { accessToken: teacherToken } = await api<{ accessToken: string }>(server, '/auth/login', null, {
+    method: 'POST',
+    body: JSON.stringify({ serviceNumber: 'TCH-001', password: 'Teacher@12345' }),
+  });
+  const batches = await api<Array<{ id: string }>>(server, '/sessions/batches', teacherToken);
+  if (!batches[0]) throw new Error('No seeded batch found — run prisma:seed first');
+
+  const groupCount = Math.min(6, ready.length);
+  const groups: Array<{ id: string[]; kind: string }> = Array.from({ length: groupCount }, (_, i) => ({
+    id: [],
+    kind: ['CONFERENCE_INTERPRETING', 'ROUND_TABLE', 'TELEPHONE', 'VOCABULARY_TEST', 'ROUND_TABLE', 'TELEPHONE'][i]!,
+  }));
+  ready.forEach((s, i) => groups[i % groupCount]!.id.push(s.stationId!));
+
+  const groupPayload = groups
+    .filter((g) => g.id.length > 0)
+    .map((g, index) => {
+      const base = { index: index + 1, memberStationIds: g.id };
+      switch (g.kind) {
+        case 'CONFERENCE_INTERPRETING':
+          return {
+            ...base,
+            activityType: g.kind,
+            activityConfig: {
+              topic: 'Load-test summit',
+              languages: ['fr'],
+              roles: g.id.map((stationId, i2) => ({
+                stationId,
+                role: i2 === 0 ? 'DELEGATE' : i2 === 1 ? 'INTERPRETER' : 'OBSERVER',
+                lang: i2 === 1 ? 'fr' : undefined,
+              })),
+            },
+          };
+        case 'TELEPHONE':
+          return { ...base, activityType: g.kind, activityConfig: { scenario: 'Load-test call', maxDurationSec: 300 } };
+        case 'VOCABULARY_TEST':
+          return { ...base, activityType: g.kind, activityConfig: { items: [{ prompt: 'load', answer: 'test' }], shuffleItems: false } };
+        default:
+          return { ...base, activityType: g.kind, activityConfig: { topic: 'Load-test discussion', chairmanAssignment: 'manual', micRequestQueueEnabled: true } };
+      }
+    });
+
+  console.log(`[sim] arming a ${groupPayload.length}-group session across ${ready.length} stations…`);
+  const snapshotPromises = ready.map(
+    (s) =>
+      new Promise<void>((resolve) => {
+        s.socket.once('session:snapshot', () => resolve());
+      }),
+  );
+
+  const session = await api<{ id: string }>(server, '/sessions', teacherToken, {
+    method: 'POST',
+    body: JSON.stringify({ title: `Load test ${new Date().toISOString()}`, batchId: batches[0].id, groups: groupPayload }),
+  });
+
+  const armStarted = Date.now();
+  await api(server, `/sessions/${session.id}/arm`, teacherToken, { method: 'POST' });
+  await Promise.all(snapshotPromises);
+  console.log(`[sim] all ${ready.length} stations received a post-arm snapshot in ${Date.now() - armStarted}ms`);
+
+  await api(server, `/sessions/${session.id}/end`, teacherToken, { method: 'POST' });
+  console.log('[sim] session ended, LiveKit rooms torn down');
 }
 
 async function main(): Promise<void> {
-  const { count, server } = parseArgs();
+  const { count, server, withSession } = parseArgs();
   const wsUrl = server.replace(/^http/, 'ws');
   console.log(`[sim] spinning up ${count} virtual stations against ${wsUrl}${CONTROL_NAMESPACE}`);
 
@@ -75,6 +170,7 @@ async function main(): Promise<void> {
           station.seatNo = ack.seatNo;
           if (helloAcked === count) {
             console.log(`[sim] all ${count} stations registered and acked`);
+            if (withSession) void armLoadTestSession(server, stations).catch((err) => console.error('[sim] --with-session failed:', err));
           }
         },
       );

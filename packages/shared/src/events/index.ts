@@ -56,6 +56,18 @@ export interface ServerToStationEvents {
   command: (payload: CommandEnvelope) => void;
   'station:identity': (payload: { stationId: string; seatNo: number; displayName: string }) => void;
   'lock:heartbeat': (payload: { expiresAt: number }) => void;
+  /** Teacher started remote control (design doc §3.4) — the station
+   * publishes its screen into `ctrl:<stationId>` using this token and
+   * begins listening for input-replay data on that room's data channel. */
+  'remote-control:start': (payload: { room: string; token: string }) => void;
+  'remote-control:stop': (payload: { room: string }) => void;
+  /** Relay of another group member's activity:event (Ser 3 mic-request
+   * queue, chairman turn-passing). The server is a dumb relay here, not
+   * an authority — the CHAIRMAN's own client decides who has the floor
+   * and broadcasts it; this is a classroom coordination aid, not a
+   * security boundary, so trusting the relay is an acceptable v1 scope
+   * cut (see build plan Phase 2 notes). */
+  'activity:event': (payload: ActivityEventPayload & { fromStationId: string }) => void;
 }
 
 // ---- Server -> Teacher / Admin dashboards -----------------------------------------
@@ -64,6 +76,12 @@ export interface ServerToDashboardEvents {
   'lab:status': (payload: StationStatusRow[]) => void;
   'lab:status:delta': (payload: Partial<StationStatusRow> & { stationId: string }) => void;
   'session:state': (payload: { sessionId: string; state: string; seq: number }) => void;
+  /** Phase 5 — relay of a participant's interp:selectChannel so a
+   * teacher's monitoring UI can show who is currently listening to whom.
+   * Purely observational, same "dumb relay" posture as activity:event —
+   * the client already holds canSubscribe:true for the whole interpreting
+   * room, so this changes nothing about what a participant can hear. */
+  'interp:channel': (payload: { sessionId: string; stationId: string; trackSid: string }) => void;
 }
 
 // ---- Combined maps for socket.io-client / socket.io generics ---------------------

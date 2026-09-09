@@ -16,4 +16,6 @@ export const controlApi = {
   enable: (target: CommandTarget) => apiFetch('/control/enable', { method: 'POST', body: JSON.stringify({ target }) }),
   disable: (target: CommandTarget) => apiFetch('/control/disable', { method: 'POST', body: JSON.stringify({ target }) }),
   openUrl: (target: CommandTarget, url: string) => apiFetch('/control/open-url', { method: 'POST', body: JSON.stringify({ target, url }) }),
+  pushFile: (target: CommandTarget, assetId: string, destinationHint: 'desktop' | 'downloads' = 'downloads') =>
+    apiFetch('/control/push-file', { method: 'POST', body: JSON.stringify({ target, assetId, destinationHint }) }),
 };

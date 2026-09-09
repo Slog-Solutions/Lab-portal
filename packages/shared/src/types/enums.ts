@@ -76,6 +76,7 @@ export const RecordingKind = {
   GROUP_DISCUSSION: 'GROUP_DISCUSSION',
   PRESENTATION: 'PRESENTATION',
   INTERPRETATION: 'INTERPRETATION',
+  PRONUNCIATION: 'PRONUNCIATION',
 } as const;
 export type RecordingKind = (typeof RecordingKind)[keyof typeof RecordingKind];
 
@@ -98,3 +99,49 @@ export const CommandAckStatus = {
   IGNORED: 'ignored',
 } as const;
 export type CommandAckStatus = (typeof CommandAckStatus)[keyof typeof CommandAckStatus];
+
+/**
+ * These four are deliberately plain `String` columns in Prisma (see
+ * schema.prisma comments) rather than Postgres enums, so a new value never
+ * needs a migration — but the values themselves are still a closed set in
+ * practice, so mirror them here for type safety the same way the Prisma
+ * enums above are mirrored.
+ */
+export const ContentPackageFormat = {
+  SCORM12: 'SCORM12',
+  SCORM2004: 'SCORM2004',
+  XAPI: 'XAPI',
+  HTML: 'HTML',
+} as const;
+export type ContentPackageFormat = (typeof ContentPackageFormat)[keyof typeof ContentPackageFormat];
+
+export const ItemType = {
+  MCQ: 'MCQ',
+  SHORT_ANSWER: 'SHORT_ANSWER',
+} as const;
+export type ItemType = (typeof ItemType)[keyof typeof ItemType];
+
+export const AttemptStatus = {
+  IN_PROGRESS: 'IN_PROGRESS',
+  SUBMITTED: 'SUBMITTED',
+  SCORED: 'SCORED',
+} as const;
+export type AttemptStatus = (typeof AttemptStatus)[keyof typeof AttemptStatus];
+
+export const RecordingStatus = {
+  PENDING: 'pending',
+  RECORDING: 'recording',
+  FINALIZING: 'finalizing',
+  READY: 'ready',
+  FAILED: 'failed',
+} as const;
+export type RecordingStatus = (typeof RecordingStatus)[keyof typeof RecordingStatus];
+
+/** `MediaAsset.kind` / upload classification. */
+export const AssetKind = {
+  AUDIO: 'audio',
+  VIDEO: 'video',
+  TEXT: 'text',
+  IMAGE: 'image',
+} as const;
+export type AssetKind = (typeof AssetKind)[keyof typeof AssetKind];

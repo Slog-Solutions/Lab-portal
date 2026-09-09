@@ -9,11 +9,13 @@ import { LockService } from './lock.service';
 import { CommandsService } from './commands.service';
 import { StationsModule } from '../stations/stations.module';
 import { MediaModule } from '../media/media.module';
+import { AuthModule } from '../auth/auth.module';
 
 @Module({
   imports: [
     StationsModule,
     MediaModule,
+    AuthModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

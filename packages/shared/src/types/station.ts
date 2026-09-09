@@ -15,6 +15,11 @@ export interface StationHelloAck {
   seatNo: number | null;
   serverTime: number;
   snapshotSeq: number;
+  /** Station-scoped JWT (Phase 3 — see auth.service.ts's mintStationToken),
+   * re-minted on every hello. Used as the Authorization bearer for the
+   * station's own HTTP calls (recordings, attempts) — never for dashboard
+   * routes, which a station-kind token cannot pass @Roles() for. */
+  token: string;
 }
 
 export interface StationHeartbeat {
@@ -41,6 +46,11 @@ export interface StationStatusRow {
   mic: boolean;
   screenSharing: boolean;
   monitored: boolean;
+  /** The enrolled student who self-claimed this seat (Station.currentUserId
+   * — StationsService.claim, "a roster pick, not a login"). Null until a
+   * student types their service number into the console's My Assignments
+   * panel, or after an admin/teacher force-releases it. */
+  currentUser: { id: string; serviceNumber: string; fullName: string } | null;
 }
 
 /** How a command/broadcast is addressed (design doc §4.4). */

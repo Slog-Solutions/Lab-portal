@@ -1,0 +1,31 @@
+name: CI
+
+# Phase 5 finding: this workflow file never existed despite the build
+# plan naming CI explicitly in "Phase 0 — Foundation". Runs exactly what
+# a contributor is expected to run locally before pushing — build,
+# typecheck, lint, test — via the same Turborepo pipeline, so CI can
+# never drift from "works on my machine" by construction.
+#
+# Deliberately does NOT start Postgres/LiveKit/Redis: every test in this
+# repo is unit-level by design (see apps/server/vitest.config.mts's own
+# doc comment on why) — this workflow verifies that stays true rather
+# than silently growing a hidden external dependency.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+
+      - run: npm ci
+
+      - run: npx turbo run build typecheck lint test

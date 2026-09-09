@@ -11,7 +11,14 @@ import {
 } from '@nestjs/websockets';
 import { JwtService } from '@nestjs/jwt';
 import type { Server, Socket } from 'socket.io';
-import { ALL_STATIONS_ROOM, CONTROL_NAMESPACE, groupRoom, sessionRoom, stationRoom } from '@lab/shared/events';
+import {
+  ALL_STATIONS_ROOM,
+  CONTROL_NAMESPACE,
+  groupRoom,
+  sessionRoom,
+  stationRoom,
+  type ActivityEventPayload,
+} from '@lab/shared/events';
 import {
   StationLifecycle,
   type CommandAck,
@@ -19,7 +26,7 @@ import {
   type StationHello,
   type StationHelloAck,
 } from '@lab/shared';
-import type { JwtPayload } from '../auth/auth.service';
+import { AuthService, type JwtPayload } from '../auth/auth.service';
 import { StationsService } from '../stations/stations.service';
 import { AuditService } from '../audit/audit.service';
 import { PresenceService } from './presence.service';
@@ -58,6 +65,7 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
 
   constructor(
     private readonly jwt: JwtService,
+    private readonly auth: AuthService,
     private readonly stations: StationsService,
     private readonly presence: PresenceService,
     private readonly sessionState: SessionStateService,
@@ -89,25 +97,38 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
   async handleConnection(socket: AuthedSocket): Promise<void> {
     const token = socket.handshake.auth?.token as string | undefined;
 
-    // Try dashboard JWT auth first. A station's placeholder token
-    // (design doc: "no station token yet — Phase 1 hardens this to a
-    // signed, short-TTL station credential minted at seat assignment")
-    // will fail verification here, and that is expected — it falls
-    // through to stay connected unauthenticated-as-a-user, identifying
-    // itself via station:hello instead. We must NOT disconnect on a
-    // failed/missing JWT: that would make it impossible for any station
-    // to ever connect, since stations don't hold one yet.
+    // Try JWT auth first — either a dashboard user or (Phase 3) a
+    // station's own credential minted by a prior station:hello. A first
+    // connection ever (no station token minted yet) sends no usable
+    // token here and that's expected: it falls through unauthenticated
+    // and identifies itself via station:hello instead, which mints one.
+    // We must NOT disconnect on a failed/missing JWT — that would make
+    // first contact from any station impossible.
     if (token) {
       try {
         const payload = await this.jwt.verifyAsync<JwtPayload>(token);
-        socket.data.auth = { kind: 'user', user: payload };
-        if (payload.role === 'ADMIN' || payload.role === 'TEACHER') {
-          socket.join('dashboards');
-          socket.emit('lab:status', await this.stations.listStatusBoard());
+        if (payload.kind === 'station') {
+          // Re-establishing an already-known station's identity early
+          // isn't load-bearing (station:hello runs next regardless and
+          // re-derives everything), but it must be categorized correctly
+          // — filing a real station credential under `kind: 'user'` here
+          // would silently exclude it from every `auth?.kind === 'station'`
+          // check below (heartbeat, command:ack, activity:event) until
+          // station:hello re-authenticates it a moment later anyway. This
+          // was live for one release with only the placeholder string
+          // `'station-unauthenticated-phase1'`, which always failed
+          // verification and so never actually hit this branch.
+          socket.data.auth = { kind: 'station', stationId: payload.sub };
+        } else {
+          socket.data.auth = { kind: 'user', user: payload };
+          if (payload.role === 'ADMIN' || payload.role === 'TEACHER') {
+            socket.join('dashboards');
+            socket.emit('lab:status', await this.stations.listStatusBoard());
+          }
         }
       } catch {
-        // Not a valid dashboard JWT — leave socket.data.auth unset and
-        // wait for station:hello to establish it as a station.
+        // Not a valid JWT of either kind — leave socket.data.auth unset
+        // and wait for station:hello to establish it as a station.
       }
     }
   }
@@ -121,12 +142,12 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
   }
 
   /**
-   * A station identifies itself via station:hello rather than the JWT
-   * handshake used by dashboards — stations authenticate by a long-lived
-   * station credential minted at seat assignment (Phase 1 hardens this;
-   * for now the machineGuid itself gates a lookup, matching the "no
-   * runtime elevation, no shared secret a student can read" posture for
-   * the local agent, applied here to the network credential too).
+   * A station identifies itself via station:hello rather than a JWT
+   * handshake, because the very first connection ever has no token to
+   * present — machineGuid is the durable identity (design doc §3.7), and
+   * this call is also where a fresh station-scoped JWT (Phase 3;
+   * `StationHelloAck.token`) gets minted and handed back for the
+   * station's own subsequent HTTP calls (recordings, attempts).
    */
   @SubscribeMessage('station:hello')
   async handleHello(
@@ -174,16 +195,24 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
     socket.emit('session:snapshot', desired);
     if (seatNo) {
       socket.emit('station:identity', { stationId, seatNo, displayName: `Seat ${seatNo}` });
-      socket.join(groupRoom(desired.groupId ?? '__none__'));
-      if (desired.sessionId) socket.join(sessionRoom(desired.sessionId));
     }
+    // Group/session room membership must NOT depend on whether a seat
+    // number has been assigned — a station can be a real session member
+    // before an admin ever gets around to placing it on the seat map.
+    // This was a real bug: any station without an assigned seat could
+    // never actually receive activity:event relays or anything else
+    // scoped to its group room, even while correctly showing the right
+    // role/activity in its own snapshot.
+    if (desired.groupId) socket.join(groupRoom(desired.groupId));
+    if (desired.sessionId) socket.join(sessionRoom(desired.sessionId));
 
     this.broadcastStatusDelta(stationId);
     // A station that reconnects mid-outage must not lose a shutdown/
     // launch command that was issued while it was offline.
     this.commands.redeliverPending(stationId, socket.id);
 
-    return { stationId, seatNo, serverTime: Date.now(), snapshotSeq: desired.seq };
+    const token = await this.auth.mintStationToken(stationId);
+    return { stationId, seatNo, serverTime: Date.now(), snapshotSeq: desired.seq, token };
   }
 
   @SubscribeMessage('station:heartbeat')
@@ -205,13 +234,70 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
     });
   }
 
-  /** Called by other services (Phase 1 SessionsService) to push a fresh snapshot. */
+  /** Relays a group member's activity coordination event (mic-request,
+   * chairman turn-passing — Ser 3) to the rest of that group. Deliberately
+   * a dumb relay, not an authority: the chairman's own client decides who
+   * has the floor. See packages/shared/src/events/index.ts's comment on
+   * why this is an acceptable v1 scope cut. */
+  @SubscribeMessage('activity:event')
+  handleActivityEvent(@ConnectedSocket() socket: AuthedSocket, @MessageBody() payload: ActivityEventPayload): void {
+    const auth = socket.data.auth;
+    if (auth?.kind !== 'station') return;
+    this.server.to(groupRoom(payload.groupId)).emit('activity:event', { ...payload, fromStationId: auth.stationId });
+  }
+
+  /**
+   * Ser 8 Conference Interpreting (Phase 5): a participant reports which
+   * published track (the floor, or a specific interpreter's language
+   * channel) it just switched its own LiveKit subscription to. This is
+   * observational, not authoritative — the participant's own client
+   * already decided the subscription via its room-scoped canSubscribe
+   * grant (MediaService.mintInterpretingToken) before this event ever
+   * arrives; relaying it to `dashboards` only lets a teacher's monitoring
+   * UI show who is listening to whom, the same "dumb relay, not a
+   * security boundary" posture activity:event already documents.
+   */
+  @SubscribeMessage('interp:selectChannel')
+  async handleInterpSelectChannel(
+    @ConnectedSocket() socket: AuthedSocket,
+    @MessageBody() payload: { sessionId: string; trackSid: string },
+  ): Promise<void> {
+    const auth = socket.data.auth;
+    if (auth?.kind !== 'station') return;
+    this.server.to('dashboards').emit('interp:channel', { ...payload, stationId: auth.stationId });
+    await this.audit.log({ stationId: auth.stationId, action: 'interp.select_channel', detail: payload });
+  }
+
+  /**
+   * Called by other services (SessionsService/ControlController) to push
+   * a fresh snapshot. Also (re)joins the socket to the group/session
+   * rooms named in the new snapshot — group membership was previously
+   * only ever set once, at station:hello, so a station assigned to a
+   * group AFTER it had already connected (the normal case: sessions are
+   * armed after stations power on) would never actually be in
+   * groupRoom(...), silently breaking anything that relays through it
+   * (activity:event — mic-request/chairman relay). `socketsJoin` is
+   * idempotent. Known simplification: a station moved OUT of a group
+   * while still connected keeps its old group-room membership (no
+   * corresponding leave) — acceptable for this phase; a station
+   * reconnecting always gets a clean room set from station:hello.
+   */
   pushSnapshot(stationId: string, snapshot: Awaited<ReturnType<SessionStateService['getDesiredState']>>): void {
     this.server.to(stationRoom(stationId)).emit('session:snapshot', snapshot);
+    if (snapshot.groupId) this.server.in(stationRoom(stationId)).socketsJoin(groupRoom(snapshot.groupId));
+    if (snapshot.sessionId) this.server.in(stationRoom(stationId)).socketsJoin(sessionRoom(snapshot.sessionId));
   }
 
   broadcastToStation(stationId: string, event: 'command', payload: unknown): void {
     this.server.to(stationRoom(stationId)).emit(event, payload as never);
+  }
+
+  startRemoteControl(stationId: string, room: string, token: string): void {
+    this.server.to(stationRoom(stationId)).emit('remote-control:start', { room, token });
+  }
+
+  stopRemoteControl(stationId: string, room: string): void {
+    this.server.to(stationRoom(stationId)).emit('remote-control:stop', { room });
   }
 
   private broadcastStatusDelta(stationId: string): void {

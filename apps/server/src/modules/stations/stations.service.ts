@@ -1,10 +1,12 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   StationLifecycle,
+  UserRole,
   type StationAssignSeatDto,
   type StationRegisterDto,
   type StationStatusRow,
 } from '@lab/shared';
+import { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
 
@@ -114,6 +116,44 @@ export class StationsService {
     await this.prisma.station.update({ where: { id: stationId }, data: { enabled } });
   }
 
+  /**
+   * Phase 3 — Station.currentUserId existed since Phase 0 (schema) but no
+   * server code ever set it (grep-verified during Phase 3 recon). Not a
+   * login: no password, just naming which enrolled student is physically
+   * at this seat, so an assessment attempt has a real studentId to grade
+   * against. `@unique` on currentUserId means a student can be claimed at
+   * only one station at a time — the DB enforces "not in two seats at once".
+   */
+  async claim(stationId: string, serviceNumber: string): Promise<{ userId: string; fullName: string }> {
+    const user = await this.prisma.user.findUnique({ where: { serviceNumber } });
+    if (!user || user.role !== UserRole.STUDENT || !user.active) {
+      throw new BadRequestException('No active student account matches that service number');
+    }
+    try {
+      await this.prisma.station.update({ where: { id: stationId }, data: { currentUserId: user.id } });
+    } catch (err) {
+      if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
+        throw new ConflictException('This student is already claimed at another station');
+      }
+      throw err;
+    }
+    await this.audit.log({ stationId, action: 'station.claim', detail: { userId: user.id, serviceNumber } });
+    return { userId: user.id, fullName: user.fullName };
+  }
+
+  /** `actorId` set means this was an admin/teacher force-release from the
+   * dashboard rather than the station releasing itself (e.g. end of day,
+   * or a student claimed the wrong seat) — audited under a distinct
+   * action so the log can tell the two apart. */
+  async release(stationId: string, actorId?: string): Promise<void> {
+    await this.prisma.station.update({ where: { id: stationId }, data: { currentUserId: null } });
+    await this.audit.log({
+      actorId,
+      stationId,
+      action: actorId ? 'station.release_forced' : 'station.release',
+    });
+  }
+
   /** Powers the lab status board (design doc §4.4). */
   async listStatusBoard(): Promise<StationStatusRow[]> {
     const stations = await this.prisma.station.findMany({
@@ -123,6 +163,7 @@ export class StationsService {
         sessionMembers: {
           include: { group: { include: { session: true, activity: true } } },
         },
+        currentUser: { select: { id: true, serviceNumber: true, fullName: true } },
       },
     });
 
@@ -144,6 +185,7 @@ export class StationsService {
         mic: false,
         screenSharing: false,
         monitored: false,
+        currentUser: s.currentUser,
       } satisfies StationStatusRow;
     });
   }

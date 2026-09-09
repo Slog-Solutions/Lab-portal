@@ -1,9 +1,20 @@
-import { Body, Controller, Param, Post } from '@nestjs/common';
-import { UserRole, zStationAssignSeatDto, zStationRegisterDto, type StationAssignSeatDto, type StationRegisterDto } from '@lab/shared';
+import { Body, Controller, Param, Post, UseGuards } from '@nestjs/common';
+import { Throttle } from '@nestjs/throttler';
+import {
+  UserRole,
+  zClaimStationDto,
+  zStationAssignSeatDto,
+  zStationRegisterDto,
+  type ClaimStationDto,
+  type StationAssignSeatDto,
+  type StationRegisterDto,
+} from '@lab/shared';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import { Public } from '../../common/guards/jwt-auth.guard';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
+import { CurrentStation } from '../../common/decorators/current-station.decorator';
+import { StationAuthGuard } from '../../common/guards/station-auth.guard';
 import type { JwtPayload } from '../auth/auth.service';
 import { StationsService } from './stations.service';
 
@@ -36,6 +47,43 @@ export class StationsController {
   @Post('swap-seats/:a/:b')
   async swapSeats(@Param('a') a: string, @Param('b') b: string, @CurrentUser() user: JwtPayload) {
     await this.stations.swapSeats(a, b, user.sub);
+    return { ok: true };
+  }
+
+  /** Roster pick, not a login — see StationsService.claim's doc comment.
+   * @Roles() empty overrides the (absent, here) class-level restriction;
+   * StationAuthGuard is what actually enforces "caller is a station".
+   * Phase 5 hardening: this route takes a serviceNumber and NO password
+   * at all (deliberately — see the doc comment below), which makes it
+   * the one place on the server where guessing a valid identifier alone
+   * has any effect; throttled tighter than login for exactly that reason. */
+  @Roles()
+  @UseGuards(StationAuthGuard)
+  @Throttle({ default: { limit: 10, ttl: 60_000 } })
+  @Post('claim')
+  async claim(
+    @Body(new ZodValidationPipe(zClaimStationDto)) dto: ClaimStationDto,
+    @CurrentStation() station: { id: string },
+  ) {
+    const { userId, fullName } = await this.stations.claim(station.id, dto.serviceNumber);
+    return { ok: true, userId, fullName };
+  }
+
+  @Roles()
+  @UseGuards(StationAuthGuard)
+  @Post('release')
+  async release(@CurrentStation() station: { id: string }) {
+    await this.stations.release(station.id);
+    return { ok: true };
+  }
+
+  /** Dashboard-side counterpart to the station's own self-release above —
+   * lets an admin/teacher free a seat that claimed the wrong student (or
+   * whose occupant left without releasing) without touching that PC. */
+  @Roles(UserRole.ADMIN, UserRole.TEACHER)
+  @Post(':id/release-student')
+  async releaseStudent(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    await this.stations.release(id, user.sub);
     return { ok: true };
   }
 

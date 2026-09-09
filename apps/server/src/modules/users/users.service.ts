@@ -30,8 +30,9 @@ export class UsersService {
     return this.prisma.user.findUniqueOrThrow({ where: { id } });
   }
 
-  async list() {
+  async list(role?: UserRole) {
     return this.prisma.user.findMany({
+      where: role ? { role } : undefined,
       select: { id: true, serviceNumber: true, fullName: true, role: true, rank: true, active: true },
       orderBy: { fullName: 'asc' },
     });

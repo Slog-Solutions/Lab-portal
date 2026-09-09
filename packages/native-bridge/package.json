@@ -11,7 +11,8 @@
     "clean": "rimraf dist"
   },
   "dependencies": {
-    "@lab/shared": "*"
+    "@lab/shared": "*",
+    "@nut-tree-fork/nut-js": "4.2.6"
   },
   "devDependencies": {
     "typescript": "5.9.2",

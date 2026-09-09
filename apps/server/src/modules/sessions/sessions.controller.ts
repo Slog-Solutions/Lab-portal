@@ -21,6 +21,15 @@ export class SessionsController {
     return this.sessions.list();
   }
 
+  // MUST be declared before ':id' — Nest/Express matches routes in
+  // declaration order, so a literal segment after a param route would
+  // be shadowed (a request for /sessions/batches would otherwise bind
+  // to :id = "batches").
+  @Get('batches')
+  async listBatches() {
+    return this.sessions.listBatches();
+  }
+
   @Get(':id')
   async get(@Param('id') id: string) {
     return this.sessions.get(id);

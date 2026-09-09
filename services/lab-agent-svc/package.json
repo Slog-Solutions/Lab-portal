@@ -1,0 +1,28 @@
+{
+  "name": "@lab/agent-svc",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Elevated Windows service: GPO input-lock mitigation, root CA import, firewall rules, service self-registration (design doc §3.2/§3.6). Invoked from apps/desktop/build/installer.nsh at install time, never at runtime.",
+  "bin": {
+    "lab-agent-install": "src/install.ts",
+    "lab-agent-uninstall": "src/uninstall.ts"
+  },
+  "scripts": {
+    "build": "tsup src/daemon-entry.ts --format cjs --target node18 --out-dir dist",
+    "typecheck": "tsc --noEmit",
+    "install:elevated": "npm run build && tsx src/install.ts",
+    "uninstall:elevated": "tsx src/uninstall.ts"
+  },
+  "dependencies": {
+    "@lab/shared": "*",
+    "node-windows": "1.0.0-beta.8"
+  },
+  "devDependencies": {
+    "@types/node": "24.13.3",
+    "@types/node-windows": "0.1.6",
+    "tsup": "8.5.0",
+    "tsx": "4.20.6",
+    "typescript": "5.9.2"
+  }
+}

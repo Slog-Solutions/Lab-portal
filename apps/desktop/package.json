@@ -12,6 +12,7 @@
   },
   "dependencies": {
     "@lab/shared": "*",
+    "@lab/native-bridge": "*",
     "socket.io-client": "4.8.3",
     "electron-updater": "6.8.9"
   },

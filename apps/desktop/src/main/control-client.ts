@@ -3,7 +3,7 @@ import os from 'node:os';
 import { app, screen } from 'electron';
 import { CONTROL_NAMESPACE } from '@lab/shared/events';
 import type { CommandAck, CommandEnvelope, DesiredStationState, StationHello, StationHelloAck } from '@lab/shared';
-import { getHostname, getMacAddresses, getOrCreateMachineGuid } from './station-identity';
+import { getHostname, getMacAddresses } from './station-identity';
 
 const HEARTBEAT_INTERVAL_MS = 5_000;
 
@@ -20,28 +20,45 @@ export interface ControlClientEvents {
  * media connection — the unlock failsafe cannot depend on WebRTC being
  * up, and this socket is where lock-lease renewal (§3.3) arrives.
  *
- * Auth today: no station token yet (Phase 1 hardens this to a signed,
- * short-TTL station credential minted at seat assignment). station:hello
- * itself is what the server's gateway uses to look up/create the Station
- * row — see apps/server ControlGateway.handleHello.
+ * Auth: station:hello mints a fresh station-scoped JWT on every call
+ * (Phase 3 — auth.service.ts's mintStationToken) and this client stores
+ * it for two things: presenting it on the NEXT (re)connect's handshake
+ * (so ControlGateway.handleConnection can identify the socket as a
+ * station immediately, before hello even runs — see its own comment on
+ * why that categorization must be correct), and handing it to
+ * command-handler.ts for the station's own authenticated HTTP calls
+ * (PUSH_FILE fetching a media asset). The very first connection ever has
+ * no token yet, hence the placeholder fallback.
  */
 export class ControlClient {
   private socket: Socket | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   private currentLockState = { screen: false, input: false };
   private currentActivityId: string | null = null;
+  private stationToken: string | null = null;
 
   constructor(
     private readonly serverUrl: string,
-    private readonly userDataDir: string,
+    private readonly machineGuid: string,
     private readonly events: ControlClientEvents,
   ) {}
 
+  getServerUrl(): string {
+    return this.serverUrl;
+  }
+
+  getToken(): string | null {
+    return this.stationToken;
+  }
+
   async connect(): Promise<void> {
-    const machineGuid = await getOrCreateMachineGuid(this.userDataDir);
+    const machineGuid = this.machineGuid;
     const wsUrl = this.serverUrl.replace(/^http/, 'ws');
     this.socket = io(`${wsUrl}${CONTROL_NAMESPACE}`, {
-      auth: { token: 'station-unauthenticated-phase0' },
+      // Function form (not a plain object) so a reconnect re-reads
+      // this.stationToken at connect time, not whatever it was when
+      // connect() first ran (which is always null — hello hasn't happened yet).
+      auth: (cb) => cb({ token: this.stationToken ?? 'station-unauthenticated-no-token-yet' }),
       reconnection: true,
       reconnectionDelay: 2_000,
     });
@@ -81,8 +98,9 @@ export class ControlClient {
       })),
     };
     this.socket?.emit('station:hello', hello, (ack: StationHelloAck) => {
+      this.stationToken = ack.token;
       // eslint-disable-next-line no-console
-      console.log('[control-client] registered', ack);
+      console.log('[control-client] registered', { stationId: ack.stationId, seatNo: ack.seatNo });
     });
   }
 

@@ -34,8 +34,11 @@ model User {
   enrollments      Enrollment[]
   taughtSessions    ClassSession[]     @relation("SessionTeacher")
   mediaAssets       MediaAsset[]
+  contentPackages   ContentPackage[]
   curricula         Curriculum[]
+  exercisesAuthored Exercise[]         @relation("ExerciseTeacher")
   assignmentsGiven  Assignment[]       @relation("AssignmentTeacher")
+  assignmentsReceived Assignment[]     @relation("AssignmentStudent")
   attempts          Attempt[]
   scoreOverrides    ScoreOverride[]
   auditLogs         AuditLog[]
@@ -215,12 +218,15 @@ model MediaAsset {
   owner       User            @relation(fields: [ownerId], references: [id])
   scope       MediaAssetScope @default(PRIVATE)
   kind        String          // 'audio' | 'video' | 'text' | 'image'
+  title       String?         // display name; falls back to filename
   filename    String
-  path        String          // relative to LabData root
+  path        String          // relative to LabData root — see storage.ts buildAssetPath()
   sizeBytes   Int
   mimeType    String
   durationMs  Int?
   createdAt   DateTime        @default(now())
+
+  items Item[]
 
   @@index([scope])
   @@index([ownerId])
@@ -228,12 +234,16 @@ model MediaAsset {
 
 // SCORM/xAPI/HTML import (build plan "engine + import + seed pack" decision)
 model ContentPackage {
-  id         String   @id @default(cuid())
+  id         String          @id @default(cuid())
+  ownerId    String
+  owner      User            @relation(fields: [ownerId], references: [id])
+  scope      MediaAssetScope @default(INSTITUTION)
   title      String
-  format     String   // 'SCORM12' | 'SCORM2004' | 'XAPI' | 'HTML'
-  entryPoint String
-  path       String
-  importedAt DateTime @default(now())
+  format     String          // 'SCORM12' | 'SCORM2004' | 'XAPI' | 'HTML'
+  entryPoint String          // path of the launch file, relative to `path`
+  path       String          // extracted package root, relative to LabData root
+  sizeBytes  Int             @default(0)
+  importedAt DateTime        @default(now())
 
   lessons Lesson[]
 }
@@ -286,6 +296,8 @@ model StudyModule {
 // configSchema from the Activity Type Registry.
 model Exercise {
   id        String       @id @default(cuid())
+  teacherId String
+  teacher   User         @relation("ExerciseTeacher", fields: [teacherId], references: [id])
   lessonId  String?
   lesson    Lesson?      @relation(fields: [lessonId], references: [id])
   type      ActivityType
@@ -296,6 +308,9 @@ model Exercise {
   itemBank    ItemBank?
   assignments Assignment[]
   attempts    Attempt[]
+
+  @@index([teacherId])
+  @@index([type])
 }
 
 // Ser 10 "Large Test Bank": a different set of questions each attempt.
@@ -308,15 +323,21 @@ model ItemBank {
 }
 
 model Item {
-  id         String   @id @default(cuid())
-  itemBankId String
-  itemBank   ItemBank @relation(fields: [itemBankId], references: [id], onDelete: Cascade)
-  prompt     String
-  answer     String
-  choices    String[]
-  cefrTag    String?
+  id          String   @id @default(cuid())
+  itemBankId  String
+  itemBank    ItemBank @relation(fields: [itemBankId], references: [id], onDelete: Cascade)
+  order       Int      @default(0) // authored order; randomization happens at serve time, not storage
+  type        String   @default("SHORT_ANSWER") // 'MCQ' | 'SHORT_ANSWER'
+  prompt      String
+  answer      String
+  choices     String[]
+  cefrTag     String?
+  mediaAssetId String?
+  mediaAsset  MediaAsset? @relation(fields: [mediaAssetId], references: [id])
 
   responses ItemResponse[]
+
+  @@index([itemBankId])
 }
 
 // Ser 10 "teachers can create a special course... set hours... specify
@@ -328,23 +349,39 @@ model Assignment {
   exerciseId     String
   exercise       Exercise  @relation(fields: [exerciseId], references: [id])
   studentId      String
+  student        User      @relation("AssignmentStudent", fields: [studentId], references: [id])
   targetScore    Float?
   allocatedHours Float?
   dueAt          DateTime?
   createdAt      DateTime  @default(now())
 
+  attempts Attempt[]
+
   @@index([studentId])
+  @@index([teacherId])
 }
 
+// rawScore/maxScore are stored on the scale native to the activity type
+// (0-100 for CONTENT_EXERCISE/VOCABULARY_TEST, 0-5 for PRONUNCIATION's
+// Likert self/teacher rating) — the gradebook normalizes to a percentage
+// via rawScore/maxScore rather than forcing every activity onto one scale.
 model Attempt {
   id                 String            @id @default(cuid())
   exerciseId         String
   exercise           Exercise          @relation(fields: [exerciseId], references: [id])
   studentId          String
   student            User              @relation(fields: [studentId], references: [id])
+  assignmentId       String?
+  assignment         Assignment?       @relation(fields: [assignmentId], references: [id])
   activityInstanceId String?
   activityInstance   ActivityInstance? @relation(fields: [activityInstanceId], references: [id])
+  status             String            @default("IN_PROGRESS") // IN_PROGRESS | SUBMITTED | SCORED
+  // Snapshot of the exact Item ids (and order) served for this attempt —
+  // makes randomized test-bank sampling reproducible/regradable without
+  // re-deriving from the current (possibly since-edited) ItemBank.
+  itemOrder          String[]          @default([])
   rawScore           Float?
+  maxScore           Float?
   startedAt          DateTime          @default(now())
   submittedAt        DateTime?
 
@@ -354,16 +391,20 @@ model Attempt {
 
   @@index([studentId])
   @@index([exerciseId])
+  @@index([assignmentId])
 }
 
 model ItemResponse {
-  id        String  @id @default(cuid())
-  attemptId String
-  attempt   Attempt @relation(fields: [attemptId], references: [id], onDelete: Cascade)
-  itemId    String
-  item      Item    @relation(fields: [itemId], references: [id])
-  given     String
-  correct   Boolean?
+  id          String   @id @default(cuid())
+  attemptId   String
+  attempt     Attempt  @relation(fields: [attemptId], references: [id], onDelete: Cascade)
+  itemId      String
+  item        Item     @relation(fields: [itemId], references: [id])
+  order       Int      @default(0)
+  given       String
+  correct     Boolean?
+  score       Float?
+  timeSpentMs Int?
 }
 
 enum RecordingKind {
@@ -371,6 +412,7 @@ enum RecordingKind {
   GROUP_DISCUSSION
   PRESENTATION
   INTERPRETATION
+  PRONUNCIATION
 }
 
 // Row is created BEFORE capture starts and reconciled via LiveKit webhook

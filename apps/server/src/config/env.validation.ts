@@ -15,6 +15,30 @@ const envSchema = z.object({
   LIVEKIT_API_SECRET: z.string().min(1).default('devsecret_devsecret_devsecret'),
   LAB_DATA_ROOT: z.string().min(1).default('./LabData'),
   WEB_DIST_PATH: z.string().min(1).default('../web/dist'),
+  // Phase 5 — electron-updater's generic-provider feed (LAN auto-update,
+  // design doc §3.8). A real deployment drops each new release's
+  // `latest.yml` + installer here; empty is fine (electron-updater just
+  // 404s harmlessly on its periodic check, same degrade-honestly posture
+  // as every other optional-dependency gap in this codebase).
+  UPDATES_DIR: z.string().min(1).default('./updates'),
+  // Phase 5 — admin-triggered backup (infra/backup/backup.ps1, also
+  // schedulable directly via Task Scheduler independent of this server).
+  BACKUP_SCRIPT_PATH: z.string().min(1).default('../../infra/backup/backup.ps1'),
+  BACKUP_ROOT: z.string().min(1).default('./backups'),
+  PG_BIN_DIR: z.string().min(1).default('C:\\Program Files\\PostgreSQL\\16\\bin'),
+  // Phase 3 — upload/body limits (main.ts's Express JSON parser and every
+  // multer FileInterceptor read these; unbounded uploads is how a single
+  // media-library video takes down the process on an air-gapped box with
+  // no ops team to page).
+  MAX_UPLOAD_MB: z.coerce.number().int().positive().default(500),
+  MAX_JSON_BODY_KB: z.coerce.number().int().positive().default(2048),
+  // Phase 3 — offline speech pipeline (design doc "Speech (offline)").
+  // Both are optional: absent means the pronunciation pipeline degrades
+  // to "record only, no IPA/model audio" rather than failing to boot —
+  // same honesty pattern as native-bridge's input-lock stub.
+  ESPEAK_NG_BIN: z.string().min(1).optional(),
+  PIPER_BIN: z.string().min(1).optional(),
+  PIPER_VOICES_DIR: z.string().min(1).optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

@@ -6,6 +6,7 @@ export default defineConfig({
     'events/index': 'src/events/index.ts',
     'schemas/index': 'src/schemas/index.ts',
     'activities/index': 'src/activities/index.ts',
+    'agent/index': 'src/agent/index.ts',
   },
   format: ['esm', 'cjs'],
   dts: true,

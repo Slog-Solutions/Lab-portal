@@ -1,0 +1,41 @@
+# Internal-CA TLS termination for the air-gapped lab server (design doc
+# §2.8, build plan "getUserMedia needs a secure context; file:// has an
+# opaque origin -> TLS + internal CA from day one").
+#
+# `tls internal` is Caddy's own built-in local CA (bundled, no OpenSSL or
+# separately-generated cert needed) - it is the actual "internal CA" the
+# build plan calls for, not a placeholder for one. On first run Caddy
+# writes its root CA to its data dir (Windows service default:
+# C:\Windows\System32\config\systemprofile\AppData\Local\Caddy\pki\authorities\local\root.crt
+# when run as a service under LocalSystem, or %AppData%\Caddy\... when
+# run interactively) - that file is exactly what
+# services/lab-agent-svc/src/root-ca.ts imports into every station's
+# Trusted Root store, and exactly what infra/README.md step 2 means by
+# "generate an internal CA".
+#
+# Two site blocks, one shared root CA:
+#   - labserver.lab.local          -> the Nest server (API + SPA + updates feed)
+#   - livekit.labserver.lab.local  -> LiveKit's WS signaling endpoint
+# LiveKit's actual RTC media (UDP 7882-7892 per infra/livekit/livekit.yaml)
+# is NOT proxied here - WebRTC media is UDP-based and doesn't go through
+# an HTTP(S) reverse proxy; only the WS signaling channel does.
+
+labserver.lab.local {
+	tls internal
+
+	encode gzip
+
+	reverse_proxy localhost:3000
+}
+
+livekit.labserver.lab.local {
+	tls internal
+
+	reverse_proxy localhost:7880 {
+		# LiveKit's signaling channel is a WebSocket upgrade - Caddy
+		# forwards the Upgrade/Connection headers automatically for
+		# reverse_proxy, this header_up is only for the Host header
+		# LiveKit itself expects to see.
+		header_up Host {upstream_hostport}
+	}
+}

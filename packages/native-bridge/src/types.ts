@@ -24,8 +24,13 @@ export interface NativeBridge {
   removeInputLock(): void;
   isInputLocked(): boolean;
 
-  /** Replays one remote-control input event via SendInput (design doc §3.4). */
-  replayInput(event: RemoteInputEvent): void;
+  /** Replays one remote-control input event (design doc §3.4). Phase 1
+   * implements this via nut.js (NutjsNativeBridge, real — see build plan
+   * "week one spike" sequencing: replay first, hooks later); a future
+   * hook-based addon would replace it with raw SendInput without
+   * changing this signature. Async because nut.js's mouse/keyboard calls
+   * are themselves promise-based. */
+  replayInput(event: RemoteInputEvent): Promise<void>;
 
   /**
    * BlockInput wrapper — enhancement only, never the primary lock
@@ -58,7 +63,7 @@ export class NotImplementedNativeBridge implements NativeBridge {
     return this.locked;
   }
 
-  replayInput(): void {
+  async replayInput(): Promise<void> {
     // eslint-disable-next-line no-console
     console.warn('[native-bridge] replayInput() is a no-op on the stub implementation.');
   }

@@ -1,11 +1,44 @@
 @import 'tailwindcss';
 
+/*
+ * shadcn/ui token set (Phase 3 — see build plan "Tailwind + shadcn/ui").
+ * The console has been dark-slate-only since Phase 0 with no light/dark
+ * toggle anywhere in the app, so these tokens commit to one palette
+ * rather than defining a light variant nothing would ever switch to.
+ * `packages/ui`'s own `cn()` helper is the canonical merge utility this
+ * project already standardized on; these components use the same one.
+ */
+@theme {
+  --color-background: oklch(0.129 0.042 264.695);
+  --color-foreground: oklch(0.984 0.003 247.858);
+  --color-card: oklch(0.208 0.042 265.755);
+  --color-card-foreground: oklch(0.984 0.003 247.858);
+  --color-popover: oklch(0.208 0.042 265.755);
+  --color-popover-foreground: oklch(0.984 0.003 247.858);
+  --color-primary: oklch(0.623 0.214 259.815);
+  --color-primary-foreground: oklch(0.984 0.003 247.858);
+  --color-secondary: oklch(0.279 0.041 260.031);
+  --color-secondary-foreground: oklch(0.984 0.003 247.858);
+  --color-muted: oklch(0.279 0.041 260.031);
+  --color-muted-foreground: oklch(0.704 0.04 256.788);
+  --color-accent: oklch(0.279 0.041 260.031);
+  --color-accent-foreground: oklch(0.984 0.003 247.858);
+  --color-destructive: oklch(0.577 0.245 27.325);
+  --color-destructive-foreground: oklch(0.984 0.003 247.858);
+  --color-border: oklch(1 0 0 / 12%);
+  --color-input: oklch(1 0 0 / 18%);
+  --color-ring: oklch(0.551 0.027 264.364);
+  --radius: 0.5rem;
+}
+
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
 }
 
 body {
   margin: 0;
+  background: var(--color-background);
+  color: var(--color-foreground);
   font-family:
     system-ui,
     -apple-system,

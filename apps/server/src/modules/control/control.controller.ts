@@ -1,11 +1,12 @@
-import { Body, Controller, Get, Post } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post } from '@nestjs/common';
 import { z } from 'zod';
 import { CommandType, StationLifecycle, UserRole, type StationStatusRow } from '@lab/shared';
-import { BROADCAST_ROOM } from '@lab/shared/events';
+import { BROADCAST_ROOM, controlRoom, mediaRoomForActivity } from '@lab/shared/events';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import type { JwtPayload } from '../auth/auth.service';
+import { PrismaService } from '../../prisma/prisma.service';
 import { LockService } from './lock.service';
 import { CommandsService } from './commands.service';
 import { SessionStateService } from './session-state.service';
@@ -30,6 +31,11 @@ const zLaunchProgramDto = z.object({ target: zTarget, programId: z.string(), arg
 const zOpenUrlDto = z.object({ target: zTarget, url: z.string().url() });
 const zMessageDto = z.object({ target: zTarget, text: z.string().min(1), severity: z.enum(['info', 'warning']) });
 const zPromoteDto = z.object({ stationId: z.string(), room: z.string().default(BROADCAST_ROOM) });
+const zPushFileDto = z.object({
+  target: zTarget,
+  assetId: z.string(),
+  destinationHint: z.enum(['desktop', 'downloads']).default('downloads'),
+});
 
 /**
  * Classroom control surface (Annexure-I Ser 1). Every endpoint here is a
@@ -49,6 +55,7 @@ export class ControlController {
     private readonly audit: AuditService,
     private readonly stations: StationsService,
     private readonly presence: PresenceService,
+    private readonly prisma: PrismaService,
   ) {}
 
   /**
@@ -142,6 +149,21 @@ export class ControlController {
     return { ok: true, commandCount: envelopes.length };
   }
 
+  /** Ser 1 "file functions" — the command envelope + client allowlist
+   * already existed (design doc §4.3); this is the missing REST trigger.
+   * The station downloads the asset itself, authenticated with its own
+   * station token — the server never pushes bytes through the command
+   * channel. */
+  @Post('push-file')
+  async pushFile(@Body(new ZodValidationPipe(zPushFileDto)) dto: z.infer<typeof zPushFileDto>, @CurrentUser() user: JwtPayload) {
+    const envelopes = await this.commands.send(dto.target, CommandType.PUSH_FILE, {
+      assetId: dto.assetId,
+      destinationHint: dto.destinationHint,
+    });
+    await this.audit.log({ actorId: user.sub, action: 'control.push_file', detail: { target: dto.target, assetId: dto.assetId } });
+    return { ok: true, commandCount: envelopes.length };
+  }
+
   @Post('enable')
   async enable(@Body(new ZodValidationPipe(zTargetOnlyDto)) dto: z.infer<typeof zTargetOnlyDto>, @CurrentUser() user: JwtPayload) {
     return this.setEnabled(dto.target, true, user);
@@ -165,6 +187,78 @@ export class ControlController {
   async revokeScreen(@Body(new ZodValidationPipe(zPromoteDto)) dto: z.infer<typeof zPromoteDto>, @CurrentUser() user: JwtPayload) {
     await this.media.revokeScreenShare(dto.room, dto.stationId);
     await this.audit.log({ actorId: user.sub, stationId: dto.stationId, action: 'control.revoke_screen', detail: { room: dto.room } });
+    return { ok: true };
+  }
+
+  /**
+   * Remote control (design doc §3.4): a dedicated ephemeral `ctrl:<id>`
+   * room, cryptographically isolated by the JWT `room` grant — only the
+   * calling teacher's token names this room, not lab:broadcast, so no
+   * other student can ever see or hear this session. This is a
+   * remote-control backdoor by construction (design doc §3.6): logged
+   * here, and the student-visible indicator is the station's own
+   * monitoringIndicator (default on).
+   */
+  @Post('remote-control/:stationId/start')
+  async startRemoteControl(@Param('stationId') stationId: string, @CurrentUser() user: JwtPayload) {
+    const room = controlRoom(stationId);
+    await this.media.ensureRoom(room);
+    const studentToken = await this.media.mintRemoteControlStudentToken(stationId, stationId, room);
+    const teacherToken = await this.media.mintToken({
+      stationId: `teacher:${user.sub}`,
+      displayName: `Teacher (${user.serviceNumber})`,
+      room,
+      role: 'TEACHER',
+      hidden: true,
+    });
+    this.gateway.startRemoteControl(stationId, room, studentToken);
+    await this.audit.log({ actorId: user.sub, stationId, action: 'control.remote_control.start', detail: { room } });
+    return { room, teacherToken };
+  }
+
+  /**
+   * Ser 3 gap this pass closes: "Teacher listens in on any group, can
+   * join." Unlike remote-control (which needs the STATION to start
+   * publishing its screen), a group's LiveKit room already exists the
+   * moment the session is armed and the teacher's own token already
+   * grants canSubscribe — so "listening in" needs no coordination with
+   * the group's members at all, just a hidden token for whichever room
+   * that group's activity actually lives in (mediaRoomForActivity — the
+   * same decision SessionsService/SessionStateService make, so a
+   * conference-interpreting group's shared session-wide room resolves
+   * correctly here too, not just the per-group default).
+   */
+  @Post('monitor-group/:groupId/start')
+  async startGroupMonitor(@Param('groupId') groupId: string, @CurrentUser() user: JwtPayload) {
+    const group = await this.prisma.sessionGroup.findUnique({ where: { id: groupId }, include: { activity: true } });
+    if (!group) throw new NotFoundException('Group not found');
+    const room = mediaRoomForActivity(group.sessionId, group.id, group.activity?.type ?? '');
+    const token = await this.media.mintToken({
+      stationId: `teacher:${user.sub}`,
+      displayName: `Teacher (${user.serviceNumber})`,
+      room,
+      role: 'TEACHER',
+      hidden: true,
+    });
+    await this.audit.log({ actorId: user.sub, action: 'control.monitor_group.start', detail: { groupId, room } });
+    return { room, token };
+  }
+
+  /** Nothing server-side to tear down (the teacher just disconnects its
+   * own LiveKit room client) — this exists purely so "stopped listening"
+   * is as auditable as "started", matching remote-control's pairing. */
+  @Post('monitor-group/:groupId/stop')
+  async stopGroupMonitor(@Param('groupId') groupId: string, @CurrentUser() user: JwtPayload) {
+    await this.audit.log({ actorId: user.sub, action: 'control.monitor_group.stop', detail: { groupId } });
+    return { ok: true };
+  }
+
+  @Post('remote-control/:stationId/stop')
+  async stopRemoteControl(@Param('stationId') stationId: string, @CurrentUser() user: JwtPayload) {
+    const room = controlRoom(stationId);
+    this.gateway.stopRemoteControl(stationId, room);
+    await this.media.deleteRoom(room);
+    await this.audit.log({ actorId: user.sub, stationId, action: 'control.remote_control.stop', detail: { room } });
     return { ok: true };
   }
 

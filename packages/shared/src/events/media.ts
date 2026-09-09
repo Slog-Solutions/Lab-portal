@@ -16,6 +16,21 @@ export function interpretingRoom(sessionId: string): string {
   return `sess:${sessionId}:interp`;
 }
 
+/**
+ * Phase 5: the one place that decides which physical LiveKit room a
+ * group's activity actually lives in — used identically by
+ * SessionsService (arm/end, room create/delete) and SessionStateService
+ * (per-station token minting), so the two can never disagree about a
+ * room name the way `groupMediaRoom` alone would invite if one call site
+ * special-cased conference interpreting and the other forgot to.
+ * Conference interpreting is session-wide by design (Annexure-I Ser 8: a
+ * shared floor + per-language interpreter channels everyone in the
+ * session can select between), not per-group like every other activity.
+ */
+export function mediaRoomForActivity(sessionId: string, groupId: string, activityType: string): string {
+  return activityType === 'CONFERENCE_INTERPRETING' ? interpretingRoom(sessionId) : groupMediaRoom(sessionId, groupId);
+}
+
 /** Ephemeral 1:1 telephone-activity room. */
 export function telephoneRoom(callId: string): string {
   return `call:${callId}`;
@@ -46,5 +61,13 @@ export type RemoteInputEvent =
   | { kind: 'move'; x: number; y: number } // normalized 0..1, unreliable delivery
   | { kind: 'click'; x: number; y: number; button: 'left' | 'right' | 'middle'; down: boolean }
   | { kind: 'scroll'; deltaX: number; deltaY: number }
-  | { kind: 'key'; scanCode: number; down: boolean }
+  // Phase 1's replay path is @nut-tree-fork/nut-js (design doc §3.4's
+  // "zero build risk" option), whose keyboard API takes its own `Key`
+  // enum — not a raw Win32 scan code. `keyName` is a `Key` enum member
+  // name (e.g. "A", "Escape", "LeftControl") so the wire format doesn't
+  // depend on nut.js's numeric enum values staying stable across
+  // versions. A later native-bridge hook-based replay (blocked — no C++
+  // toolchain, see build plan) would need its own scanCode mapping;
+  // that is a receiver-side concern, not a wire-format change.
+  | { kind: 'key'; keyName: string; down: boolean }
   | { kind: 'text'; unicodeChar: string };

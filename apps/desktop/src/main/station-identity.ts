@@ -3,11 +3,10 @@ import { networkInterfaces, hostname } from 'node:os';
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import path from 'node:path';
 
-export interface LabRuntimeConfig {
-  platform: 'web' | 'desktop';
-  serverUrl: string;
-  stationId?: string;
-}
+// Re-exported for callers that used to import LabRuntimeConfig from here
+// (preload/index.ts) — the type itself now lives in @lab/shared so web
+// and desktop can never drift against each other again.
+export type { LabRuntimeConfig } from '@lab/shared';
 
 export interface StationIdentityCache {
   machineGuid: string;

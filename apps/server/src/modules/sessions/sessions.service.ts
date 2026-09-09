@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { SessionState, type CreateSessionDto } from '@lab/shared';
-import { groupMediaRoom } from '@lab/shared/events';
+import { ActivityType, SessionRole, SessionState, type CreateSessionDto } from '@lab/shared';
+import { mediaRoomForActivity } from '@lab/shared/events';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MediaService } from '../media/media.service';
 import { SessionStateService } from '../control/session-state.service';
@@ -38,7 +38,22 @@ export class SessionsService {
         groups: {
           create: dto.groups.map((g) => ({
             index: g.index,
-            members: { create: g.memberStationIds.map((stationId) => ({ stationId, role: 'MEMBER' })) },
+            members: {
+              // chairmanStationId was previously ignored here — every
+              // member was hardcoded MEMBER, so Ser 3's chairman-led
+              // round table could never actually have a chairman.
+              // Phase 5: CONFERENCE_INTERPRETING's config.roles[] carries
+              // the same kind of per-station role assignment (interpreter
+              // vs delegate vs observer) — mirrored into SessionMember.role
+              // here for the same reason chairman is: it's what
+              // SessionStateService actually reads to decide LiveKit
+              // publish grants, so it must be real DB state, not just
+              // something the client re-derives from activity.config.
+              create: g.memberStationIds.map((stationId) => ({
+                stationId,
+                role: this.resolveMemberRole(g, stationId),
+              })),
+            },
             activity: { create: { type: g.activityType, config: g.activityConfig as object } },
           })),
         },
@@ -63,6 +78,10 @@ export class SessionsService {
     });
   }
 
+  async listBatches() {
+    return this.prisma.batch.findMany({ orderBy: { name: 'asc' } });
+  }
+
   /**
    * DRAFT -> ARMED: freezes groups, creates per-group LiveKit rooms,
    * pushes a fresh snapshot (with media tokens) to every member station.
@@ -76,7 +95,7 @@ export class SessionsService {
 
     await this.media.ensureBroadcastRoom();
     for (const group of session.groups) {
-      await this.media.ensureRoom(groupMediaRoom(sessionId, group.id));
+      await this.media.ensureRoom(mediaRoomForActivity(sessionId, group.id, group.activity?.type ?? ''));
     }
 
     const updated = await this.bumpAndPersist(sessionId, SessionState.ARMED);
@@ -118,7 +137,7 @@ export class SessionsService {
     if (session.state === SessionState.ENDED) return session;
 
     for (const group of session.groups) {
-      await this.media.deleteRoom(groupMediaRoom(sessionId, group.id));
+      await this.media.deleteRoom(mediaRoomForActivity(sessionId, group.id, group.activity?.type ?? ''));
     }
     const updated = await this.bumpAndPersist(sessionId, SessionState.ENDED, { endedAt: new Date() });
     // Push a fresh (now empty-for-this-session) snapshot so stations
@@ -145,5 +164,22 @@ export class SessionsService {
       const snapshot = await this.sessionState.getDesiredState(stationId);
       this.gateway.pushSnapshot(stationId, snapshot);
     }
+  }
+
+  /** CONFERENCE_INTERPRETING's config.roles[] assigns INTERPRETER/DELEGATE/
+   * OBSERVER per station — everyone else falls back to the pre-existing
+   * chairman-or-member logic. Kept as one small helper rather than inline
+   * in the create() mapper so the "which config shape maps to which role"
+   * decision has one home as more activity types grow their own roles. */
+  private resolveMemberRole(g: CreateSessionDto['groups'][number], stationId: string): SessionRole {
+    if (g.activityType === ActivityType.CONFERENCE_INTERPRETING) {
+      const roles = (g.activityConfig as { roles?: Array<{ stationId: string; role: string }> } | undefined)?.roles ?? [];
+      const assigned = roles.find((r) => r.stationId === stationId)?.role;
+      if (assigned === 'INTERPRETER') return SessionRole.INTERPRETER;
+      if (assigned === 'DELEGATE') return SessionRole.DELEGATE;
+      if (assigned === 'OBSERVER') return SessionRole.OBSERVER;
+      return SessionRole.MEMBER;
+    }
+    return stationId === g.chairmanStationId ? SessionRole.CHAIRMAN : SessionRole.MEMBER;
   }
 }

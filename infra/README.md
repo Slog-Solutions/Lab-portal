@@ -26,9 +26,24 @@ psql -U postgres -h localhost -p 5432 -c "ALTER ROLE labportal CREATEDB;"   # pr
 
 Point `DATABASE_URL` in `apps/server/.env` at
 `postgresql://labportal:labportal@localhost:5432/labportal?schema=public`
-and proceed with the migrate/seed/dev steps above as normal. Redis and
-LiveKit still need Docker (or their native-Windows paths below) for
-anything past the control-plane/database layer.
+and proceed with the migrate/seed/dev steps above as normal. Redis is
+only used by the `docker-compose.yml` Postgres/Redis bundle for parity
+with the deployed stack — LiveKit itself doesn't use it (no `redis:`
+block in `livekit.yaml`) — so without Docker you can skip Redis entirely
+in dev.
+
+LiveKit does still need to be running, and does **not** need Docker: a
+native Windows LiveKit binary is already vendored at
+`infra/livekit/bin/livekit-server.exe` (see the deployment table below).
+Start it from the repo root with:
+
+```
+npm run dev:livekit
+```
+
+(equivalent to `infra\livekit\bin\livekit-server.exe --config infra\livekit\livekit.yaml`
+run directly). `npm run dev:all` starts this alongside the Nest server
+and Vite dev server in one command.
 
 ## Lab server deployment (air-gapped, native Windows — design doc §2.7)
 
@@ -48,9 +63,13 @@ Before going live on the real lab subnet:
 
 1. Edit `livekit/livekit.yaml`: set `node_ip` to the server's real LAN IP,
    and regenerate the `keys` secret (`node -e "console.log(require('crypto').randomBytes(48).toString('hex'))"`).
-2. Generate an internal CA and a cert for `labserver.lab.local` (see
-   `infra/caddy/README.md`, once written in Phase 0 hardening) — `getUserMedia`/
-   `getDisplayMedia` require a secure context, so this is not optional.
+2. Run Caddy against `infra/caddy/Caddyfile` (`tls internal` — Caddy's own
+   built-in local CA, generated on first run; see `infra/caddy/README.md`,
+   written and live-verified in Phase 5) for `labserver.lab.local` and
+   `livekit.labserver.lab.local` — `getUserMedia`/`getDisplayMedia`
+   require a secure context, so this is not optional. Edit both
+   hostnames in the Caddyfile to the real server's LAN
+   hostname/IP first.
 3. Confirm both lab switches and the server NIC are gigabit with a
    dedicated 1G inter-switch uplink (design doc §2.4) — broadcast to 40
    students puts real load on that link.

@@ -144,9 +144,18 @@ registerActivity({
 const zConferenceInterpretingConfig = z.object({
   topic: z.string().min(1),
   languages: z.array(z.string().min(2).max(8)).min(1),
+  // Phase 5 finding: this was keyed by `studentId` since Phase 0, but a
+  // session is authored against *stations* (a seat), not students — a
+  // student isn't necessarily claimed onto any station yet at authoring
+  // time (StationsService.claim happens at runtime, independent of
+  // session composition), exactly like every other role assignment in
+  // this system (SessionMember.role, ROUND_TABLE's chairmanStationId).
+  // Renamed to stationId so authoring/session-state/the player all agree
+  // on one identity space — the same class of bug the chairmanStationId
+  // fix (Phase 2) already caught once.
   roles: z.array(
     z.object({
-      studentId: z.string().cuid2(),
+      stationId: z.string().cuid2(),
       role: z.enum(['INTERPRETER', 'DELEGATE', 'OBSERVER']),
       lang: z.string().min(2).max(8).optional(),
     }),
