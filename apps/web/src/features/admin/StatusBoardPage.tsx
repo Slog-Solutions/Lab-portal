@@ -207,6 +207,13 @@ function SeatDetailPanel({
   const [releasing, setReleasing] = useState(false);
   if (!station) return null;
 
+  // A seat that isn't online can't answer a remote-control start — the
+  // request would 503 (LiveKit room created, but nothing ever publishes
+  // into it) or worse, silently no-op (ControlGateway emits into an
+  // empty Socket.IO room). Surface that up front instead of letting the
+  // teacher click into a black screen with no explanation.
+  const canTakeControl = station.lifecycle !== 'OFFLINE' && station.lifecycle !== 'UNCLAIMED';
+
   return (
     <div className="mt-4 flex flex-wrap items-center gap-3 rounded-md border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm">
       <span className="font-medium text-slate-200">
@@ -239,8 +246,10 @@ function SeatDetailPanel({
       )}
       <button
         type="button"
+        disabled={!canTakeControl}
         onClick={onTakeRemoteControl}
-        className="ml-auto rounded-md bg-violet-700 px-3 py-1.5 text-sm font-medium text-white hover:bg-violet-600"
+        title={canTakeControl ? undefined : 'Station is offline — remote control needs the seat to be connected'}
+        className="ml-auto rounded-md bg-violet-700 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-40"
       >
         Take Remote Control
       </button>

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, NotFoundException, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, NotFoundException, Param, Post, ServiceUnavailableException } from '@nestjs/common';
 import { z } from 'zod';
 import { CommandType, StationLifecycle, UserRole, type StationStatusRow } from '@lab/shared';
 import { BROADCAST_ROOM, controlRoom, mediaRoomForActivity } from '@lab/shared/events';
@@ -8,6 +8,7 @@ import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import type { JwtPayload } from '../auth/auth.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { LockService } from './lock.service';
+import { RemoteControlSessionService } from './remote-control-session.service';
 import { CommandsService } from './commands.service';
 import { SessionStateService } from './session-state.service';
 import { ControlGateway } from './control.gateway';
@@ -48,6 +49,7 @@ const zPushFileDto = z.object({
 export class ControlController {
   constructor(
     private readonly locks: LockService,
+    private readonly remoteControlSessions: RemoteControlSessionService,
     private readonly commands: CommandsService,
     private readonly sessionState: SessionStateService,
     private readonly gateway: ControlGateway,
@@ -202,7 +204,18 @@ export class ControlController {
   @Post('remote-control/:stationId/start')
   async startRemoteControl(@Param('stationId') stationId: string, @CurrentUser() user: JwtPayload) {
     const room = controlRoom(stationId);
-    await this.media.ensureRoom(room);
+    if (!(await this.media.ensureRoom(room))) {
+      throw new ServiceUnavailableException(
+        'Could not create the remote-control room — is the LiveKit media server running?',
+      );
+    }
+    // Reference-counted: ctrl:<stationId> is one room shared by every
+    // concurrent "start" for this station (React StrictMode's
+    // mount/mount/cleanup among them) — see
+    // RemoteControlSessionService's doc comment for why a bare
+    // start/stop pair here would let a stale stop delete a room a
+    // still-active session needs.
+    this.remoteControlSessions.start(stationId);
     const studentToken = await this.media.mintRemoteControlStudentToken(stationId, stationId, room);
     const teacherToken = await this.media.mintToken({
       stationId: `teacher:${user.sub}`,
@@ -256,9 +269,22 @@ export class ControlController {
   @Post('remote-control/:stationId/stop')
   async stopRemoteControl(@Param('stationId') stationId: string, @CurrentUser() user: JwtPayload) {
     const room = controlRoom(stationId);
-    this.gateway.stopRemoteControl(stationId, room);
-    await this.media.deleteRoom(room);
-    await this.audit.log({ actorId: user.sub, stationId, action: 'control.remote_control.stop', detail: { room } });
+    // Only the stop that brings the count to zero actually tears
+    // anything down — see RemoteControlSessionService. A stop that
+    // still has a sibling session active is logged (every stop CALL is
+    // audited, same as before) but must not stop the student's publish
+    // or delete the room out from under the surviving session.
+    const isFinalStop = this.remoteControlSessions.stop(stationId);
+    if (isFinalStop) {
+      this.gateway.stopRemoteControl(stationId, room);
+      await this.media.deleteRoom(room);
+    }
+    await this.audit.log({
+      actorId: user.sub,
+      stationId,
+      action: 'control.remote_control.stop',
+      detail: { room, tornDown: isFinalStop },
+    });
     return { ok: true };
   }
 

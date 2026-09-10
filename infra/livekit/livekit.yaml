@@ -16,7 +16,10 @@ rtc:
   # Pin to the lab server's LAN NIC. Only takes effect when
   # use_external_ip is false. CHANGE THIS to the real server IP before
   # any non-dev deployment — 127.0.0.1 only works for same-machine testing.
-  node_ip: 127.0.0.1
+  # Set to this machine's WiFi adapter IP (DHCP — reverify with `ipconfig`
+  # if LAN testing stops working after a reboot/lease renewal) for the
+  # 4-PC LAN test. Revert to 127.0.0.1 for single-machine dev.
+  node_ip: 192.168.1.22
 
 room:
   # Only the Nest server creates rooms (via roomService), never a client.

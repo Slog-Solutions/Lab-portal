@@ -23,10 +23,19 @@ export function RemoteControlView({ stationId, onClose }: { stationId: string; o
   const videoRef = useRef<HTMLVideoElement>(null);
   const roomRef = useRef<LiveKitRoomClient | null>(null);
   const [connected, setConnected] = useState(false);
+  const [sharing, setSharing] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
+    // Only a start that actually completed owns a session to close —
+    // the server reference-counts concurrent starts per station
+    // (RemoteControlSessionService), but a stop with no matching start
+    // is still wasted work and a pointless audit entry (e.g. React
+    // StrictMode's mount/mount/cleanup-of-first-mount in dev, where the
+    // first mount's cleanup would otherwise race the second mount's
+    // still-in-flight start).
+    let started = false;
 
     async function start(): Promise<void> {
       try {
@@ -34,12 +43,17 @@ export function RemoteControlView({ stationId, onClose }: { stationId: string; o
           `/control/remote-control/${stationId}/start`,
           { method: 'POST' },
         );
+        started = true;
         if (cancelled) return;
         const client = new LiveKitRoomClient({
           onTrackSubscribed: (handle: RemoteTrackHandle) => {
             if (handle.source === Track.Source.ScreenShare && videoRef.current) {
               handle.track.attach(videoRef.current);
+              setSharing(true);
             }
+          },
+          onTrackUnsubscribed: (handle: RemoteTrackHandle) => {
+            if (handle.source === Track.Source.ScreenShare) setSharing(false);
           },
         });
         roomRef.current = client;
@@ -55,7 +69,7 @@ export function RemoteControlView({ stationId, onClose }: { stationId: string; o
     return () => {
       cancelled = true;
       void roomRef.current?.disconnect();
-      void apiFetch(`/control/remote-control/${stationId}/stop`, { method: 'POST' }).catch(() => {});
+      if (started) void apiFetch(`/control/remote-control/${stationId}/stop`, { method: 'POST' }).catch(() => {});
     };
   }, [stationId]);
 
@@ -105,7 +119,7 @@ export function RemoteControlView({ stationId, onClose }: { stationId: string; o
           Close
         </button>
       </header>
-      <div className="flex flex-1 items-center justify-center overflow-hidden p-4">
+      <div className="relative flex flex-1 items-center justify-center overflow-hidden p-4">
         {/* tabIndex makes the video element focusable so onKeyDown/onKeyUp fire */}
         <video
           ref={videoRef}
@@ -121,6 +135,17 @@ export function RemoteControlView({ stationId, onClose }: { stationId: string; o
           onKeyUp={(e) => handleKey(e, false)}
           className="max-h-full max-w-full cursor-crosshair rounded-md bg-slate-950 outline-none"
         />
+        {/* connected-but-not-yet-sharing otherwise renders as an
+            unexplained black rectangle — this is the normal state right
+            after connect while the station is still starting its own
+            screen capture, not an error. */}
+        {connected && !sharing && !error && (
+          <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+            <span className="rounded-md bg-slate-900/80 px-4 py-2 text-sm text-slate-300">
+              Waiting for the station to share its screen…
+            </span>
+          </div>
+        )}
       </div>
     </div>
   );
