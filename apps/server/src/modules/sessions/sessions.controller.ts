@@ -13,21 +13,23 @@ export class SessionsController {
 
   @Post()
   async create(@Body(new ZodValidationPipe(zCreateSessionDto)) dto: CreateSessionDto, @CurrentUser() user: JwtPayload) {
-    return this.sessions.create(dto, user.sub);
+    return this.sessions.create(dto, user);
   }
 
   @Get()
-  async list() {
-    return this.sessions.list();
+  async list(@CurrentUser() user: JwtPayload) {
+    return this.sessions.list(user);
   }
 
   // MUST be declared before ':id' — Nest/Express matches routes in
   // declaration order, so a literal segment after a param route would
   // be shadowed (a request for /sessions/batches would otherwise bind
-  // to :id = "batches").
+  // to :id = "batches"). Delegates to BatchesService.listForPrincipal,
+  // the same source as GET /batches/mine — one authority for who may
+  // use which batch (enforced teacher<->batch assignment).
   @Get('batches')
-  async listBatches() {
-    return this.sessions.listBatches();
+  async listBatches(@CurrentUser() user: JwtPayload) {
+    return this.sessions.listBatches(user);
   }
 
   @Get(':id')
@@ -37,21 +39,21 @@ export class SessionsController {
 
   @Post(':id/arm')
   async arm(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.sessions.arm(id, user.sub);
+    return this.sessions.arm(id, user);
   }
 
   @Post(':id/start')
   async start(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.sessions.start(id, user.sub);
+    return this.sessions.start(id, user);
   }
 
   @Post(':id/pause')
   async pause(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.sessions.pause(id, user.sub);
+    return this.sessions.pause(id, user);
   }
 
   @Post(':id/end')
   async end(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
-    return this.sessions.end(id, user.sub);
+    return this.sessions.end(id, user);
   }
 }

@@ -16,8 +16,14 @@ const badgeVariants = cva('inline-flex items-center rounded-md border px-2 py-0.
   defaultVariants: { variant: 'default' },
 });
 
-export interface BadgeProps extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof badgeVariants> {}
+export interface BadgeProps extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeVariants> {}
 
+// <span>, not <div> — a badge is an inline chip, and several real call
+// sites nest it inside a <p> (BatchDetailPage's "Batch key: ... ·
+// <Badge>"), which HTML forbids for a <div> inside a <p> and React
+// flags as a real hydration-mismatch warning (caught live, Playwright-
+// driven, not by typechecking — a <div> descendant of a block element
+// it happened to sit inside elsewhere never surfaced it).
 export function Badge({ className, variant, ...props }: BadgeProps) {
-  return <div className={cn(badgeVariants({ variant }), className)} {...props} />;
+  return <span className={cn(badgeVariants({ variant }), className)} {...props} />;
 }

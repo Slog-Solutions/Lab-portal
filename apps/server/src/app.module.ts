@@ -20,6 +20,7 @@ import { ReportsModule } from './modules/reports/reports.module';
 import { PronunciationModule } from './modules/pronunciation/pronunciation.module';
 import { StudyModulesModule } from './modules/study-modules/study-modules.module';
 import { AdminModule } from './modules/admin/admin.module';
+import { BatchesModule } from './modules/batches/batches.module';
 
 /**
  * Phase 0-5 wiring.
@@ -35,6 +36,7 @@ import { AdminModule } from './modules/admin/admin.module';
     StationsModule,
     MediaModule,
     ControlModule,
+    BatchesModule,
     SessionsModule,
     RecordingsModule,
     MediaAssetsModule,

@@ -1,6 +1,9 @@
 import { createHashRouter, Navigate } from 'react-router-dom';
 import { LoginPage } from '../features/auth/LoginPage';
 import { StatusBoardPage } from '../features/admin/StatusBoardPage';
+import { BatchesPage } from '../features/admin/BatchesPage';
+import { BatchDetailPage } from '../features/admin/BatchDetailPage';
+import { UsersPage } from '../features/admin/UsersPage';
 import { SessionBuilderPage } from '../features/teacher/SessionBuilderPage';
 import { MediaLibraryPage } from '../features/media/MediaLibraryPage';
 import { ExercisesPage } from '../features/exercises/ExercisesPage';
@@ -29,9 +32,11 @@ import { getRuntimeConfig } from '../lib/runtime-config';
  * student, which contradicts the whole point and silently broke
  * server-initiated features like remote control on an idle seat.
  *
- * Phase 3 adds four teacher/admin pages, nested under one TeacherLayout
- * (sidebar + single ProtectedRoute) instead of each page repeating both —
- * see TeacherLayout's own doc comment.
+ * All teacher/admin pages nest under one TeacherLayout (sidebar + a
+ * shared ADMIN|TEACHER ProtectedRoute) instead of each page repeating
+ * both — see TeacherLayout's own doc comment. The LMS admin pages
+ * (batches, users) nest an additional ADMIN-only ProtectedRoute one
+ * level deeper, since TEACHER can reach the layout but not these routes.
  */
 export const router = createHashRouter([
   {
@@ -47,6 +52,30 @@ export const router = createHashRouter([
     ),
     children: [
       { path: '/dashboard', element: <StatusBoardPage /> },
+      {
+        path: '/admin/batches',
+        element: (
+          <ProtectedRoute roles={['ADMIN']}>
+            <BatchesPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '/admin/batches/:id',
+        element: (
+          <ProtectedRoute roles={['ADMIN']}>
+            <BatchDetailPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '/admin/users',
+        element: (
+          <ProtectedRoute roles={['ADMIN']}>
+            <UsersPage />
+          </ProtectedRoute>
+        ),
+      },
       { path: '/sessions', element: <SessionBuilderPage /> },
       { path: '/media', element: <MediaLibraryPage /> },
       { path: '/exercises', element: <ExercisesPage /> },

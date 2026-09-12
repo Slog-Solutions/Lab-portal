@@ -44,25 +44,56 @@ model User {
   auditLogs         AuditLog[]
   claimedStation    Station?
   studyProgress     SkillProgress[]
+  batchesTaught     BatchTeacher[]     @relation("BatchTeacher")
 
   @@index([role])
 }
 
+// LMS admin core: code is a separate human-typed display id (e.g.
+// "ACTC-B01") — never the primary key, because every id DTO validates
+// with z.string().cuid2() and a hyphenated code fails that check (see
+// seed.ts's "hyphen-free" comment on the original hand-picked batch id).
+// joinKey is admin-typed and stored plaintext deliberately — see
+// BatchesService doc comment: the admin must be able to read it out to
+// a room of trainees, and it only gates cohort attachment for an
+// already-authenticated student, not account access.
 model Batch {
   id        String   @id @default(cuid())
+  code      String   @unique
   name      String
+  joinKey   String
+  joinOpen  Boolean  @default(true)
   createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   enrollments   Enrollment[]
   classSessions ClassSession[]
+  teachers      BatchTeacher[]
+}
+
+// Enforced teacher->batch assignment (LMS admin core). A teacher may only
+// create/run a ClassSession for a batch they're assigned to; ADMIN
+// bypasses this everywhere. See BatchScopeService.
+model BatchTeacher {
+  id         String   @id @default(cuid())
+  batchId    String
+  teacherId  String
+  batch      Batch    @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  teacher    User     @relation("BatchTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
+  assignedAt DateTime @default(now())
+
+  @@unique([batchId, teacherId])
+  @@index([teacherId])
 }
 
 model Enrollment {
-  id      String @id @default(cuid())
-  userId  String
-  batchId String
-  user    User   @relation(fields: [userId], references: [id], onDelete: Cascade)
-  batch   Batch  @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  id         String   @id @default(cuid())
+  userId     String
+  batchId    String
+  enrolledAt DateTime @default(now())
+  source     String   @default("ADMIN") // "ADMIN" | "SELF_JOIN"
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  batch      Batch    @relation(fields: [batchId], references: [id], onDelete: Cascade)
 
   @@unique([userId, batchId])
 }

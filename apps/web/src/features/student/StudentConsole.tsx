@@ -10,6 +10,7 @@ import { replayInputIfDesktop } from '../../lib/lab-agent';
 import { ActivityPlayer } from '../activities/registry';
 import { AssignmentsPanel } from './AssignmentsPanel';
 import { StudyLibraryPanel } from './StudyLibraryPanel';
+import { JoinBatchPanel } from './JoinBatchPanel';
 
 const textDecoder = new TextDecoder();
 
@@ -243,6 +244,11 @@ export function StudentConsole() {
             posture as AssignmentsPanel above, but browsing a
             teacher-curated StudyModule rather than a targeted Assignment. */}
         {controlRef.current && <StudyLibraryPanel control={controlRef.current} />}
+
+        {/* LMS admin core self-join — renders nothing unless this browser
+            tab also holds a real STUDENT JWT (the /login dev-testing path,
+            not the station's own zero-login identity — see doc comment). */}
+        <JoinBatchPanel />
       </main>
       <div ref={audioContainerRef} className="hidden" />
     </div>

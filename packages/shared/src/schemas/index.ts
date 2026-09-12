@@ -273,3 +273,83 @@ export const zUpdateStudyModuleDto = z.object({
   exerciseIds: z.array(z.string().cuid2()).min(1).optional(),
 });
 export type UpdateStudyModuleDto = z.infer<typeof zUpdateStudyModuleDto>;
+
+// ---- LMS administration: batches, rosters, staff accounts ---------------------
+
+/** Admin-typed display code, e.g. "ACTC-B01". Deliberately NOT `.cuid2()`
+ * — that pattern is /^[0-9a-z]+$/, which rejects the uppercase letters
+ * and hyphens a human-readable code is made of (Batch.id stays a real
+ * cuid2 everywhere; `code` is a separate, human-facing column). Compared
+ * case-insensitively (trim + uppercase) by BatchesService. */
+export const zBatchCode = z
+  .string()
+  .trim()
+  .min(3)
+  .max(32)
+  .regex(/^[A-Za-z0-9][A-Za-z0-9._-]*$/, 'Letters, digits and . _ - only');
+
+/** Admin-typed enrolment key, read out to the class. Compared
+ * case-SENSITIVELY, unlike the code — an admin who types "Alpha-2026"
+ * means exactly that. */
+export const zBatchJoinKey = z.string().trim().min(6).max(64);
+
+export const zCreateBatchDto = z.object({
+  code: zBatchCode,
+  name: z.string().trim().min(1).max(120),
+  joinKey: zBatchJoinKey,
+  joinOpen: z.boolean().optional(),
+});
+export type CreateBatchDto = z.infer<typeof zCreateBatchDto>;
+
+export const zUpdateBatchDto = z
+  .object({
+    code: zBatchCode.optional(),
+    name: z.string().trim().min(1).max(120).optional(),
+    joinKey: zBatchJoinKey.optional(),
+    joinOpen: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'At least one field must be provided' });
+export type UpdateBatchDto = z.infer<typeof zUpdateBatchDto>;
+
+/** Student self-enrolment. Unlike zClaimStationDto (a passwordless roster
+ * pick from an unauthenticated seat), this route requires a real STUDENT
+ * JWT from POST /auth/login — the key is a second factor of "were you in
+ * the room", not a credential in its own right (see BatchesService). */
+export const zJoinBatchDto = z.object({
+  code: zBatchCode,
+  joinKey: zBatchJoinKey,
+});
+export type JoinBatchDto = z.infer<typeof zJoinBatchDto>;
+
+export const zAssignBatchTeachersDto = z.object({
+  teacherIds: z.array(z.string().cuid2()).min(1).max(50),
+});
+export type AssignBatchTeachersDto = z.infer<typeof zAssignBatchTeachersDto>;
+
+export const zEnrollStudentsDto = z.object({
+  studentIds: z.array(z.string().cuid2()).min(1).max(200),
+});
+export type EnrollStudentsDto = z.infer<typeof zEnrollStudentsDto>;
+
+// ---- Staff/student account administration (admin-only user CRUD) --------------
+
+export const zCreateUserDto = z.object({
+  serviceNumber: z.string().trim().min(3).max(32),
+  fullName: z.string().trim().min(1).max(120),
+  role: zUserRole,
+  password: z.string().min(8).max(128),
+  rank: z.string().trim().min(1).max(32).optional(),
+});
+export type CreateUserDto = z.infer<typeof zCreateUserDto>;
+
+export const zUpdateUserDto = z
+  .object({
+    fullName: z.string().trim().min(1).max(120).optional(),
+    rank: z.string().trim().min(1).max(32).optional(),
+    active: z.boolean().optional(),
+  })
+  .refine((v) => Object.keys(v).length > 0, { message: 'At least one field must be provided' });
+export type UpdateUserDto = z.infer<typeof zUpdateUserDto>;
+
+export const zResetPasswordDto = z.object({ password: z.string().min(8).max(128) });
+export type ResetPasswordDto = z.infer<typeof zResetPasswordDto>;

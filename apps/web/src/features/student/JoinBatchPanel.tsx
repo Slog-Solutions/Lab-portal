@@ -1,0 +1,93 @@
+import { useState } from 'react';
+import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { batchesApi } from '../../lib/batches-api';
+import { queryKeys } from '../../lib/query-keys';
+import { useAuthStore } from '../../stores/auth-store';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+
+/**
+ * LMS admin core, student half: `batchesApi.join`/`myEnrollments` had a
+ * client wrapper and a server route (`POST /batches/join`, throttled,
+ * uniform failure message — see BatchesService's doc comment) with zero
+ * UI caller, the same "orphaned API client" shape UsersPage fixed for the
+ * admin side.
+ *
+ * This deliberately does NOT key off `StationControlClient` like
+ * AssignmentsPanel/StudyLibraryPanel do. Self-join authenticates with
+ * `POST /auth/login` (a real STUDENT JWT in `useAuthStore`), which is the
+ * router's documented browser-dev-testing convenience path, not the real
+ * seat's zero-login machineGuid registration (router.tsx's doc comment) —
+ * a real deployed seat has no STUDENT JWT to call this with, so the panel
+ * renders nothing rather than a form that would just 401.
+ */
+export function JoinBatchPanel() {
+  const user = useAuthStore((s) => s.user);
+  const queryClient = useQueryClient();
+  const [code, setCode] = useState('');
+  const [joinKey, setJoinKey] = useState('');
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+
+  const { data: enrollments } = useQuery({
+    queryKey: queryKeys.myEnrollments,
+    queryFn: batchesApi.myEnrollments,
+    enabled: user?.role === 'STUDENT',
+  });
+
+  const join = useMutation({
+    mutationFn: () => batchesApi.join({ code, joinKey }),
+    onSuccess: (res) => {
+      setCode('');
+      setJoinKey('');
+      setError(null);
+      setNotice(res.alreadyEnrolled ? `Already a member of ${res.batch.code}.` : `Joined ${res.batch.code}.`);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.myEnrollments });
+    },
+    onError: (err) => {
+      setNotice(null);
+      setError(err instanceof Error ? err.message : 'Failed to join batch');
+    },
+  });
+
+  if (user?.role !== 'STUDENT') return null;
+
+  return (
+    <Card className="w-full max-w-2xl">
+      <CardHeader>
+        <CardTitle className="text-base">My Batches</CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        {enrollments && enrollments.length > 0 && (
+          <div className="flex flex-wrap gap-2">
+            {enrollments.map((e) => (
+              <Badge key={e.batch.id} variant="outline">
+                {e.batch.code} — {e.batch.name}
+              </Badge>
+            ))}
+          </div>
+        )}
+        {enrollments?.length === 0 && <p className="text-xs text-muted-foreground">Not a member of any batch yet.</p>}
+
+        <div className="flex flex-wrap items-end gap-2">
+          <div className="space-y-1.5">
+            <Label>Batch ID</Label>
+            <Input value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. ACTC-B02" className="w-40" />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Batch Key</Label>
+            <Input value={joinKey} onChange={(e) => setJoinKey(e.target.value)} placeholder="Given by your instructor" className="w-48" />
+          </div>
+          <Button onClick={() => join.mutate()} disabled={join.isPending || !code.trim() || !joinKey.trim()}>
+            {join.isPending ? 'Joining…' : 'Join'}
+          </Button>
+        </div>
+        {notice && <p className="text-sm text-emerald-600">{notice}</p>}
+        {error && <p className="text-sm text-destructive">{error}</p>}
+      </CardContent>
+    </Card>
+  );
+}

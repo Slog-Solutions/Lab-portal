@@ -52,20 +52,38 @@ async function main(): Promise<void> {
       }),
     );
   }
-  // CEFR content pack is owned by the first teacher; the batch is shared
-  // by all three (any teacher can start a ClassSession against any batch
-  // — see sessions.service.ts's listBatches — so one shared cohort is
-  // enough to test all three teacher logins against the same 40 students).
+  // CEFR content pack is owned by the first teacher; the batch is
+  // explicitly assigned to all three below (teacher<->batch assignment is
+  // now enforced server-side — see BatchAccessService — so a shared
+  // cohort needs a real BatchTeacher row per teacher, not just a shared
+  // Batch row) so one cohort is enough to test all three teacher logins
+  // against the same 40 students.
   const teacher = teachers[0]!;
 
   const batch = await prisma.batch.upsert({
-    // Hyphen-free: every API DTO validates IDs against a cuid2-shaped
-    // pattern ([0-9a-z]+, no hyphens) to match Prisma's own @default(cuid())
-    // output, so a hand-picked seed ID has to satisfy that too.
+    // Hyphen-free id: every id-shaped DTO validates against a cuid2
+    // pattern ([0-9a-z]+, no hyphens) to match Prisma's own
+    // @default(cuid()) output, so a hand-picked seed ID has to satisfy
+    // that too. `code` is a separate, human-facing column (zBatchCode,
+    // not zBatchCode's id-shaped cousin) and can carry hyphens/uppercase.
+    // Non-empty `update` (unlike every other upsert here) so re-seeding
+    // an already-migrated dev DB promotes a placeholder backfill
+    // code/joinKey to these real values — trade-off: it also reverts an
+    // admin's UI edits to this one seeded batch, acceptable for a fixture.
     where: { id: 'seedbatchactc01' },
-    update: {},
-    create: { id: 'seedbatchactc01', name: 'ACTC Batch 01' },
+    update: { code: 'ACTC-B01', name: 'ACTC Batch 01', joinKey: 'ALPHA-2026', joinOpen: true },
+    create: { id: 'seedbatchactc01', name: 'ACTC Batch 01', code: 'ACTC-B01', joinKey: 'ALPHA-2026' },
   });
+
+  // Enforced assignment (LMS admin core): without these rows the seeded
+  // teachers could not see this batch or start a session against it.
+  for (const t of teachers) {
+    await prisma.batchTeacher.upsert({
+      where: { batchId_teacherId: { batchId: batch.id, teacherId: t.id } },
+      update: {},
+      create: { batchId: batch.id, teacherId: t.id },
+    });
+  }
 
   const studentPasswordHash = await AuthService.hashPassword('Student@12345');
   for (let i = 1; i <= 40; i++) {
@@ -94,7 +112,7 @@ async function main(): Promise<void> {
 
   // eslint-disable-next-line no-console
   console.log(
-    `Seeded: admin=${admin.serviceNumber} teachers=${teachers.map((t) => t.serviceNumber).join(',')} batch=${batch.name} + 40 students`,
+    `Seeded: admin=${admin.serviceNumber} teachers=${teachers.map((t) => t.serviceNumber).join(',')} batch=${batch.code} ${batch.name} (joinKey ${batch.joinKey}) + 40 students`,
   );
   // eslint-disable-next-line no-console
   console.log('Seeded: CEFR A1/A2/B1 original content pack (Listening/Speaking/Reading/Grammar) + Study Library modules');

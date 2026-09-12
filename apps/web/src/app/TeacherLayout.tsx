@@ -1,5 +1,16 @@
 import { NavLink, Outlet } from 'react-router-dom';
-import { LayoutDashboard, Users2, FolderOpen, BookOpen, GraduationCap, ClipboardList, FileBarChart, LogOut } from 'lucide-react';
+import {
+  LayoutDashboard,
+  Users2,
+  FolderOpen,
+  BookOpen,
+  GraduationCap,
+  ClipboardList,
+  FileBarChart,
+  LogOut,
+  Building2,
+  UserCog,
+} from 'lucide-react';
 import { useAuthStore } from '../stores/auth-store';
 import { cn } from '@/lib/utils';
 
@@ -13,15 +24,31 @@ const NAV = [
   { to: '/reports', label: 'Reports', icon: FileBarChart },
 ];
 
+// ADMIN-only (server-enforced too — UsersController/BatchesController's
+// write routes are ADMIN-only). Kept as a second group with its own
+// heading rather than merged into NAV, so a TEACHER's sidebar never even
+// shows a link that would just bounce them back to /login.
+const ADMIN_NAV = [
+  { to: '/admin/batches', label: 'Batches', icon: Building2 },
+  { to: '/admin/users', label: 'Users', icon: UserCog },
+];
+
+function navLinkClassName({ isActive }: { isActive: boolean }): string {
+  return cn(
+    'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
+    isActive ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
+  );
+}
+
 /**
- * Phase 3's four new pages made the old two-page `<Link>` ping-pong
- * (StatusBoardPage <-> SessionBuilderPage) stop scaling — this hoists
- * ProtectedRoute + navigation to one parent layout route so each child
- * page stops repeating both.
+ * Every teacher/admin page nests under one TeacherLayout (sidebar +
+ * ProtectedRoute) instead of each page repeating both — see router.tsx's
+ * doc comment for the additional ADMIN-only nesting the LMS pages need.
  */
 export function TeacherLayout() {
   const user = useAuthStore((s) => s.user);
   const clear = useAuthStore((s) => s.clear);
+  const isAdmin = user?.role === 'ADMIN';
 
   return (
     <div className="flex min-h-screen bg-background text-foreground">
@@ -32,20 +59,22 @@ export function TeacherLayout() {
         </div>
         <nav className="flex-1 space-y-1 p-2">
           {NAV.map(({ to, label, icon: Icon }) => (
-            <NavLink
-              key={to}
-              to={to}
-              className={({ isActive }) =>
-                cn(
-                  'flex items-center gap-2 rounded-md px-3 py-2 text-sm font-medium transition-colors',
-                  isActive ? 'bg-accent text-accent-foreground' : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
-                )
-              }
-            >
+            <NavLink key={to} to={to} className={navLinkClassName}>
               <Icon className="h-4 w-4" />
               {label}
             </NavLink>
           ))}
+          {isAdmin && (
+            <>
+              <p className="px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Admin</p>
+              {ADMIN_NAV.map(({ to, label, icon: Icon }) => (
+                <NavLink key={to} to={to} className={navLinkClassName}>
+                  <Icon className="h-4 w-4" />
+                  {label}
+                </NavLink>
+              ))}
+            </>
+          )}
         </nav>
         <button
           type="button"

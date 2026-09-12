@@ -1,11 +1,14 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { ActivityType, SessionRole, SessionState, type CreateSessionDto } from '@lab/shared';
+import { ActivityType, SessionRole, SessionState, UserRole, type CreateSessionDto } from '@lab/shared';
 import { mediaRoomForActivity } from '@lab/shared/events';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MediaService } from '../media/media.service';
 import { SessionStateService } from '../control/session-state.service';
 import { ControlGateway } from '../control/control.gateway';
 import { AuditService } from '../audit/audit.service';
+import type { JwtPayload } from '../auth/auth.service';
+import { BatchAccessService } from '../batches/batch-access.service';
+import { BatchesService } from '../batches/batches.service';
 
 /**
  * Session/group CRUD + the server-authoritative state machine (design
@@ -21,9 +24,13 @@ export class SessionsService {
     private readonly sessionState: SessionStateService,
     private readonly gateway: ControlGateway,
     private readonly audit: AuditService,
+    private readonly batchAccess: BatchAccessService,
+    private readonly batches: BatchesService,
   ) {}
 
-  async create(dto: CreateSessionDto, teacherId: string) {
+  async create(dto: CreateSessionDto, user: JwtPayload) {
+    await this.batchAccess.assertCanUseBatch(user, dto.batchId);
+    const teacherId = user.sub;
     const indices = new Set(dto.groups.map((g) => g.index));
     if (indices.size !== dto.groups.length) {
       throw new BadRequestException('Group indices must be unique within a session (max 6)');
@@ -71,15 +78,23 @@ export class SessionsService {
     return session;
   }
 
-  async list() {
+  /** ADMIN sees every session; TEACHER only sessions in a batch they're
+   * assigned to (enforcement — see BatchAccessService). */
+  async list(user: JwtPayload) {
+    const where =
+      user.role === UserRole.ADMIN ? {} : { batchId: { in: await this.batchAccess.batchIdsForTeacher(user.sub) } };
     return this.prisma.classSession.findMany({
+      where,
       orderBy: { createdAt: 'desc' },
       include: { groups: { select: { id: true, index: true } } },
     });
   }
 
-  async listBatches() {
-    return this.prisma.batch.findMany({ orderBy: { name: 'asc' } });
+  /** Delegates to BatchesService.listForPrincipal — the same authority
+   * GET /batches/mine reads from, so "which batches may this teacher
+   * use" has exactly one implementation. */
+  async listBatches(user: JwtPayload) {
+    return this.batches.listForPrincipal(user);
   }
 
   /**
@@ -87,8 +102,9 @@ export class SessionsService {
    * pushes a fresh snapshot (with media tokens) to every member station.
    * Idempotent room creation (MediaService.ensureRoom).
    */
-  async arm(sessionId: string, actorId: string) {
+  async arm(sessionId: string, user: JwtPayload) {
     const session = await this.get(sessionId);
+    await this.batchAccess.assertCanUseBatch(user, session.batchId);
     if (session.state !== SessionState.DRAFT) {
       throw new BadRequestException(`Cannot arm a session in state ${session.state}`);
     }
@@ -100,12 +116,13 @@ export class SessionsService {
 
     const updated = await this.bumpAndPersist(sessionId, SessionState.ARMED);
     await this.pushToAllMembers(session.groups.flatMap((g) => g.members.map((m) => m.stationId)));
-    await this.audit.log({ actorId, action: 'session.arm', detail: { sessionId } });
+    await this.audit.log({ actorId: user.sub, action: 'session.arm', detail: { sessionId } });
     return updated;
   }
 
-  async start(sessionId: string, actorId: string) {
+  async start(sessionId: string, user: JwtPayload) {
     const session = await this.get(sessionId);
+    await this.batchAccess.assertCanUseBatch(user, session.batchId);
     if (session.state !== SessionState.ARMED && session.state !== SessionState.PAUSED) {
       throw new BadRequestException(`Cannot start a session in state ${session.state}`);
     }
@@ -117,23 +134,25 @@ export class SessionsService {
     }
     const updated = await this.bumpAndPersist(sessionId, SessionState.RUNNING, { startedAt: new Date() });
     await this.pushToAllMembers(session.groups.flatMap((g) => g.members.map((m) => m.stationId)));
-    await this.audit.log({ actorId, action: 'session.start', detail: { sessionId } });
+    await this.audit.log({ actorId: user.sub, action: 'session.start', detail: { sessionId } });
     return updated;
   }
 
-  async pause(sessionId: string, actorId: string) {
+  async pause(sessionId: string, user: JwtPayload) {
     const session = await this.get(sessionId);
+    await this.batchAccess.assertCanUseBatch(user, session.batchId);
     if (session.state !== SessionState.RUNNING) {
       throw new BadRequestException(`Cannot pause a session in state ${session.state}`);
     }
     const updated = await this.bumpAndPersist(sessionId, SessionState.PAUSED);
     await this.pushToAllMembers(session.groups.flatMap((g) => g.members.map((m) => m.stationId)));
-    await this.audit.log({ actorId, action: 'session.pause', detail: { sessionId } });
+    await this.audit.log({ actorId: user.sub, action: 'session.pause', detail: { sessionId } });
     return updated;
   }
 
-  async end(sessionId: string, actorId: string) {
+  async end(sessionId: string, user: JwtPayload) {
     const session = await this.get(sessionId);
+    await this.batchAccess.assertCanUseBatch(user, session.batchId);
     if (session.state === SessionState.ENDED) return session;
 
     for (const group of session.groups) {
@@ -144,7 +163,7 @@ export class SessionsService {
     // fall back to idle/broadcast-only immediately rather than waiting
     // for the 4h token TTL or a reconnect.
     await this.pushToAllMembers(session.groups.flatMap((g) => g.members.map((m) => m.stationId)));
-    await this.audit.log({ actorId, action: 'session.end', detail: { sessionId } });
+    await this.audit.log({ actorId: user.sub, action: 'session.end', detail: { sessionId } });
     return updated;
   }
 

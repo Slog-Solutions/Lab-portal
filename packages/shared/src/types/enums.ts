@@ -145,3 +145,11 @@ export const AssetKind = {
   IMAGE: 'image',
 } as const;
 export type AssetKind = (typeof AssetKind)[keyof typeof AssetKind];
+
+/** `Enrollment.source` — plain String column, same reasoning as the group
+ * above: a new provenance value never needs a migration. */
+export const EnrollmentSource = {
+  ADMIN: 'ADMIN',
+  SELF_JOIN: 'SELF_JOIN',
+} as const;
+export type EnrollmentSource = (typeof EnrollmentSource)[keyof typeof EnrollmentSource];
