@@ -20,5 +20,6 @@ export const queryKeys = {
   gradebookAttempt: (id: string) => ['gradebook', 'attempts', id] as const,
   gradebookAssignments: (filter: Record<string, string | undefined>) => ['gradebook', 'assignments', filter] as const,
   pronunciationStatus: ['pronunciation', 'status'] as const,
+  pronunciationAttempts: (exerciseId: string) => ['pronunciation', 'attempts', exerciseId] as const,
   studyModules: ['study-modules'] as const,
 };

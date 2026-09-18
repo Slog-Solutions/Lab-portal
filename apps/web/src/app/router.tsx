@@ -12,6 +12,8 @@ import { StudyModulesPage } from '../features/courseware/StudyModulesPage';
 import { GradebookPage } from '../features/gradebook/GradebookPage';
 import { ReportsPage } from '../features/reports/ReportsPage';
 import { StudentConsole } from '../features/student/StudentConsole';
+import { PronunciationAuthoringPage } from '../features/exercises/PronunciationAuthoringPage';
+import { PronunciationReviewPage } from '../features/exercises/PronunciationReviewPage';
 import { ProtectedRoute } from './ProtectedRoute';
 import { TeacherLayout } from './TeacherLayout';
 import { getRuntimeConfig } from '../lib/runtime-config';
@@ -80,6 +82,8 @@ export const router = createHashRouter([
       { path: '/media', element: <MediaLibraryPage /> },
       { path: '/exercises', element: <ExercisesPage /> },
       { path: '/exercises/:id', element: <ExerciseDetailPage /> },
+      { path: '/pronunciation', element: <PronunciationAuthoringPage /> },
+      { path: '/pronunciation/:id/review', element: <PronunciationReviewPage /> },
       { path: '/study-library', element: <StudyModulesPage /> },
       { path: '/gradebook', element: <GradebookPage /> },
       { path: '/reports', element: <ReportsPage /> },

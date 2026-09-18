@@ -10,6 +10,7 @@ import {
   LogOut,
   Building2,
   UserCog,
+  Mic,
 } from 'lucide-react';
 import { useAuthStore } from '../stores/auth-store';
 import { cn } from '@/lib/utils';
@@ -19,6 +20,7 @@ const NAV = [
   { to: '/sessions', label: 'Sessions', icon: Users2 },
   { to: '/media', label: 'Media Library', icon: FolderOpen },
   { to: '/exercises', label: 'Exercises', icon: BookOpen },
+  { to: '/pronunciation', label: 'Pronunciation', icon: Mic },
   { to: '/study-library', label: 'Study Library', icon: GraduationCap },
   { to: '/gradebook', label: 'Gradebook', icon: ClipboardList },
   { to: '/reports', label: 'Reports', icon: FileBarChart },

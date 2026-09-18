@@ -53,6 +53,17 @@ export class PronunciationService {
     };
   }
 
+  /** Build the env for eSpeak-NG child process. When the binary is run from
+   * a portable (non-installed) extraction, it needs ESPEAK_DATA_PATH set to
+   * the espeak-ng-data folder alongside the exe; without it the binary
+   * crashes with an access violation looking for the data in its compiled-in
+   * default path (C:\\Program Files\\eSpeak NG\\espeak-ng-data). */
+  private espeakEnv(): NodeJS.ProcessEnv | undefined {
+    const dataPath = this.config.get('ESPEAK_NG_DATA', { infer: true });
+    if (!dataPath) return undefined;
+    return { ...process.env, ESPEAK_DATA_PATH: dataPath };
+  }
+
   /** Grapheme-to-phoneme via eSpeak-NG, `--ipa` output. */
   async generateIpa(text: string): Promise<string> {
     const bin = this.config.get('ESPEAK_NG_BIN', { infer: true });
@@ -62,7 +73,10 @@ export class PronunciationService {
       );
     }
     try {
-      const { stdout } = await execFileAsync(bin, ['-q', '--ipa', '-x', text], { timeout: 10_000 });
+      const { stdout } = await execFileAsync(bin, ['-q', '--ipa', '-x', text], {
+        timeout: 10_000,
+        env: this.espeakEnv(),
+      });
       return stdout.trim();
     } catch (err) {
       throw new ServiceUnavailableException(`eSpeak-NG failed: ${(err as Error).message}`);

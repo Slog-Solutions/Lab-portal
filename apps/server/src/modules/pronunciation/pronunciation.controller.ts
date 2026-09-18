@@ -7,6 +7,7 @@ import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import { StorageService } from '../../common/storage/storage.service';
+import { Public } from '../../common/guards/jwt-auth.guard';
 import type { JwtPayload } from '../auth/auth.service';
 import { MediaAssetsService } from '../media-assets/media-assets.service';
 import { PronunciationService } from './pronunciation.service';
@@ -21,7 +22,6 @@ const zGenerateDto = z.object({
  * to drop straight into a PRONUNCIATION exercise's ipaAssetId/
  * modelAudioAssetId config fields. Either half can be unavailable (see
  * PronunciationService's doc comment) without failing the whole call. */
-@Roles(UserRole.TEACHER, UserRole.ADMIN)
 @Controller('pronunciation')
 export class PronunciationController {
   constructor(
@@ -30,11 +30,13 @@ export class PronunciationController {
     private readonly storage: StorageService,
   ) {}
 
+  @Public()
   @Get('status')
   status() {
     return this.pronunciation.isConfigured();
   }
 
+  @Roles(UserRole.TEACHER, UserRole.ADMIN)
   @Post('generate')
   async generate(@Body(new ZodValidationPipe(zGenerateDto)) dto: z.infer<typeof zGenerateDto>, @CurrentUser() user: JwtPayload) {
     const result: { ipaAssetId: string | null; modelAudioAssetId: string | null; warnings: string[] } = {

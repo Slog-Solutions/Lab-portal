@@ -1,4 +1,6 @@
 import { apiFetch } from './api-client';
+import { getRuntimeConfig } from './runtime-config';
+import { useAuthStore } from '../stores/auth-store';
 
 /** `new URLSearchParams({a: undefined})` stringifies to the literal
  * string "undefined", not an omitted param — confirmed live: the
@@ -40,4 +42,39 @@ export const gradebookApi = {
       method: 'POST',
       body: JSON.stringify({ attemptId, newScore, reason }),
     }),
+  /** Fetch a recording file as an authenticated blob URL for
+   * teacher playback — <audio src> can't carry Authorization headers,
+   * same issue as PronunciationPlayer's fetchAsObjectUrl. Caller must
+   * revoke the returned URL when the component unmounts. */
+  fetchRecordingBlob: async (recordingId: string): Promise<string> => {
+    const { serverUrl } = getRuntimeConfig();
+    const token = useAuthStore.getState().accessToken;
+    const res = await fetch(`${serverUrl}/api/recordings/${recordingId}/file`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`Recording fetch failed (${res.status})`);
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  },
+  /** Fetch a media-asset file (IPA text / model audio) as text. */
+  fetchMediaAssetText: async (assetId: string): Promise<string> => {
+    const { serverUrl } = getRuntimeConfig();
+    const token = useAuthStore.getState().accessToken;
+    const res = await fetch(`${serverUrl}/api/media-assets/${assetId}/file`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`Asset fetch failed (${res.status})`);
+    return res.text();
+  },
+  /** Fetch a media-asset file as a blob URL for audio playback. */
+  fetchMediaAssetBlob: async (assetId: string): Promise<string> => {
+    const { serverUrl } = getRuntimeConfig();
+    const token = useAuthStore.getState().accessToken;
+    const res = await fetch(`${serverUrl}/api/media-assets/${assetId}/file`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`Asset fetch failed (${res.status})`);
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  },
 };

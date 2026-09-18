@@ -37,6 +37,7 @@ const envSchema = z.object({
   // to "record only, no IPA/model audio" rather than failing to boot —
   // same honesty pattern as native-bridge's input-lock stub.
   ESPEAK_NG_BIN: z.string().min(1).optional(),
+  ESPEAK_NG_DATA: z.string().min(1).optional(),  // data dir for portable (non-installed) eSpeak-NG
   PIPER_BIN: z.string().min(1).optional(),
   PIPER_VOICES_DIR: z.string().min(1).optional(),
 });
