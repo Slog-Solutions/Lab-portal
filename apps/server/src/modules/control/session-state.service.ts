@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ActivityType, SessionRole, emptyDesiredState, type DesiredStationState } from '@lab/shared';
-import { BROADCAST_ROOM, mediaRoomForActivity } from '@lab/shared/events';
+import { BROADCAST_ROOM, classBroadcastRoom, mediaRoomForActivity } from '@lab/shared/events';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MediaService } from '../media/media.service';
 import { LockService } from './lock.service';
@@ -29,10 +29,17 @@ export class SessionStateService {
   ) {}
 
   async getDesiredState(stationId: string): Promise<DesiredStationState> {
-    const station = await this.prisma.station.findUnique({ where: { id: stationId } });
+    const station = await this.prisma.station.findUnique({
+      where: { id: stationId },
+      include: { liveClass: { include: { teacher: { select: { fullName: true } } } } },
+    });
     if (!station || !station.enabled) {
       return { ...emptyDesiredState(0), stationEnabled: !!station?.enabled };
     }
+
+    const liveClass = station.liveClass
+      ? { id: station.liveClass.id, title: station.liveClass.title, teacherName: station.liveClass.teacher.fullName }
+      : null;
 
     const isTeacher = station.seatNo === 1;
     await this.media.ensureBroadcastRoom();
@@ -42,25 +49,51 @@ export class SessionStateService {
       room: BROADCAST_ROOM,
       role: isTeacher ? 'TEACHER' : 'STUDENT',
     });
+    // A station currently signed into a class also gets that class's own
+    // scoped broadcast room, alongside the lab-wide one — see
+    // MediaController.broadcastToken (TEACHER mints into this room, not
+    // BROADCAST_ROOM) and ClassroomService.start (which ensures the room
+    // exists; this only ever mints tokens for it, same pattern as the
+    // per-group rooms below).
+    const classRoomGrant = station.liveClass
+      ? {
+          room: classBroadcastRoom(station.liveClass.id),
+          token: await this.media.mintToken({
+            stationId,
+            displayName: station.hostname,
+            room: classBroadcastRoom(station.liveClass.id),
+            role: 'STUDENT' as const,
+          }),
+          publish: { mic: true, screen: false },
+        }
+      : null;
 
     const member = await this.prisma.sessionMember.findFirst({
       where: { stationId, group: { session: { state: { in: ['ARMED', 'RUNNING', 'PAUSED'] } } } },
       include: { group: { include: { session: true, activity: true } } },
     });
 
-    const lock = this.locks.get(stationId);
-
     if (!member) {
+      // Read right here, after the last await in this branch — a
+      // concurrent lock/unlock racing this call must not be re-sent (or
+      // dropped) because we captured it too early.
+      const lock = this.locks.get(stationId);
       return {
         seq: 0,
         sessionId: null,
         groupId: null,
         role: null,
         activity: null,
-        lock: lock ? { ...lock, expiresAt: Date.now() + LOCK_HEARTBEAT_TTL_MS } : null,
-        media: { rooms: [{ room: BROADCAST_ROOM, token: broadcastToken, publish: { mic: true, screen: isTeacher } }] },
+        lock: lock ? { id: lock.id, screen: lock.screen, input: lock.input, message: lock.message, expiresAt: Date.now() + LOCK_HEARTBEAT_TTL_MS } : null,
+        media: {
+          rooms: [
+            { room: BROADCAST_ROOM, token: broadcastToken, publish: { mic: true, screen: isTeacher } },
+            ...(classRoomGrant ? [classRoomGrant] : []),
+          ],
+        },
         stationEnabled: true,
         monitoringIndicator: true,
+        liveClass,
       };
     }
 
@@ -85,6 +118,9 @@ export class SessionStateService {
             role: isTeacher ? 'TEACHER' : 'STUDENT',
           });
 
+    // Read right here, after the last await above (groupToken) — same
+    // reasoning as the no-member branch.
+    const lock = this.locks.get(stationId);
     return {
       seq: member.group.session.seq,
       sessionId: member.group.sessionId,
@@ -97,10 +133,11 @@ export class SessionStateService {
             config: this.sanitizeConfigForWire(member.group.activity.type as ActivityType, member.group.activity.config),
           }
         : null,
-      lock: lock ? { ...lock, expiresAt: Date.now() + LOCK_HEARTBEAT_TTL_MS } : null,
+      lock: lock ? { id: lock.id, screen: lock.screen, input: lock.input, message: lock.message, expiresAt: Date.now() + LOCK_HEARTBEAT_TTL_MS } : null,
       media: {
         rooms: [
           { room: BROADCAST_ROOM, token: broadcastToken, publish: { mic: true, screen: isTeacher } },
+          ...(classRoomGrant ? [classRoomGrant] : []),
           {
             room: groupRoomName,
             token: groupToken,
@@ -113,6 +150,7 @@ export class SessionStateService {
       },
       stationEnabled: true,
       monitoringIndicator: true,
+      liveClass,
     };
   }
 

@@ -45,6 +45,7 @@ model User {
   claimedStation    Station?
   studyProgress     SkillProgress[]
   batchesTaught     BatchTeacher[]     @relation("BatchTeacher")
+  liveClasses       LiveClass[]        @relation("LiveClassTeacher")
 
   @@index([role])
 }
@@ -125,6 +126,12 @@ model Station {
   lastSeenAt   DateTime?
   currentUserId String?          @unique
   currentUser  User?             @relation(fields: [currentUserId], references: [id])
+  // Set/cleared together with currentUserId — classroom sign-in requires a
+  // classroom code, so a station is never claimed without also being in a
+  // class (see StationsService.claim). SetNull rather than Cascade: a
+  // deleted LiveClass must not delete the Station row it happened to seat.
+  liveClassId  String?
+  liveClass    LiveClass?        @relation(fields: [liveClassId], references: [id], onDelete: SetNull)
   enabled      Boolean           @default(true)
   archivedAt   DateTime?         // set when "replace station" supersedes this row
   createdAt    DateTime          @default(now())
@@ -136,6 +143,33 @@ model Station {
 
   @@index([lifecycle])
   @@index([seatNo])
+  @@index([liveClassId])
+}
+
+enum LiveClassState {
+  ACTIVE
+  ENDED
+}
+
+// A teacher-created classroom code (design decision: "the classroom
+// works like a real classroom" — a teacher starts a class, students join
+// with the code, the teacher controls only their own class's PCs). Not to
+// be confused with ClassSession (a Batch-scoped, activity-driven lesson
+// plan) — LiveClass is the lighter-weight "who's in the room right now"
+// grouping that gates classroom-control scope and sign-in itself.
+model LiveClass {
+  id        String          @id @default(cuid())
+  code      String          @unique
+  title     String
+  teacherId String
+  teacher   User            @relation("LiveClassTeacher", fields: [teacherId], references: [id])
+  state     LiveClassState  @default(ACTIVE)
+  startedAt DateTime        @default(now())
+  endedAt   DateTime?
+
+  stations Station[]
+
+  @@index([teacherId, state])
 }
 
 // ============================================================ Runtime ===

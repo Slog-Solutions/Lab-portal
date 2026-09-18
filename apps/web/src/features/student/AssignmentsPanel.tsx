@@ -1,11 +1,11 @@
 import { useEffect, useState } from 'react';
 import type { StationControlClient } from '../../lib/station-control-client';
 import { stationApi, type StartedAttempt } from '../../lib/station-api';
+import { useStudentSession } from '../../stores/student-session-store';
 import { VocabularyTestPlayer } from '../activities/VocabularyTestPlayer';
 import { ContentExercisePlayer } from '../activities/ContentExercisePlayer';
 import { PronunciationPlayer } from '../activities/PronunciationPlayer';
 import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 
@@ -14,56 +14,36 @@ type AssignmentRow = Awaited<ReturnType<typeof stationApi.myAssignments>>[number
 /**
  * Self-paced assessment (Ser 10 "teacher-tailored courses" — targetScore/
  * allocatedHours/dueAt) — deliberately independent of live session state,
- * matching Ser 1's "self-study even when teacher not present". A station
- * claims itself as a specific enrolled student first (roster pick, not a
- * login — see StationsService.claim's doc comment), then sees its own
- * assignments and can start/resume/review each.
+ * matching Ser 1's "self-study even when teacher not present". Only
+ * renders once a student has signed in at this seat (StudentConsole gates
+ * on useStudentSession — see StudentSignInScreen), so this component no
+ * longer owns any credential UI itself; it fetches assignments as soon as
+ * it mounts, using the student's own JWT-backed studentToken.
  */
 export function AssignmentsPanel({ control }: { control: StationControlClient }) {
-  const [claimed, setClaimed] = useState<string | null>(null);
-  const [serviceNumber, setServiceNumber] = useState('');
-  const [assignments, setAssignments] = useState<AssignmentRow[]>([]);
+  const student = useStudentSession((s) => s.student);
+  const clearSession = useStudentSession((s) => s.clear);
+  const [assignments, setAssignments] = useState<AssignmentRow[] | null>(null);
   const [started, setStarted] = useState<StartedAttempt | null>(null);
-  const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // /attempts/* is still StationAuthGuard-only (see attempts.controller.ts's
+  // doc comment) — it resolves "which student" from Station.currentUserId,
+  // set at claim time, not from a JWT `sub`. So these calls use the
+  // station's own token (control.getToken()), never the student's JWT.
+  // This panel only ever mounts once a student is signed in, so a plain
+  // mount-effect fetch is enough — no polling needed (that workaround
+  // existed only for the old claim recovery flow).
   useEffect(() => {
-    // A page refresh loses local `claimed` state, but the server still
-    // remembers this station's claimed student — try to recover it
-    // silently once the station has its own token (minted on hello).
-    const timer = setInterval(() => {
-      if (!control.getToken()) return;
-      clearInterval(timer);
-      stationApi
-        .myAssignments(control.getToken())
-        .then((list) => {
-          setAssignments(list);
-          setClaimed((prev) => prev ?? 'Student session active');
-        })
-        .catch(() => void 0); // not claimed yet — expected on first boot
-    }, 500);
-    return () => clearInterval(timer);
+    stationApi
+      .myAssignments(control.getToken())
+      .then(setAssignments)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load assignments'));
   }, [control]);
-
-  async function claim(): Promise<void> {
-    setBusy(true);
-    setError(null);
-    try {
-      const res = await stationApi.claim(control.getToken(), serviceNumber.trim());
-      setClaimed(res.fullName);
-      setAssignments(await stationApi.myAssignments(control.getToken()));
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Claim failed');
-    } finally {
-      setBusy(false);
-    }
-  }
 
   async function release(): Promise<void> {
     await stationApi.release(control.getToken());
-    setClaimed(null);
-    setAssignments([]);
-    setServiceNumber('');
+    clearSession();
   }
 
   async function startAssignment(row: AssignmentRow): Promise<void> {
@@ -97,40 +77,18 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
     }
   }
 
-  if (!claimed) {
-    return (
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="text-base">My Assignments</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          <p className="text-sm text-muted-foreground">Enter your service number to see your assignments.</p>
-          <Input
-            value={serviceNumber}
-            onChange={(e) => setServiceNumber(e.target.value)}
-            placeholder="e.g. STU-014"
-            onKeyDown={(e) => e.key === 'Enter' && void claim()}
-          />
-          {error && <p className="text-sm text-destructive">{error}</p>}
-          <Button onClick={() => void claim()} disabled={busy || !serviceNumber.trim()}>
-            {busy ? 'Checking…' : 'Continue'}
-          </Button>
-        </CardContent>
-      </Card>
-    );
-  }
-
   return (
     <Card className="w-full max-w-2xl">
       <CardHeader className="flex-row items-center justify-between">
-        <CardTitle className="text-base">My Assignments — {claimed}</CardTitle>
+        <CardTitle className="text-base">My Assignments — {student?.fullName}</CardTitle>
         <Button variant="ghost" size="sm" onClick={() => void release()}>
           Sign out
         </Button>
       </CardHeader>
       <CardContent className="space-y-2">
-        {assignments.length === 0 && <p className="text-sm text-muted-foreground">No assignments yet.</p>}
-        {assignments.map((row) => {
+        {assignments === null && <p className="text-sm text-muted-foreground">Loading…</p>}
+        {assignments?.length === 0 && <p className="text-sm text-muted-foreground">No assignments yet.</p>}
+        {assignments?.map((row) => {
           const latest = row.latestAttempt;
           const pct = latest?.rawScore !== undefined && latest?.rawScore !== null && latest?.maxScore
             ? Math.round((latest.rawScore / latest.maxScore) * 100)

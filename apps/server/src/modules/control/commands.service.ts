@@ -1,14 +1,17 @@
-import { Injectable, Logger } from '@nestjs/common';
+import { ForbiddenException, Injectable, Logger } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import dgram from 'node:dgram';
 import {
   CommandType,
+  UserRole,
   type CommandAck,
   type CommandEnvelope,
   type CommandTarget,
 } from '@lab/shared';
 import { stationRoom } from '@lab/shared/events';
 import { PrismaService } from '../../prisma/prisma.service';
+import { ClassAccessService } from '../classroom/class-access.service';
+import type { JwtPayload } from '../auth/auth.service';
 import type { Server } from 'socket.io';
 
 const COMMAND_TTL_MS = 60_000;
@@ -30,7 +33,10 @@ export class CommandsService {
   private readonly outbox = new Map<string, CommandEnvelope[]>();
   private server?: Server;
 
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly classAccess: ClassAccessService,
+  ) {}
 
   /** ControlGateway hands us its socket.io server once at startup — see
    * control.gateway.ts's constructor. Avoids a circular DI dependency
@@ -40,17 +46,39 @@ export class CommandsService {
     this.server = server;
   }
 
-  /** Public so callers that need the resolved station set WITHOUT
+  /**
+   * Public so callers that need the resolved station set WITHOUT
    * issuing a command (e.g. applying a lock, which is not a command
    * envelope at all — see LockService) don't have to duplicate this
    * query logic or, worse, piggyback on an unrelated command type as a
-   * side-effecting way to get station IDs. */
-  async resolveTargetToStationIds(target: CommandTarget): Promise<string[]> {
-    return this.resolveTarget(target);
+   * side-effecting way to get station IDs.
+   *
+   * This is the single choke point every targeted control action passes
+   * through — `actor` is optional only because a handful of internal
+   * callers (SessionsService pushing a post-arm snapshot, etc.) act with
+   * system authority, not a specific teacher; every HTTP endpoint on
+   * ControlController passes its @CurrentUser() here. For a TEACHER, the
+   * resolved set is intersected with their controllable stations — so
+   * `kind: 'all'` means "every station in my class", not literally every
+   * station in the lab. ADMIN is never filtered.
+   */
+  async resolveTargetToStationIds(target: CommandTarget, actor?: Pick<JwtPayload, 'sub' | 'role'>): Promise<string[]> {
+    const resolved = await this.resolveTarget(target);
+    if (!actor || actor.role === UserRole.ADMIN) return resolved;
+    const filtered = await this.classAccess.filterControllable(actor, resolved);
+    if (filtered.length === 0) {
+      throw new ForbiddenException('None of the selected computers are in your class');
+    }
+    return filtered;
   }
 
-  async send<T = unknown>(target: CommandTarget, type: CommandType, payload: T): Promise<CommandEnvelope<T>[]> {
-    const stationIds = await this.resolveTarget(target);
+  async send<T = unknown>(
+    target: CommandTarget,
+    type: CommandType,
+    payload: T,
+    actor?: Pick<JwtPayload, 'sub' | 'role'>,
+  ): Promise<CommandEnvelope<T>[]> {
+    const stationIds = await this.resolveTargetToStationIds(target, actor);
     const envelopes: CommandEnvelope<T>[] = stationIds.map((stationId) => {
       const envelope: CommandEnvelope<T> = {
         id: randomUUID(),

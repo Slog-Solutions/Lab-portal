@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
-import type { StationStatusRow } from '@lab/shared';
+import { seatLabel, type StationStatusRow } from '@lab/shared';
 import { apiFetch } from '../../lib/api-client';
 import { controlApi } from '../../lib/control-api';
 import { stationsApi } from '../../lib/stations-api';
+import { classroomApi, type ClassView } from '../../lib/classroom-api';
 import { getControlSocket } from '../../lib/socket-client';
 import { useAuthStore } from '../../stores/auth-store';
 import { BroadcastPanel } from '../teacher/BroadcastPanel';
@@ -25,6 +26,13 @@ export function StatusBoardPage() {
     queryKey: ['stations', 'status-board'],
     queryFn: () => apiFetch<StationStatusRow[]>('/control/status-board'),
     refetchInterval: 10_000, // belt-and-suspenders alongside the socket delta stream
+  });
+  const isAdmin = user?.role === 'ADMIN';
+  const viewerIsTeacher = user?.role === 'TEACHER';
+  const { data: currentClass, refetch: refetchClass } = useQuery({
+    queryKey: ['classroom', 'current'],
+    queryFn: classroomApi.current,
+    enabled: viewerIsTeacher || isAdmin,
   });
   const [rows, setRows] = useState<Map<string, StationStatusRow>>(new Map());
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -68,7 +76,6 @@ export function StatusBoardPage() {
   const unclaimedStations = Array.from(rows.values()).filter((r) => r.seatNo === null);
   const takenSeats = new Set(Array.from(rows.values(), (r) => r.seatNo).filter((n): n is number => n !== null));
   const freeSeats = Array.from({ length: TOTAL_SEATS }, (_, i) => i + 1).filter((n) => !takenSeats.has(n));
-  const isAdmin = user?.role === 'ADMIN';
 
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
   const target = { kind: 'stations' as const, stationIds: selectedIds };
@@ -97,13 +104,13 @@ export function StatusBoardPage() {
     });
   }
 
-  async function runAction(label: string, action: () => Promise<unknown>): Promise<void> {
+  async function runAction(label: string, action: () => Promise<unknown>, successMessage?: string): Promise<void> {
     if (selectedIds.length === 0) return;
     setBusy(true);
     setLastAction(null);
     try {
       await action();
-      setLastAction(`${label}: ${selectedIds.length} station(s)`);
+      setLastAction(successMessage ?? `${label}: ${selectedIds.length} station(s)`);
       await refetch();
     } catch (err) {
       setLastAction(`${label} failed: ${err instanceof Error ? err.message : 'unknown error'}`);
@@ -118,8 +125,9 @@ export function StatusBoardPage() {
         <div>
           <h1 className="text-lg font-semibold">Lab Control Console</h1>
           <p className="text-sm text-slate-400">
-            {onlineCount} / {TOTAL_SEATS} seats online · {seatedCount} / {TOTAL_SEATS - 1} students seated · signed in
-            as {user?.fullName} ({user?.role}) · {selectedIds.length} selected
+            {viewerIsTeacher
+              ? `${seatedCount} student${seatedCount === 1 ? '' : 's'} in your class · signed in as ${user?.fullName} · ${selectedIds.length} selected`
+              : `${onlineCount} / ${TOTAL_SEATS} seats online · ${seatedCount} / ${TOTAL_SEATS - 1} students seated · signed in as ${user?.fullName} (${user?.role}) · ${selectedIds.length} selected`}
           </p>
         </div>
         <Link to="/sessions" className="text-sm text-sky-400 hover:underline">
@@ -127,12 +135,22 @@ export function StatusBoardPage() {
         </Link>
       </header>
 
-      <UnclaimedStationsPanel
-        stations={unclaimedStations}
-        freeSeats={freeSeats}
-        isAdmin={isAdmin}
-        assigningId={assigningId}
-        onAssign={handleAssignSeat}
+      {isAdmin && (
+        <UnclaimedStationsPanel
+          stations={unclaimedStations}
+          freeSeats={freeSeats}
+          assigningId={assigningId}
+          onAssign={handleAssignSeat}
+        />
+      )}
+
+      <ClassroomPanel
+        currentClass={currentClass}
+        visible={viewerIsTeacher || !!currentClass}
+        onChanged={async () => {
+          await refetchClass();
+          await refetch();
+        }}
       />
 
       <BroadcastPanel />
@@ -154,11 +172,12 @@ export function StatusBoardPage() {
               title={
                 station
                   ? `${station.hostname} · ${station.appVersion ?? 'unknown'}` +
-                    (station.currentUser ? ` · ${station.currentUser.fullName} (${station.currentUser.serviceNumber})` : ' · no student seated')
+                    (station.currentUser ? ` · ${station.currentUser.fullName} (${station.currentUser.serviceNumber})` : ' · no student seated') +
+                    (isAdmin && station.liveClass ? ` · ${station.liveClass.title} (${station.liveClass.teacherName})` : '')
                   : 'Unclaimed'
               }
             >
-              <span className="text-xs font-medium">{isTeacher ? 'T' : seatNo - 1}</span>
+              <span className="text-xs font-medium">{seatLabel(seatNo)}</span>
               {station?.currentUser && (
                 <span className="mt-0.5 max-w-full truncate text-[9px] leading-none text-slate-300/80">
                   {station.currentUser.serviceNumber.replace('STU-', '')}
@@ -172,11 +191,12 @@ export function StatusBoardPage() {
       {selectedIds.length === 1 && (
         <SeatDetailPanel
           station={rows.get(selectedIds[0]!)}
+          isAdmin={isAdmin}
           onTakeRemoteControl={() => setRemoteControlTarget(selectedIds[0]!)}
           onReleaseStudent={async () => {
             setLastAction(null);
             try {
-              await stationsApi.releaseStudent(selectedIds[0]!);
+              await classroomApi.releaseStudent(selectedIds[0]!);
               setLastAction('Released student from seat');
               await refetch();
             } catch (err) {
@@ -192,15 +212,17 @@ export function StatusBoardPage() {
 
 /** Shown for whichever single seat is selected in the grid — the "manage
  * who's sitting here" surface the seat tiles themselves are too small for.
- * Release is available regardless of role (see stations.controller.ts's
- * release-student route: ADMIN or TEACHER), matching every other
- * day-to-day control action on this page. */
+ * Release is available regardless of role (see classroom.controller.ts's
+ * release-student route: ADMIN or TEACHER — scoped to a TEACHER's own
+ * class), matching every other day-to-day control action on this page. */
 function SeatDetailPanel({
   station,
+  isAdmin,
   onTakeRemoteControl,
   onReleaseStudent,
 }: {
   station: StationStatusRow | undefined;
+  isAdmin: boolean;
   onTakeRemoteControl: () => void;
   onReleaseStudent: () => Promise<void>;
 }) {
@@ -216,15 +238,18 @@ function SeatDetailPanel({
 
   return (
     <div className="mt-4 flex flex-wrap items-center gap-3 rounded-md border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm">
-      <span className="font-medium text-slate-200">
-        Seat {station.seatNo === 1 ? 'T' : station.seatNo === null ? '?' : station.seatNo - 1}
-      </span>
+      <span className="font-medium text-slate-200">Seat {seatLabel(station.seatNo)}</span>
       <span className="text-slate-400">{station.hostname}</span>
       {station.currentUser ? (
         <>
           <span className="text-slate-300">
             Seated: <span className="font-medium">{station.currentUser.fullName}</span> ({station.currentUser.serviceNumber})
           </span>
+          {isAdmin && station.liveClass && (
+            <span className="text-slate-400">
+              Class: {station.liveClass.title} ({station.liveClass.teacherName})
+            </span>
+          )}
           <button
             type="button"
             disabled={releasing}
@@ -263,7 +288,7 @@ function Toolbar({
   target,
 }: {
   busy: boolean;
-  onAction: (label: string, action: () => Promise<unknown>) => Promise<void>;
+  onAction: (label: string, action: () => Promise<unknown>, successMessage?: string) => Promise<void>;
   target: { kind: 'stations'; stationIds: string[] };
 }) {
   const btn = 'rounded-md px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40';
@@ -279,7 +304,9 @@ function Toolbar({
       <button
         disabled={busy}
         className={`${btn} bg-emerald-700 text-white hover:bg-emerald-600`}
-        onClick={() => onAction('Unlock', () => controlApi.unlock(target))}
+        onClick={() =>
+          onAction('Unlock', () => controlApi.unlock(target), 'Lock released — students sign in with their Windows password')
+        }
       >
         Unlock
       </button>
@@ -337,24 +364,21 @@ function Toolbar({
 }
 
 /**
- * A freshly-registered station (real Electron seat OR the browser-based
- * /student test route — both speak the same station:hello contract) has
- * no seat number and so never appears as a tile in the grid below, with
- * no other page in this app able to change that. Assign-seat/swap-seats
- * are ADMIN-only server-side (seat mapping is a one-time lab-setup step,
- * not a day-to-day teacher action — apps/server stations.controller.ts),
- * so a TEACHER session sees the queue but not the controls to act on it.
+ * Manual override, admin-only (a TEACHER never receives an unseated row
+ * at all — the server's /control/status-board filters a TEACHER's view
+ * to their own class, and a station only ever gets a seat number/class
+ * together, at a real classroom sign-in — see StationsService.claim).
+ * PCs get numbered automatically at first sign-in now; this panel exists
+ * for the rare case an admin needs to pre-assign a seat by hand.
  */
 function UnclaimedStationsPanel({
   stations,
   freeSeats,
-  isAdmin,
   assigningId,
   onAssign,
 }: {
   stations: StationStatusRow[];
   freeSeats: number[];
-  isAdmin: boolean;
   assigningId: string | null;
   onAssign: (stationId: string, seatNo: number) => Promise<void>;
 }) {
@@ -365,9 +389,7 @@ function UnclaimedStationsPanel({
         {stations.length} station{stations.length === 1 ? '' : 's'} waiting for a seat
       </h2>
       <p className="mb-3 text-xs text-amber-200/70">
-        {isAdmin
-          ? 'Connected and registered, but not yet assigned a seat number — invisible on the grid below until claimed.'
-          : 'An admin needs to assign these a seat number before they appear on the grid below.'}
+        Connected and registered, but not yet assigned a seat number — invisible on the grid below until claimed.
       </p>
       <ul className="space-y-2">
         {stations.map((station) => (
@@ -375,7 +397,6 @@ function UnclaimedStationsPanel({
             key={station.stationId}
             station={station}
             freeSeats={freeSeats}
-            isAdmin={isAdmin}
             busy={assigningId === station.stationId}
             onAssign={onAssign}
           />
@@ -388,13 +409,11 @@ function UnclaimedStationsPanel({
 function UnclaimedStationRow({
   station,
   freeSeats,
-  isAdmin,
   busy,
   onAssign,
 }: {
   station: StationStatusRow;
   freeSeats: number[];
-  isAdmin: boolean;
   busy: boolean;
   onAssign: (stationId: string, seatNo: number) => Promise<void>;
 }) {
@@ -410,42 +429,144 @@ function UnclaimedStationRow({
   return (
     <li className="flex flex-wrap items-center justify-between gap-2 rounded-md bg-slate-900/60 px-3 py-2 text-sm">
       <span className="text-slate-200">
-        {station.hostname}
+        {station.currentUser ? (
+          <>
+            {station.currentUser.fullName}
+            <span className="ml-2 text-xs text-slate-500">({station.currentUser.serviceNumber})</span>
+            <span className="ml-2 text-xs text-slate-600">{station.hostname}</span>
+          </>
+        ) : (
+          <>
+            {station.hostname}
+            <span className="ml-2 text-xs text-slate-500">no student signed in yet</span>
+          </>
+        )}
         <span className="ml-2 text-xs text-slate-500">{station.appVersion ?? 'unknown version'}</span>
       </span>
-      {isAdmin ? (
-        <span className="flex items-center gap-2">
-          <select
-            value={seatNo ?? ''}
-            onChange={(e) => setSeatNo(Number(e.target.value))}
-            disabled={busy || freeSeats.length === 0}
-            className="rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100"
-          >
-            {freeSeats.map((n) => (
-              <option key={n} value={n}>
-                Seat {n === 1 ? 'T (teacher)' : n - 1}
-              </option>
-            ))}
-          </select>
+      <span className="flex items-center gap-2">
+        <select
+          value={seatNo ?? ''}
+          onChange={(e) => setSeatNo(Number(e.target.value))}
+          disabled={busy || freeSeats.length === 0}
+          className="rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs text-slate-100"
+        >
+          {freeSeats.map((n) => (
+            <option key={n} value={n}>
+              Seat {seatLabel(n)}
+            </option>
+          ))}
+        </select>
+        <button
+          type="button"
+          disabled={busy || seatNo === undefined}
+          onClick={() => seatNo !== undefined && void onAssign(station.stationId, seatNo)}
+          className="rounded-md bg-sky-700 px-3 py-1 text-xs font-medium text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          {busy ? 'Assigning…' : 'Assign'}
+        </button>
+      </span>
+    </li>
+  );
+}
+
+/**
+ * Teacher/admin classroom lifecycle (design decision: "at the start of
+ * class the teacher creates a classroom code"). Shown for any TEACHER
+ * (who always needs one to control anything) or for an ADMIN who has
+ * started a class themselves — an ADMIN who hasn't never needs this,
+ * since they already see and control every PC without one.
+ */
+function ClassroomPanel({
+  currentClass,
+  visible,
+  onChanged,
+}: {
+  currentClass: ClassView | null | undefined;
+  visible: boolean;
+  onChanged: () => Promise<void>;
+}) {
+  const [title, setTitle] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (!visible) return null;
+
+  async function start(): Promise<void> {
+    setBusy(true);
+    setError(null);
+    try {
+      await classroomApi.start(title.trim() || undefined);
+      setTitle('');
+      await onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start class');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function end(): Promise<void> {
+    if (!currentClass) return;
+    const count = currentClass.memberCount;
+    if (!window.confirm(`This signs out all ${count} student${count === 1 ? '' : 's'}. End class?`)) return;
+    setBusy(true);
+    setError(null);
+    try {
+      await classroomApi.end(currentClass.id);
+      await onChanged();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to end class');
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="mb-6 rounded-lg border border-slate-800 bg-slate-900 p-4">
+      {currentClass && currentClass.state === 'ACTIVE' ? (
+        <div className="flex flex-wrap items-center gap-4">
+          <div>
+            <p className="text-xs text-slate-500">Classroom code</p>
+            <p className="text-2xl font-bold tracking-widest text-sky-400">{currentClass.code}</p>
+          </div>
+          <p className="text-sm text-slate-400">
+            {currentClass.memberCount} student{currentClass.memberCount === 1 ? '' : 's'} joined
+          </p>
           <button
             type="button"
-            disabled={busy || seatNo === undefined}
-            onClick={() => seatNo !== undefined && void onAssign(station.stationId, seatNo)}
-            className="rounded-md bg-sky-700 px-3 py-1 text-xs font-medium text-white transition hover:bg-sky-600 disabled:cursor-not-allowed disabled:opacity-40"
+            disabled={busy}
+            onClick={() => void end()}
+            className="ml-auto rounded-md bg-red-800 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-red-700 disabled:cursor-not-allowed disabled:opacity-40"
           >
-            {busy ? 'Assigning…' : 'Assign'}
+            {busy ? 'Ending…' : 'End class'}
           </button>
-        </span>
+        </div>
       ) : (
-        <span className="text-xs text-slate-500">pending admin</span>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            placeholder="Class title (optional)"
+            className="flex-1 rounded-md border border-slate-700 bg-slate-800 px-3 py-1.5 text-sm"
+          />
+          <button
+            type="button"
+            disabled={busy}
+            onClick={() => void start()}
+            className="rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {busy ? 'Starting…' : 'Start class'}
+          </button>
+        </div>
       )}
-    </li>
+      {error && <p className="mt-2 text-sm text-red-400">{error}</p>}
+    </div>
   );
 }
 
 function seatClasses(lifecycle: StationStatusRow['lifecycle'] | undefined, isTeacher: boolean, isSelected?: boolean): string {
   const base =
-    'flex aspect-square items-center justify-center rounded-md border text-slate-50 transition disabled:cursor-not-allowed';
+    'flex flex-col aspect-square items-center justify-center rounded-md border text-slate-50 transition disabled:cursor-not-allowed';
   if (!lifecycle || lifecycle === 'UNCLAIMED')
     return `${base} border-dashed border-slate-700 bg-slate-900 text-slate-600`;
   const colors: Record<StationStatusRow['lifecycle'], string> = {

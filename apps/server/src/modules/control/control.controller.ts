@@ -1,4 +1,4 @@
-import { Body, Controller, Get, NotFoundException, Param, Post, ServiceUnavailableException } from '@nestjs/common';
+import { Body, Controller, ForbiddenException, Get, NotFoundException, Param, Post, ServiceUnavailableException } from '@nestjs/common';
 import { z } from 'zod';
 import { CommandType, StationLifecycle, UserRole, type StationStatusRow } from '@lab/shared';
 import { BROADCAST_ROOM, controlRoom, mediaRoomForActivity } from '@lab/shared/events';
@@ -16,6 +16,7 @@ import { PresenceService } from './presence.service';
 import { MediaService } from '../media/media.service';
 import { AuditService } from '../audit/audit.service';
 import { StationsService } from '../stations/stations.service';
+import { ClassAccessService } from '../classroom/class-access.service';
 
 const zTarget = z.union([
   z.object({ kind: z.literal('all') }),
@@ -58,6 +59,7 @@ export class ControlController {
     private readonly stations: StationsService,
     private readonly presence: PresenceService,
     private readonly prisma: PrismaService,
+    private readonly classAccess: ClassAccessService,
   ) {}
 
   /**
@@ -71,9 +73,9 @@ export class ControlController {
    * snapshot correctly carried the lock — see build session notes).
    */
   @Get('status-board')
-  async statusBoard(): Promise<StationStatusRow[]> {
+  async statusBoard(@CurrentUser() user: JwtPayload): Promise<StationStatusRow[]> {
     const rows = await this.stations.listStatusBoard();
-    return rows.map((row) => {
+    const merged = rows.map((row) => {
       const patch = this.presence.toStatusPatch(row.stationId);
       const online = this.presence.isOnline(row.stationId);
       return {
@@ -84,14 +86,18 @@ export class ControlController {
         ip: online ? (patch.ip ?? row.ip) : row.ip,
       };
     });
+    // A TEACHER sees only the PCs in their active class — an ADMIN still
+    // sees everything (design decision: "admins still see everything").
+    const controllable = await this.classAccess.controllableStationIds(user);
+    return controllable === 'all' ? merged : merged.filter((r) => controllable.includes(r.stationId));
   }
 
   /** Lock is a lease held server-side and kept alive by ControlGateway's
    * 15s heartbeat (design doc §3.3) — this endpoint just sets the intent. */
   @Post('lock')
   async lock(@Body(new ZodValidationPipe(zLockDto)) dto: z.infer<typeof zLockDto>, @CurrentUser() user: JwtPayload) {
-    const stationIds = await this.resolveAndPush(dto.target, async (stationId) => {
-      this.locks.lock(stationId, { screen: dto.screen, input: dto.input, message: dto.message });
+    const stationIds = await this.resolveAndPush(dto.target, user, async (stationId) => {
+      this.locks.lock(stationId, { screen: dto.screen, input: dto.input, message: dto.message, lockedBy: user.sub });
     });
     await this.audit.log({ actorId: user.sub, action: 'control.lock', detail: { target: dto.target, stationIds } });
     return { ok: true, stationCount: stationIds.length };
@@ -99,7 +105,7 @@ export class ControlController {
 
   @Post('unlock')
   async unlock(@Body(new ZodValidationPipe(zUnlockDto)) dto: z.infer<typeof zUnlockDto>, @CurrentUser() user: JwtPayload) {
-    const stationIds = await this.resolveAndPush(dto.target, async (stationId) => {
+    const stationIds = await this.resolveAndPush(dto.target, user, async (stationId) => {
       this.locks.unlock(stationId);
     });
     await this.audit.log({ actorId: user.sub, action: 'control.unlock', detail: { target: dto.target, stationIds } });
@@ -108,45 +114,47 @@ export class ControlController {
 
   @Post('shutdown')
   async shutdown(@Body(new ZodValidationPipe(zTargetOnlyDto)) dto: z.infer<typeof zTargetOnlyDto>, @CurrentUser() user: JwtPayload) {
-    const envelopes = await this.commands.send(dto.target, CommandType.SHUTDOWN, {});
+    const envelopes = await this.commands.send(dto.target, CommandType.SHUTDOWN, {}, user);
     await this.audit.log({ actorId: user.sub, action: 'control.shutdown', detail: { target: dto.target } });
     return { ok: true, commandCount: envelopes.length };
   }
 
   @Post('restart')
   async restart(@Body(new ZodValidationPipe(zTargetOnlyDto)) dto: z.infer<typeof zTargetOnlyDto>, @CurrentUser() user: JwtPayload) {
-    const envelopes = await this.commands.send(dto.target, CommandType.RESTART, {});
+    const envelopes = await this.commands.send(dto.target, CommandType.RESTART, {}, user);
     await this.audit.log({ actorId: user.sub, action: 'control.restart', detail: { target: dto.target } });
     return { ok: true, commandCount: envelopes.length };
   }
 
   @Post('wake')
   async wake(@Body(new ZodValidationPipe(zTargetOnlyDto)) dto: z.infer<typeof zTargetOnlyDto>, @CurrentUser() user: JwtPayload) {
-    const envelopes = await this.commands.send(dto.target, CommandType.WAKE, {});
+    const envelopes = await this.commands.send(dto.target, CommandType.WAKE, {}, user);
     await this.audit.log({ actorId: user.sub, action: 'control.wake', detail: { target: dto.target } });
     return { ok: true, commandCount: envelopes.length };
   }
 
   @Post('launch-program')
   async launchProgram(@Body(new ZodValidationPipe(zLaunchProgramDto)) dto: z.infer<typeof zLaunchProgramDto>, @CurrentUser() user: JwtPayload) {
-    const envelopes = await this.commands.send(dto.target, CommandType.LAUNCH_PROGRAM, {
-      programId: dto.programId,
-      args: dto.args,
-    });
+    const envelopes = await this.commands.send(
+      dto.target,
+      CommandType.LAUNCH_PROGRAM,
+      { programId: dto.programId, args: dto.args },
+      user,
+    );
     await this.audit.log({ actorId: user.sub, action: 'control.launch_program', detail: { target: dto.target, programId: dto.programId } });
     return { ok: true, commandCount: envelopes.length };
   }
 
   @Post('open-url')
   async openUrl(@Body(new ZodValidationPipe(zOpenUrlDto)) dto: z.infer<typeof zOpenUrlDto>, @CurrentUser() user: JwtPayload) {
-    const envelopes = await this.commands.send(dto.target, CommandType.OPEN_URL, { url: dto.url });
+    const envelopes = await this.commands.send(dto.target, CommandType.OPEN_URL, { url: dto.url }, user);
     await this.audit.log({ actorId: user.sub, action: 'control.open_url', detail: { target: dto.target, url: dto.url } });
     return { ok: true, commandCount: envelopes.length };
   }
 
   @Post('message')
   async message(@Body(new ZodValidationPipe(zMessageDto)) dto: z.infer<typeof zMessageDto>, @CurrentUser() user: JwtPayload) {
-    const envelopes = await this.commands.send(dto.target, CommandType.MESSAGE, { text: dto.text, severity: dto.severity });
+    const envelopes = await this.commands.send(dto.target, CommandType.MESSAGE, { text: dto.text, severity: dto.severity }, user);
     await this.audit.log({ actorId: user.sub, action: 'control.message', detail: { target: dto.target } });
     return { ok: true, commandCount: envelopes.length };
   }
@@ -158,10 +166,12 @@ export class ControlController {
    * channel. */
   @Post('push-file')
   async pushFile(@Body(new ZodValidationPipe(zPushFileDto)) dto: z.infer<typeof zPushFileDto>, @CurrentUser() user: JwtPayload) {
-    const envelopes = await this.commands.send(dto.target, CommandType.PUSH_FILE, {
-      assetId: dto.assetId,
-      destinationHint: dto.destinationHint,
-    });
+    const envelopes = await this.commands.send(
+      dto.target,
+      CommandType.PUSH_FILE,
+      { assetId: dto.assetId, destinationHint: dto.destinationHint },
+      user,
+    );
     await this.audit.log({ actorId: user.sub, action: 'control.push_file', detail: { target: dto.target, assetId: dto.assetId } });
     return { ok: true, commandCount: envelopes.length };
   }
@@ -180,6 +190,7 @@ export class ControlController {
    * see it (design doc §2.2 "promoted student's screen"). */
   @Post('promote-screen')
   async promoteScreen(@Body(new ZodValidationPipe(zPromoteDto)) dto: z.infer<typeof zPromoteDto>, @CurrentUser() user: JwtPayload) {
+    await this.classAccess.assertCanControlStation(user, dto.stationId);
     await this.media.promoteScreenShare(dto.room, dto.stationId);
     await this.audit.log({ actorId: user.sub, stationId: dto.stationId, action: 'control.promote_screen', detail: { room: dto.room } });
     return { ok: true };
@@ -187,6 +198,7 @@ export class ControlController {
 
   @Post('revoke-screen')
   async revokeScreen(@Body(new ZodValidationPipe(zPromoteDto)) dto: z.infer<typeof zPromoteDto>, @CurrentUser() user: JwtPayload) {
+    await this.classAccess.assertCanControlStation(user, dto.stationId);
     await this.media.revokeScreenShare(dto.room, dto.stationId);
     await this.audit.log({ actorId: user.sub, stationId: dto.stationId, action: 'control.revoke_screen', detail: { room: dto.room } });
     return { ok: true };
@@ -203,6 +215,7 @@ export class ControlController {
    */
   @Post('remote-control/:stationId/start')
   async startRemoteControl(@Param('stationId') stationId: string, @CurrentUser() user: JwtPayload) {
+    await this.classAccess.assertCanControlStation(user, stationId);
     const room = controlRoom(stationId);
     if (!(await this.media.ensureRoom(room))) {
       throw new ServiceUnavailableException(
@@ -243,8 +256,13 @@ export class ControlController {
    */
   @Post('monitor-group/:groupId/start')
   async startGroupMonitor(@Param('groupId') groupId: string, @CurrentUser() user: JwtPayload) {
-    const group = await this.prisma.sessionGroup.findUnique({ where: { id: groupId }, include: { activity: true } });
+    const group = await this.prisma.sessionGroup.findUnique({ where: { id: groupId }, include: { activity: true, members: true } });
     if (!group) throw new NotFoundException('Group not found');
+    const memberStationIds = group.members.map((m) => m.stationId);
+    const controllableMembers = await this.classAccess.filterControllable(user, memberStationIds);
+    if (controllableMembers.length !== memberStationIds.length) {
+      throw new ForbiddenException('None of the selected computers are in your class');
+    }
     const room = mediaRoomForActivity(group.sessionId, group.id, group.activity?.type ?? '');
     const token = await this.media.mintToken({
       stationId: `teacher:${user.sub}`,
@@ -268,6 +286,7 @@ export class ControlController {
 
   @Post('remote-control/:stationId/stop')
   async stopRemoteControl(@Param('stationId') stationId: string, @CurrentUser() user: JwtPayload) {
+    await this.classAccess.assertCanControlStation(user, stationId);
     const room = controlRoom(stationId);
     // Only the stop that brings the count to zero actually tears
     // anything down — see RemoteControlSessionService. A stop that
@@ -289,13 +308,14 @@ export class ControlController {
   }
 
   private async setEnabled(target: z.infer<typeof zTargetOnlyDto>['target'], enabled: boolean, user: JwtPayload) {
-    const stationIds = await this.resolveAndPush(target, (stationId) => this.stations.setEnabled(stationId, enabled));
+    const stationIds = await this.resolveAndPush(target, user, (stationId) => this.stations.setEnabled(stationId, enabled));
     await this.audit.log({ actorId: user.sub, action: enabled ? 'control.enable' : 'control.disable', detail: { target, stationIds } });
     return { ok: true, stationCount: stationIds.length };
   }
 
-  /** Resolves a target to stationIds, applies `apply` to each, then
-   * pushes a fresh snapshot so the effect (lock/unlock/enable) is
+  /** Resolves a target to stationIds (scoped to `user`'s class — see
+   * CommandsService.resolveTargetToStationIds), applies `apply` to each,
+   * then pushes a fresh snapshot so the effect (lock/unlock/enable) is
    * visible immediately rather than waiting for the next reconnect.
    * Deliberately does NOT go through CommandsService.send — applying a
    * lock or an enabled flag is not an imperative one-shot command with
@@ -303,13 +323,18 @@ export class ControlController {
    * snapshot already carries. */
   private async resolveAndPush(
     target: z.infer<typeof zTargetOnlyDto>['target'],
+    user: JwtPayload,
     apply: (stationId: string) => Promise<void> | void,
   ): Promise<string[]> {
-    const stationIds = await this.commands.resolveTargetToStationIds(target);
+    const stationIds = await this.commands.resolveTargetToStationIds(target, user);
     for (const stationId of stationIds) {
       await apply(stationId);
       const snapshot = await this.sessionState.getDesiredState(stationId);
       this.gateway.pushSnapshot(stationId, snapshot);
+      // Lock/unlock/enable now shows up on the dashboard tile immediately
+      // (PresenceService.toStatusPatch reads LockService directly) instead
+      // of waiting for the next heartbeat-driven delta.
+      await this.gateway.sendStatusRow(stationId);
     }
     return stationIds;
   }

@@ -11,12 +11,14 @@ import { CommandsService } from './commands.service';
 import { StationsModule } from '../stations/stations.module';
 import { MediaModule } from '../media/media.module';
 import { AuthModule } from '../auth/auth.module';
+import { ClassAccessModule } from '../classroom/class-access.module';
 
 @Module({
   imports: [
     StationsModule,
     MediaModule,
     AuthModule,
+    ClassAccessModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],

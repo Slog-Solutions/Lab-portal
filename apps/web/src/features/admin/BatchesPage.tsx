@@ -78,9 +78,13 @@ export function BatchesPage() {
               <div className="space-y-1.5">
                 <Label>Batch Key</Label>
                 <Input value={joinKey} onChange={(e) => setJoinKey(e.target.value)} placeholder="Read this out to students to let them join" />
+                <p className="text-xs text-muted-foreground">At least 6 characters.</p>
               </div>
               {error && <p className="text-sm text-destructive">{error}</p>}
-              <Button onClick={() => create.mutate()} disabled={create.isPending || !code.trim() || !name.trim() || !joinKey.trim()}>
+              <Button
+                onClick={() => create.mutate()}
+                disabled={create.isPending || code.trim().length < 3 || !name.trim() || joinKey.trim().length < 6}
+              >
                 {create.isPending ? 'Creating…' : 'Create'}
               </Button>
             </div>

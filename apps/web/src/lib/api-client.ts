@@ -1,5 +1,6 @@
 import { getRuntimeConfig } from './runtime-config';
 import { useAuthStore } from '../stores/auth-store';
+import { useStudentSession } from '../stores/student-session-store';
 
 export class ApiError extends Error {
   constructor(
@@ -10,12 +11,27 @@ export class ApiError extends Error {
   }
 }
 
+/** Resolves the bearer token for a human-JWT request. A dashboard login
+ * (useAuthStore) wins if both exist; falling back to the student session
+ * (useStudentSession — set by POST /classroom/sign-in, see StationsService.claim)
+ * is what lets a signed-in student at a seat call JWT-gated routes like
+ * GET /batches/my-enrollments with no dashboard login in the picture at
+ * all. Returns which store to clear on a 401 so we don't wipe a valid
+ * dashboard session just because a student's token expired, or vice versa. */
+function resolveToken(): { token: string | null; clearSource: () => void } {
+  const authToken = useAuthStore.getState().accessToken;
+  if (authToken) return { token: authToken, clearSource: () => useAuthStore.getState().clear() };
+  const studentToken = useStudentSession.getState().token;
+  if (studentToken) return { token: studentToken, clearSource: () => useStudentSession.getState().clear() };
+  return { token: null, clearSource: () => void 0 };
+}
+
 /** Thin fetch wrapper: resolves base URL from runtime config, attaches the
  * bearer token, and normalizes error handling. No axios — the surface area
  * here doesn't earn a dependency. */
 export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
   const { serverUrl } = getRuntimeConfig();
-  const token = useAuthStore.getState().accessToken;
+  const { token, clearSource } = resolveToken();
 
   const res = await fetch(`${serverUrl}/api${path}`, {
     ...init,
@@ -27,7 +43,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
   });
 
   if (res.status === 401) {
-    useAuthStore.getState().clear();
+    clearSource();
   }
 
   if (!res.ok) {
@@ -45,7 +61,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
  * that goes through it (media assets, content package import). */
 export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
   const { serverUrl } = getRuntimeConfig();
-  const token = useAuthStore.getState().accessToken;
+  const { token, clearSource } = resolveToken();
 
   const res = await fetch(`${serverUrl}/api${path}`, {
     method: 'POST',
@@ -54,7 +70,7 @@ export async function apiUpload<T>(path: string, form: FormData): Promise<T> {
   });
 
   if (res.status === 401) {
-    useAuthStore.getState().clear();
+    clearSource();
   }
   if (!res.ok) {
     const body = await res.json().catch(() => ({ message: res.statusText }));

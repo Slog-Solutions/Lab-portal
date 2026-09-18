@@ -15,37 +15,29 @@ type LibraryModule = Awaited<ReturnType<typeof stationApi.studyLibrary>>[number]
  * skills". Deliberately separate from AssignmentsPanel: an Assignment is a
  * teacher targeting a specific student with a target score/deadline (Ser
  * 10 "teacher-tailored courses"), while a StudyModule is a curated
- * catalogue anyone can browse and practise from at any time — no
- * assignment, no live session, no teacher presence required at all. Both
- * panels launch the exact same exercise players because both ultimately
- * start a plain Attempt (attempts.service.ts doesn't distinguish "why" an
- * attempt started, only what exercise it's for).
+ * catalogue anyone can browse and practise from at any time. Both panels
+ * launch the exact same exercise players because both ultimately start a
+ * plain Attempt (attempts.service.ts doesn't distinguish "why" an attempt
+ * started, only what exercise it's for).
  *
- * Starting an exercise still needs a claimed student identity (grading
- * needs a real studentId — see AttemptsController's doc comment), so this
- * panel doesn't duplicate the claim UI: if the station hasn't claimed yet,
- * `startAttempt` 400s and this shows a one-line pointer at "My
- * Assignments" above, which owns that flow.
+ * Since the student sign-in gate was added, StudentConsole only mounts
+ * this panel once a student has signed in at this seat (see
+ * StudentSignInScreen), so the station has always already claimed a
+ * student by the time this renders — starting an exercise here can rely
+ * on control.getToken() being valid, the same station token AssignmentsPanel
+ * uses (see attempts.controller.ts's doc comment on why /attempts/* stays
+ * station-authenticated rather than switching to the student's own JWT).
  */
 export function StudyLibraryPanel({ control }: { control: StationControlClient }) {
-  const [modules, setModules] = useState<LibraryModule[]>([]);
+  const [modules, setModules] = useState<LibraryModule[] | null>(null);
   const [started, setStarted] = useState<StartedAttempt | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
-    const timer = setInterval(() => {
-      if (!control.getToken()) return;
-      clearInterval(timer);
-      stationApi
-        .studyLibrary(control.getToken())
-        .then((list) => {
-          setModules(list);
-          setLoaded(true);
-        })
-        .catch(() => void 0);
-    }, 500);
-    return () => clearInterval(timer);
+    stationApi
+      .studyLibrary(control.getToken())
+      .then(setModules)
+      .catch(() => setModules([]));
   }, [control]);
 
   async function startExercise(exerciseId: string): Promise<void> {
@@ -54,13 +46,7 @@ export function StudyLibraryPanel({ control }: { control: StationControlClient }
       const res = await stationApi.startAttempt(control.getToken(), { exerciseId });
       setStarted(res);
     } catch (err) {
-      setError(
-        err instanceof Error && err.message.toLowerCase().includes('claim')
-          ? 'Sign in with your service number in "My Assignments" above first.'
-          : err instanceof Error
-            ? err.message
-            : 'Failed to start exercise',
-      );
+      setError(err instanceof Error ? err.message : 'Failed to start exercise');
     }
   }
 
@@ -81,7 +67,7 @@ export function StudyLibraryPanel({ control }: { control: StationControlClient }
     }
   }
 
-  if (!loaded || modules.length === 0) return null; // nothing to show yet — don't clutter the console with an empty library
+  if (modules === null || modules.length === 0) return null; // nothing to show yet — don't clutter the console with an empty library
 
   return (
     <Card className="w-full max-w-2xl">

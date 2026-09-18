@@ -56,11 +56,10 @@ export class BatchesController {
   }
 
   /** The only route where an authenticated caller can guess a shared
-   * secret. Throttled tighter than the global default and matched to
-   * POST /auth/login's budget — a wrong guess here has a persistent side
-   * effect (an audit trail entry), unlike /stations/claim's idempotent
-   * seat assignment, so it gets the same tight budget as login rather
-   * than claim's looser one. */
+   * secret. Throttled tighter than the global default, matched to
+   * POST /auth/login's and POST /classroom/sign-in's budget — a wrong
+   * guess here has a persistent side effect (an audit trail entry), so it
+   * gets the same tight budget as those two. */
   @Roles(UserRole.STUDENT)
   @Throttle({ default: { limit: 5, ttl: 60_000 } })
   @Post('join')

@@ -21,6 +21,7 @@ import { PronunciationModule } from './modules/pronunciation/pronunciation.modul
 import { StudyModulesModule } from './modules/study-modules/study-modules.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { BatchesModule } from './modules/batches/batches.module';
+import { ClassroomModule } from './modules/classroom/classroom.module';
 
 /**
  * Phase 0-5 wiring.
@@ -37,6 +38,7 @@ import { BatchesModule } from './modules/batches/batches.module';
     MediaModule,
     ControlModule,
     BatchesModule,
+    ClassroomModule,
     SessionsModule,
     RecordingsModule,
     MediaAssetsModule,

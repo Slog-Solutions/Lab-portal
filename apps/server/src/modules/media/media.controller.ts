@@ -1,9 +1,10 @@
-import { Controller, Post } from '@nestjs/common';
+import { ConflictException, Controller, Post } from '@nestjs/common';
 import { UserRole } from '@lab/shared';
-import { BROADCAST_ROOM } from '@lab/shared/events';
+import { BROADCAST_ROOM, classBroadcastRoom } from '@lab/shared/events';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import type { JwtPayload } from '../auth/auth.service';
+import { ClassAccessService } from '../classroom/class-access.service';
 import { MediaService } from './media.service';
 
 /**
@@ -16,24 +17,44 @@ import { MediaService } from './media.service';
  */
 @Controller('media')
 export class MediaController {
-  constructor(private readonly media: MediaService) {}
+  constructor(
+    private readonly media: MediaService,
+    private readonly classAccess: ClassAccessService,
+  ) {}
 
-  /** Publish rights on lab:broadcast — this is what lets the teacher
-   * console actually start a screen/mic broadcast to the whole class. */
+  /**
+   * ADMIN keeps the lab-wide lab:broadcast room (unchanged). A TEACHER
+   * broadcasts only to their own active class — the class-scoped room
+   * SessionStateService already grants every signed-in student in that
+   * class (STUDENT role, subscribe + mic-only) — so a teacher with no
+   * active class has no room to broadcast into at all.
+   */
   @Roles(UserRole.TEACHER, UserRole.ADMIN)
   @Post('broadcast-token')
   async broadcastToken(@CurrentUser() user: JwtPayload) {
-    await this.media.ensureBroadcastRoom();
-    // mintToken's `stationId` param becomes the LiveKit participant
-    // identity verbatim (`st:${stationId}`) — reused here for a
-    // non-station identity too since it's just an opaque LiveKit
-    // identity string, not literally a Station row lookup.
+    if (user.role === UserRole.ADMIN) {
+      await this.media.ensureBroadcastRoom();
+      const token = await this.media.mintToken({
+        stationId: `teacher:${user.sub}`,
+        displayName: `Teacher (${user.serviceNumber})`,
+        room: BROADCAST_ROOM,
+        role: 'TEACHER',
+      });
+      return { room: BROADCAST_ROOM, token };
+    }
+
+    const activeClass = await this.classAccess.activeClassForTeacher(user.sub);
+    if (!activeClass) {
+      throw new ConflictException('Start a class before broadcasting');
+    }
+    const room = classBroadcastRoom(activeClass.id);
+    await this.media.ensureRoom(room);
     const token = await this.media.mintToken({
       stationId: `teacher:${user.sub}`,
       displayName: `Teacher (${user.serviceNumber})`,
-      room: BROADCAST_ROOM,
+      room,
       role: 'TEACHER',
     });
-    return { room: BROADCAST_ROOM, token };
+    return { room, token };
   }
 }

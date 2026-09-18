@@ -50,7 +50,7 @@ export class AttemptsController {
   private async requireClaimedStudent(stationId: string): Promise<string> {
     const station = await this.stations.findById(stationId);
     if (!station.currentUserId) {
-      throw new BadRequestException('This station has not claimed a student yet — call POST /stations/claim first');
+      throw new BadRequestException('No student is signed in at this station');
     }
     return station.currentUserId;
   }

@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { StationLifecycle, type StationStatusRow } from '@lab/shared';
+import { LockService } from './lock.service';
 
 interface PresenceEntry {
   stationId: string;
@@ -12,6 +13,11 @@ interface PresenceEntry {
   missedHeartbeats: number;
   lockState: { screen: boolean; input: boolean };
   activityId: string | null;
+  /** The teacher whose LiveClass this station currently belongs to (or
+   * null). Seeded from StationsService.register at hello and kept live by
+   * setMembership — this is what lets ControlGateway route a status delta
+   * to `dash:<teacherId>` without a DB round trip on every heartbeat. */
+  classTeacherId: string | null;
 }
 
 const HEARTBEAT_INTERVAL_MS = 5_000;
@@ -28,6 +34,8 @@ const OFFLINE_AFTER_MISSES = 3; // 15s, matches design doc §4.4
 export class PresenceService {
   private readonly logger = new Logger(PresenceService.name);
   private readonly byStation = new Map<string, PresenceEntry>();
+
+  constructor(private readonly locks: LockService) {}
 
   upsert(entry: Omit<PresenceEntry, 'missedHeartbeats'>): void {
     const existing = this.byStation.get(entry.stationId);
@@ -46,6 +54,17 @@ export class PresenceService {
     entry.activityId = patch.activityId;
   }
 
+  /** Called right after a classroom sign-in/sign-out changes which seat or
+   * class a station belongs to, so live status deltas route correctly
+   * before the next hello. No-ops if the station isn't currently online
+   * (its next station:hello will re-derive this from the DB anyway). */
+  setMembership(stationId: string, patch: { seatNo: number; classTeacherId: string | null }): void {
+    const entry = this.byStation.get(stationId);
+    if (!entry) return;
+    entry.seatNo = patch.seatNo;
+    entry.classTeacherId = patch.classTeacherId;
+  }
+
   remove(stationId: string): void {
     this.byStation.delete(stationId);
   }
@@ -58,36 +77,46 @@ export class PresenceService {
     return this.byStation.has(stationId);
   }
 
-  /** Called on a timer; returns stationIds that just crossed the offline threshold. */
-  sweepMissedHeartbeats(): string[] {
+  /** Called on a timer; returns the stations that just crossed the offline
+   * threshold, along with the classTeacherId each one had — captured here,
+   * before the entry is deleted, since ControlGateway needs it to route
+   * the resulting status delta to that teacher's dashboard room. */
+  sweepMissedHeartbeats(): Array<{ stationId: string; classTeacherId: string | null }> {
     const now = Date.now();
-    const wentOffline: string[] = [];
+    const wentOffline: Array<{ stationId: string; classTeacherId: string | null }> = [];
     for (const [stationId, entry] of this.byStation) {
       if (now - entry.lastHeartbeatAt > HEARTBEAT_INTERVAL_MS) {
         entry.missedHeartbeats += 1;
         if (entry.missedHeartbeats >= OFFLINE_AFTER_MISSES) {
+          wentOffline.push({ stationId, classTeacherId: entry.classTeacherId });
           this.byStation.delete(stationId);
-          wentOffline.push(stationId);
         }
       }
     }
     return wentOffline;
   }
 
+  /** Derives `lock`/lifecycle from LockService — the server's own intent
+   * — rather than the station's self-reported heartbeat.lockState. A lock
+   * or unlock takes effect here the instant ControlController applies it,
+   * not after the next 5s heartbeat round-trip, and a heartbeat already in
+   * flight when a lock/unlock happens can't clobber it with a stale value. */
   toStatusPatch(stationId: string): Partial<StationStatusRow> & { stationId: string } {
     const entry = this.byStation.get(stationId);
     if (!entry) {
       return { stationId, lifecycle: StationLifecycle.OFFLINE, lock: null };
     }
+    const lockEntry = this.locks.get(stationId);
+    const lock = lockEntry ? { screen: lockEntry.screen, input: lockEntry.input } : null;
     return {
       stationId,
       seatNo: entry.seatNo,
-      lifecycle: entry.lockState.screen || entry.lockState.input ? StationLifecycle.LOCKED : StationLifecycle.READY,
+      lifecycle: lock && (lock.screen || lock.input) ? StationLifecycle.LOCKED : StationLifecycle.READY,
       appVersion: entry.appVersion,
       osBuild: entry.osBuild,
       ip: entry.ip,
       lastSeenAt: entry.lastHeartbeatAt,
-      lock: entry.lockState,
+      lock,
     };
   }
 

@@ -22,6 +22,10 @@ export interface DesiredStationState {
     config: unknown;
   } | null;
   lock: {
+    /** Identifies one Lock click — a re-sent snapshot carries the same id,
+     * so the station can tell "still the same lock" from "a brand new
+     * Lock" apart (see WorkstationLockController.apply). */
+    id: string;
     screen: boolean;
     input: boolean;
     message?: string;
@@ -34,6 +38,9 @@ export interface DesiredStationState {
   stationEnabled: boolean;
   /** Visible "you are being viewed/controlled" indicator — default on (see plan decisions). */
   monitoringIndicator: boolean;
+  /** Mirrors StationStatusRow.liveClass — lets the student console show
+   * "Class: {title} · {teacherName}" without a separate fetch. */
+  liveClass: { id: string; title: string; teacherName: string } | null;
 }
 
 export function emptyDesiredState(seq = 0): DesiredStationState {
@@ -47,6 +54,7 @@ export function emptyDesiredState(seq = 0): DesiredStationState {
     media: { rooms: [] },
     stationEnabled: true,
     monitoringIndicator: true,
+    liveClass: null,
   };
 }
 

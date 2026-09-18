@@ -1,16 +1,19 @@
 import { useEffect, useRef, useState } from 'react';
 import { Track } from 'livekit-client';
 import type { CommandEnvelope, DesiredStationState } from '@lab/shared';
-import { CommandType } from '@lab/shared';
+import { CommandType, seatLabel } from '@lab/shared';
 import { REMOTE_CONTROL_DATA_TOPIC, interpretingRoom, type ActivityEventPayload, type RemoteInputEvent } from '@lab/shared/events';
 import { StationControlClient } from '../../lib/station-control-client';
 import { LiveKitRoomClient, type RemoteTrackHandle } from '../../lib/livekit-client';
 import { getLiveKitUrl } from '../../lib/runtime-config';
 import { replayInputIfDesktop } from '../../lib/lab-agent';
+import { stationApi } from '../../lib/station-api';
+import { useStudentSession } from '../../stores/student-session-store';
 import { ActivityPlayer } from '../activities/registry';
 import { AssignmentsPanel } from './AssignmentsPanel';
 import { StudyLibraryPanel } from './StudyLibraryPanel';
 import { JoinBatchPanel } from './JoinBatchPanel';
+import { StudentSignInScreen } from './StudentSignInScreen';
 
 const textDecoder = new TextDecoder();
 
@@ -29,6 +32,7 @@ export function StudentConsole() {
   const [identity, setIdentity] = useState<{ stationId: string; seatNo: number } | null>(null);
   const [micOn, setMicOn] = useState(false);
   const [toast, setToast] = useState<{ text: string; severity: 'info' | 'warning' } | null>(null);
+  const [stationToken, setStationToken] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
   const audioContainerRef = useRef<HTMLDivElement>(null);
   const roomsRef = useRef<Map<string, LiveKitRoomClient>>(new Map());
@@ -42,6 +46,8 @@ export function StudentConsole() {
   // that component instead, keyed by LiveKit participant identity.
   const interpretingClientRef = useRef<LiveKitRoomClient | null>(null);
   const [interpretingTracks, setInterpretingTracks] = useState<Map<string, RemoteTrackHandle>>(new Map());
+  const student = useStudentSession((s) => s.student);
+  const staleClaimCheckedRef = useRef(false);
 
   useEffect(() => {
     const control = new StationControlClient({
@@ -59,6 +65,8 @@ export function StudentConsole() {
       onRemoteControlStart: (payload) => void startRemoteControl(payload),
       onRemoteControlStop: () => void stopRemoteControl(),
       onActivityEvent: (payload) => setLastActivityEvent(payload),
+      onToken: (token) => setStationToken(token),
+      onSignedOut: () => useStudentSession.getState().clear(),
     });
     controlRef.current = control;
     control.connect();
@@ -71,6 +79,23 @@ export function StudentConsole() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A fresh boot with no local student session (sessionStorage cleared, or
+  // a different seat) means nobody has proven their identity to THIS
+  // renderer yet — but the server may still remember a claim from a
+  // previous occupant who didn't sign out cleanly (crash, force-quit).
+  // Before real credentials existed, that stale claim was silently
+  // recoverable (see AssignmentsPanel's old recovery-on-refresh comment);
+  // now that sign-in needs a real password, silently resuming a previous
+  // student's identity would be a security hole rather than a
+  // convenience, so clear it instead of recovering it.
+  useEffect(() => {
+    if (!stationToken || staleClaimCheckedRef.current) return;
+    staleClaimCheckedRef.current = true;
+    if (!useStudentSession.getState().student) {
+      void stationApi.release(stationToken).catch(() => void 0);
+    }
+  }, [stationToken]);
 
   /** The teacher started remote control (design doc §3.4): publish this
    * seat's screen into the dedicated ctrl:<stationId> room (only the
@@ -192,8 +217,13 @@ export function StudentConsole() {
       <header className="flex items-center justify-between border-b border-slate-800 px-6 py-3">
         <div>
           <h1 className="text-sm font-semibold text-slate-300">
-            {identity ? `Seat ${identity.seatNo}` : 'Registering…'}
+            {identity ? `System ${seatLabel(identity.seatNo)}` : 'Registering…'}
           </h1>
+          {snapshot?.liveClass && (
+            <p className="text-xs text-slate-500">
+              Class: {snapshot.liveClass.title} · {snapshot.liveClass.teacherName}
+            </p>
+          )}
           {snapshot?.activity && <p className="text-xs text-slate-500">{snapshot.activity.type}</p>}
         </div>
         {remoteControlActive && snapshot?.monitoringIndicator && (
@@ -218,6 +248,10 @@ export function StudentConsole() {
       )}
 
       <main className="flex flex-1 flex-col items-center gap-4 p-6">
+        {/* Always mounted, signed in or not — LiveKit attaches broadcast/
+            remote-control tracks to these elements regardless of whether a
+            student has signed in, and hiding them was the exact regression
+            router.tsx's doc comment records for gating /student itself. */}
         <video ref={videoRef} autoPlay playsInline className="max-h-[60vh] w-full rounded-lg bg-black object-contain" />
         {snapshot?.activity && identity && snapshot.groupId && snapshot.sessionId && controlRef.current && (
           <div className="w-full max-w-2xl">
@@ -235,20 +269,38 @@ export function StudentConsole() {
           </div>
         )}
 
-        {/* Self-paced assessment (Ser 10) — independent of live session
-            state, matching Ser 1's "self-study even when teacher not
-            present". Always available once the station has a token. */}
-        {controlRef.current && <AssignmentsPanel control={controlRef.current} />}
+        {/* A live teacher-run activity is station/group-scoped, not
+            personal — classroom-control features are deliberately
+            identity-free (see StationsService.claim's doc comment), so
+            they render above regardless of sign-in state. Assignments and
+            the study library, by contrast, are personal — a real student
+            credential now gates them, replacing the old passwordless
+            "type your service number" claim card with a full sign-in. */}
+        {!snapshot?.activity && !student && (
+          <StudentSignInScreen
+            stationToken={stationToken}
+            defaultSystemNumber={identity && identity.seatNo > 1 ? identity.seatNo - 1 : null}
+          />
+        )}
 
-        {/* Ser 1 self-study library (Phase 4) — same "teacher absent"
-            posture as AssignmentsPanel above, but browsing a
-            teacher-curated StudyModule rather than a targeted Assignment. */}
-        {controlRef.current && <StudyLibraryPanel control={controlRef.current} />}
+        {student && controlRef.current && (
+          <>
+            {/* Self-paced assessment (Ser 10) — independent of live session
+                state, matching Ser 1's "self-study even when teacher not
+                present". */}
+            <AssignmentsPanel control={controlRef.current} />
 
-        {/* LMS admin core self-join — renders nothing unless this browser
-            tab also holds a real STUDENT JWT (the /login dev-testing path,
-            not the station's own zero-login identity — see doc comment). */}
-        <JoinBatchPanel />
+            {/* Ser 1 self-study library (Phase 4) — same "teacher absent"
+                posture as AssignmentsPanel above, but browsing a
+                teacher-curated StudyModule rather than a targeted Assignment. */}
+            <StudyLibraryPanel control={controlRef.current} />
+
+            {/* LMS admin core self-join — now reachable from a real seat:
+                POST /classroom/sign-in mints a real STUDENT JWT on sign-in
+                (see useStudentSession), which apiFetch falls back to. */}
+            <JoinBatchPanel />
+          </>
+        )}
       </main>
       <div ref={audioContainerRef} className="hidden" />
     </div>

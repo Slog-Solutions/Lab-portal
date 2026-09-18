@@ -30,13 +30,32 @@ export interface StartedAttempt {
   items?: Array<{ id: string; prompt: string; choices: string[]; mediaAssetId?: string }>;
 }
 
+export interface ClaimResponse {
+  ok: true;
+  userId: string;
+  fullName: string;
+  serviceNumber: string;
+  studentToken: string;
+  seatNo: number;
+  liveClass: { id: string; title: string; teacherName: string };
+}
+
 export const stationApi = {
-  claim: (token: string | null, serviceNumber: string) =>
-    stationFetch<{ ok: true; userId: string; fullName: string }>('/stations/claim', token, {
+  /** A real classroom sign-in at this seat (see StationsService.claim's
+   * doc comment) — the station's own token authenticates the HTTP caller
+   * as a genuine seat; the student's own service number + password prove
+   * who they are; systemNumber (the number printed on this PC's screen)
+   * becomes its seat number with no admin step; classCode puts the
+   * student into whichever teacher started that class. On success the
+   * server also mints a real STUDENT JWT (studentToken), which callers
+   * store in useStudentSession so JWT-gated routes (e.g. batch self-join)
+   * work from a seat with no dashboard login involved at all. */
+  claim: (token: string | null, serviceNumber: string, password: string, systemNumber: number, classCode: string) =>
+    stationFetch<ClaimResponse>('/classroom/sign-in', token, {
       method: 'POST',
-      body: JSON.stringify({ serviceNumber }),
+      body: JSON.stringify({ serviceNumber, password, systemNumber, classCode }),
     }),
-  release: (token: string | null) => stationFetch<{ ok: true }>('/stations/release', token, { method: 'POST' }),
+  release: (token: string | null) => stationFetch<{ ok: true }>('/classroom/sign-out', token, { method: 'POST' }),
 
   myAssignments: (token: string | null) =>
     stationFetch<

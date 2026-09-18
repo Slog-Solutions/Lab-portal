@@ -12,6 +12,10 @@ export interface ControlClientEvents {
   onIdentity: (identity: { stationId: string; seatNo: number; displayName: string }) => void;
   onCommand: (envelope: CommandEnvelope) => void;
   onLockHeartbeat: (payload: { expiresAt: number }) => void;
+  /** Drives the Disable overlay's own failsafe (it carries no lock lease
+   * to renew) — see LockOverlayManager's doc comment. */
+  onConnect?: () => void;
+  onDisconnect?: () => void;
 }
 
 /**
@@ -63,7 +67,11 @@ export class ControlClient {
       reconnectionDelay: 2_000,
     });
 
-    this.socket.on('connect', () => this.sendHello(machineGuid));
+    this.socket.on('connect', () => {
+      this.sendHello(machineGuid);
+      this.events.onConnect?.();
+    });
+    this.socket.on('disconnect', () => this.events.onDisconnect?.());
     this.socket.on('session:snapshot', (snapshot: DesiredStationState) => {
       this.currentLockState = {
         screen: snapshot.lock?.screen ?? false,

@@ -21,20 +21,31 @@ import {
 } from '@lab/shared/events';
 import {
   StationLifecycle,
+  UserRole,
+  seatLabel,
   type CommandAck,
   type StationHeartbeat,
   type StationHello,
   type StationHelloAck,
+  type StationStatusRow,
 } from '@lab/shared';
 import { AuthService, type JwtPayload } from '../auth/auth.service';
 import { StationsService } from '../stations/stations.service';
 import { AuditService } from '../audit/audit.service';
+import { ClassAccessService } from '../classroom/class-access.service';
 import { PresenceService } from './presence.service';
 import { SessionStateService } from './session-state.service';
 import { LockService } from './lock.service';
 import { CommandsService } from './commands.service';
 
 const LOCK_HEARTBEAT_INTERVAL_MS = 15_000; // design doc §3.3 — must be < the 30s auto-unlock threshold
+
+/** Per-teacher dashboard room — mirrors 'dashboards' (ADMIN, sees
+ * everything) but scoped to one TEACHER's currently controllable
+ * stations (see ClassAccessService). */
+function dashRoom(teacherId: string): string {
+  return `dash:${teacherId}`;
+}
 
 interface AuthedSocket extends Socket {
   data: { auth?: { kind: 'station'; stationId: string } | { kind: 'user'; user: JwtPayload } };
@@ -72,6 +83,7 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
     private readonly locks: LockService,
     private readonly commands: CommandsService,
     private readonly audit: AuditService,
+    private readonly classAccess: ClassAccessService,
   ) {
     // Sweep every 5s for stations that missed heartbeats past the 15s
     // offline threshold (design doc §4.4) and push status deltas.
@@ -121,9 +133,17 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
           socket.data.auth = { kind: 'station', stationId: payload.sub };
         } else {
           socket.data.auth = { kind: 'user', user: payload };
-          if (payload.role === 'ADMIN' || payload.role === 'TEACHER') {
+          if (payload.role === 'ADMIN') {
             socket.join('dashboards');
             socket.emit('lab:status', await this.stations.listStatusBoard());
+          } else if (payload.role === 'TEACHER') {
+            // A TEACHER only ever sees/controls the stations currently in
+            // their own ACTIVE class (design decision: "a teacher sees and
+            // controls only the PCs in their active class") — dash:<userId>
+            // is this teacher's own room, joined regardless of whether a
+            // class is active yet (starting one doesn't reconnect the socket).
+            socket.join(dashRoom(payload.sub));
+            socket.emit('lab:status', await this.controllableStatusRows(payload));
           }
         }
       } catch {
@@ -136,8 +156,12 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
   handleDisconnect(socket: AuthedSocket): void {
     const auth = socket.data.auth;
     if (auth?.kind === 'station') {
+      // Read before remove() — once the presence entry is gone,
+      // classTeacherId is gone with it, and the delta below would only
+      // ever reach 'dashboards', never the class's own teacher room.
+      const classTeacherId = this.presence.get(auth.stationId)?.classTeacherId ?? null;
       this.presence.remove(auth.stationId);
-      this.broadcastStatusDelta(auth.stationId);
+      this.broadcastStatusDelta(auth.stationId, classTeacherId);
     }
   }
 
@@ -168,7 +192,7 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
   }
 
   private async doHandleHello(socket: AuthedSocket, payload: StationHello): Promise<StationHelloAck> {
-    const { stationId, seatNo } = await this.stations.register(payload);
+    const { stationId, seatNo, classTeacherId } = await this.stations.register(payload);
     socket.data.auth = { kind: 'station', stationId };
 
     socket.join(stationRoom(stationId));
@@ -185,6 +209,7 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
       lastHeartbeatAt: Date.now(),
       lockState: { screen: false, input: false },
       activityId: null,
+      classTeacherId,
     });
     await this.stations.markSeen(stationId, {
       lifecycle: seatNo ? StationLifecycle.READY : StationLifecycle.UNCLAIMED,
@@ -194,7 +219,7 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
     const desired = await this.sessionState.getDesiredState(stationId);
     socket.emit('session:snapshot', desired);
     if (seatNo) {
-      socket.emit('station:identity', { stationId, seatNo, displayName: `Seat ${seatNo}` });
+      this.emitIdentity(stationId, seatNo);
     }
     // Group/session room membership must NOT depend on whether a seat
     // number has been assigned — a station can be a real session member
@@ -264,7 +289,10 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
   ): Promise<void> {
     const auth = socket.data.auth;
     if (auth?.kind !== 'station') return;
-    this.server.to('dashboards').emit('interp:channel', { ...payload, stationId: auth.stationId });
+    const relayPayload = { ...payload, stationId: auth.stationId };
+    this.server.to('dashboards').emit('interp:channel', relayPayload);
+    const classTeacherId = this.presence.get(auth.stationId)?.classTeacherId;
+    if (classTeacherId) this.server.to(dashRoom(classTeacherId)).emit('interp:channel', relayPayload);
     await this.audit.log({ stationId: auth.stationId, action: 'interp.select_channel', detail: payload });
   }
 
@@ -292,6 +320,69 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
     this.server.to(stationRoom(stationId)).emit(event, payload as never);
   }
 
+  /** Used by ClassroomService to tell a station its classroom membership
+   * just ended (class ended, or an admin/teacher force-released the seat)
+   * — the student console reacts by clearing its local session (see
+   * useStudentSession.clear via StudentConsole's onSignedOut wiring). */
+  emitToStation(stationId: string, event: 'student:signed-out', payload: { reason: 'class_ended' | 'released' }): void {
+    this.server.to(stationRoom(stationId)).emit(event, payload);
+  }
+
+  /** Re-announces a station's seat after it changes outside of hello (a
+   * classroom sign-in assigns/changes seatNo — see StationsService.claim).
+   * `System ${seatLabel(seatNo)}` matches the seat grid's own labelling
+   * convention (seat 1 = 'T', everything else = seatNo - 1). */
+  emitIdentity(stationId: string, seatNo: number): void {
+    this.server.to(stationRoom(stationId)).emit('station:identity', { stationId, seatNo, displayName: `System ${seatLabel(seatNo)}` });
+  }
+
+  /** Pushes one station's DB-derived fields (currentUser, liveClass, …)
+   * merged with its live presence, to 'dashboards' and — if it's currently
+   * in a class — to that class's own dash:<teacherId> room too. Used right
+   * after a classroom sign-in so both an admin's full board and the
+   * signing-in student's teacher see the change within about a second,
+   * without waiting for the next 10s status-board poll. */
+  async sendStatusRow(stationId: string): Promise<void> {
+    const result = await this.stations.getStatusRow(stationId);
+    if (!result) return;
+    const merged = this.mergeWithPresence(result.row);
+    this.server.to('dashboards').emit('lab:status:delta', merged);
+    const teacherId = result.classTeacherId ?? this.presence.get(stationId)?.classTeacherId;
+    if (teacherId) this.server.to(dashRoom(teacherId)).emit('lab:status:delta', merged);
+  }
+
+  /** Pushes this teacher's full (filtered) board to their own dashboard
+   * room — used when a station LEAVES their class (sign-out, class end),
+   * since at that point the station's own liveClassId no longer names
+   * this teacher, so a single-row sendStatusRow could never reach them. */
+  async sendFullStatusToTeacher(teacherId: string): Promise<void> {
+    const rows = await this.controllableStatusRows({ sub: teacherId, role: UserRole.TEACHER });
+    this.server.to(dashRoom(teacherId)).emit('lab:status', rows);
+  }
+
+  private async controllableStatusRows(user: Pick<JwtPayload, 'sub' | 'role'>): Promise<StationStatusRow[]> {
+    const rows = (await this.stations.listStatusBoard()).map((row) => this.mergeWithPresence(row));
+    const controllable = await this.classAccess.controllableStationIds(user);
+    return controllable === 'all' ? rows : rows.filter((r) => controllable.includes(r.stationId));
+  }
+
+  /** Same DB-row + live-presence merge ControlController.statusBoard()
+   * does over REST — kept here too since the gateway pushes single-row and
+   * full-board updates of its own (sendStatusRow/sendFullStatusToTeacher/
+   * controllableStatusRows) that must look identical to what a fresh
+   * GET /control/status-board would return. */
+  private mergeWithPresence(row: StationStatusRow): StationStatusRow {
+    const patch = this.presence.toStatusPatch(row.stationId);
+    const online = this.presence.isOnline(row.stationId);
+    return {
+      ...row,
+      lifecycle: online ? patch.lifecycle! : StationLifecycle.OFFLINE,
+      lock: online ? (patch.lock ?? null) : null,
+      lastSeenAt: online ? (patch.lastSeenAt ?? row.lastSeenAt) : row.lastSeenAt,
+      ip: online ? (patch.ip ?? row.ip) : row.ip,
+    };
+  }
+
   startRemoteControl(stationId: string, room: string, token: string): void {
     this.server.to(stationRoom(stationId)).emit('remote-control:start', { room, token });
   }
@@ -300,15 +391,18 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
     this.server.to(stationRoom(stationId)).emit('remote-control:stop', { room });
   }
 
-  private broadcastStatusDelta(stationId: string): void {
-    this.server.to('dashboards').emit('lab:status:delta', this.presence.toStatusPatch(stationId));
+  private broadcastStatusDelta(stationId: string, classTeacherId?: string | null): void {
+    const patch = this.presence.toStatusPatch(stationId);
+    this.server.to('dashboards').emit('lab:status:delta', patch);
+    const teacherId = classTeacherId ?? this.presence.get(stationId)?.classTeacherId;
+    if (teacherId) this.server.to(dashRoom(teacherId)).emit('lab:status:delta', patch);
   }
 
   private sweepPresence(): void {
     const wentOffline = this.presence.sweepMissedHeartbeats();
-    for (const stationId of wentOffline) {
+    for (const { stationId, classTeacherId } of wentOffline) {
       this.logger.warn(`Station ${stationId} went offline (missed heartbeats)`);
-      this.broadcastStatusDelta(stationId);
+      this.broadcastStatusDelta(stationId, classTeacherId);
     }
   }
 

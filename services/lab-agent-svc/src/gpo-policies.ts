@@ -7,22 +7,24 @@ import { execFileSync } from 'node:child_process';
  * Sequence itself cannot be intercepted by any user-mode process by
  * design — that is what makes it "secure" — so the only real mitigation
  * is removing every option Windows offers *after* Ctrl+Alt+Del is
- * pressed, via the four policy values below. All four together leave
- * "Cancel" as the only working choice on that screen — no Task Manager,
- * no lock, no sign-out, no password change.
+ * pressed, via the policy values below. Together they leave "Cancel" as
+ * the only working choice on that screen for Task Manager, sign-out and
+ * password change. "Lock this computer" is deliberately left enabled —
+ * the desktop app's own Lock Screen now triggers a real Win+L (see
+ * apps/desktop/src/main/workstation-lock.ts), and DisableLockWorkstation
+ * would block that call too.
  *
  * These are ordinary Local Group Policy registry values, written directly
  * under HKLM rather than through gpedit/a domain GPO — there is no domain
  * controller in this air-gapped deployment (design doc §2.8), and the
- * Windows policy engine honours the machine-wide HKLM path for all four
- * of these keys, not just the per-user HKCU one a domain GPO would
- * normally populate.
+ * Windows policy engine honours the machine-wide HKLM path for these keys,
+ * not just the per-user HKCU one a domain GPO would normally populate.
  *
- * Kept as plain, individually-testable data (not shelled-out strings) so
- * `gpo-policies.test.ts` can assert on the actual values without ever
- * invoking reg.exe — see applyGpoPolicies() for the one function that
- * does, and install.ts's doc comment on why this pass doesn't call it
- * against this dev machine.
+ * Kept as plain, individually-testable data (not shelled-out strings) so a
+ * future test can assert on the actual values without ever invoking
+ * reg.exe — see applyGpoPolicies() for the one function that does, and
+ * install.ts's doc comment on why this pass doesn't call it against this
+ * dev machine.
  */
 export interface RegValue {
   /** Human label for logs/tests — not passed to reg.exe. */
@@ -40,14 +42,6 @@ export const INPUT_LOCK_GPO_VALUES: RegValue[] = [
     hive: 'HKLM',
     path: 'SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System',
     valueName: 'DisableTaskMgr',
-    type: 'REG_DWORD',
-    data: 1,
-  },
-  {
-    description: 'Disable "Lock this computer" from the Ctrl+Alt+Del screen',
-    hive: 'HKLM',
-    path: 'SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Policies\\System',
-    valueName: 'DisableLockWorkstation',
     type: 'REG_DWORD',
     data: 1,
   },

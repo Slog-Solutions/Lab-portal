@@ -55,19 +55,30 @@ export const zStationAssignSeatDto = z.object({
 });
 export type StationAssignSeatDto = z.infer<typeof zStationAssignSeatDto>;
 
-// Phase 3 — Station.currentUserId existed since Phase 0 but nothing ever
-// set it (grep-verified during Phase 3 recon). Assessment activities need
-// a real student identity for grading, unlike classroom-control features,
-// which are deliberately identity-free ("the station is the identity, not
-// a user account"). This is a roster pick, not a login: no password, and
-// keyed by serviceNumber (not userId) deliberately — a station holds no
-// credential that could ever list students (GET /users is ADMIN-only), so
-// the only thing a student can supply from an unauthenticated seat is the
-// service number printed on their own ID.
+// A classroom sign-in at a seat: real student credentials (see
+// StationsService.claim's doc comment for how this replaced the original
+// passwordless roster pick), PLUS the two fields that make this a real
+// classroom rather than a bare login — systemNumber is the number written
+// on the PC's own screen and becomes that station's seat number with no
+// admin step (StationsService.claim resolves it via
+// seatNoFromSystemNumber), and classCode puts the student into whichever
+// teacher started that class (ClassroomService.start). Both are required:
+// there is no sign-in without an active class.
 export const zClaimStationDto = z.object({
   serviceNumber: z.string().min(3).max(32),
+  password: z.string().min(1),
+  systemNumber: z.number().int().min(1).max(40),
+  classCode: z.string().trim().min(1).max(12),
 });
 export type ClaimStationDto = z.infer<typeof zClaimStationDto>;
+
+/** POST /classroom/start — title is optional and defaults to "<teacher>'s
+ * class" (ClassroomService.start); the code itself is server-generated,
+ * never chosen by the teacher. */
+export const zStartClassDto = z.object({
+  title: z.string().trim().max(80).optional(),
+});
+export type StartClassDto = z.infer<typeof zStartClassDto>;
 
 // ---- Sessions / groups (design doc §4.5) ---------------------------------------
 
@@ -311,10 +322,11 @@ export const zUpdateBatchDto = z
   .refine((v) => Object.keys(v).length > 0, { message: 'At least one field must be provided' });
 export type UpdateBatchDto = z.infer<typeof zUpdateBatchDto>;
 
-/** Student self-enrolment. Unlike zClaimStationDto (a passwordless roster
- * pick from an unauthenticated seat), this route requires a real STUDENT
- * JWT from POST /auth/login — the key is a second factor of "were you in
- * the room", not a credential in its own right (see BatchesService). */
+/** Student self-enrolment. Unlike zClaimStationDto (a station-side login
+ * with the student's own credentials, from an unauthenticated seat), this
+ * route requires a real STUDENT JWT from POST /auth/login — the key is a
+ * second factor of "were you in the room", not a credential in its own
+ * right (see BatchesService). */
 export const zJoinBatchDto = z.object({
   code: zBatchCode,
   joinKey: zBatchJoinKey,

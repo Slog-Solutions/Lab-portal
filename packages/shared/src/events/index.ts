@@ -32,6 +32,14 @@ export function groupRoom(groupId: string): string {
 }
 export const ALL_STATIONS_ROOM = 'all';
 
+/** A teacher's own classroom broadcast room — scoped to the students
+ * currently signed into that LiveClass, distinct from the lab-wide
+ * BROADCAST_ROOM an ADMIN uses (see MediaController.broadcastToken and
+ * SessionStateService.getDesiredState). */
+export function classBroadcastRoom(classId: string): string {
+  return `class:${classId}:broadcast`;
+}
+
 // ---- Station (client) -> Server --------------------------------------------------
 
 export interface StationToServerEvents {
@@ -68,6 +76,12 @@ export interface ServerToStationEvents {
    * security boundary, so trusting the relay is an acceptable v1 scope
    * cut (see build plan Phase 2 notes). */
   'activity:event': (payload: ActivityEventPayload & { fromStationId: string }) => void;
+  /** The station's classroom membership just ended — either the teacher
+   * ended the whole class ('class_ended') or an admin/teacher force-
+   * released this one seat ('released'). The student console clears its
+   * local session and returns to the sign-in screen (see
+   * useStudentSession.clear and StudentConsole's onSignedOut wiring). */
+  'student:signed-out': (payload: { reason: 'class_ended' | 'released' }) => void;
 }
 
 // ---- Server -> Teacher / Admin dashboards -----------------------------------------

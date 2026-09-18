@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { batchesApi } from '../../lib/batches-api';
 import { queryKeys } from '../../lib/query-keys';
 import { useAuthStore } from '../../stores/auth-store';
+import { useStudentSession } from '../../stores/student-session-store';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,16 +17,18 @@ import { Badge } from '@/components/ui/badge';
  * UI caller, the same "orphaned API client" shape UsersPage fixed for the
  * admin side.
  *
- * This deliberately does NOT key off `StationControlClient` like
- * AssignmentsPanel/StudyLibraryPanel do. Self-join authenticates with
- * `POST /auth/login` (a real STUDENT JWT in `useAuthStore`), which is the
- * router's documented browser-dev-testing convenience path, not the real
- * seat's zero-login machineGuid registration (router.tsx's doc comment) —
- * a real deployed seat has no STUDENT JWT to call this with, so the panel
- * renders nothing rather than a form that would just 401.
+ * Self-join authenticates with a real STUDENT JWT — either the browser
+ * dev-testing `POST /auth/login` path (`useAuthStore`), or, on a real
+ * seat, the JWT `POST /classroom/sign-in` mints when a student signs in
+ * (`useStudentSession` — see StationsService.claim's doc comment).
+ * `apiFetch` (lib/api-client.ts) falls back to the student session's
+ * token when there's no dashboard login, so this panel only needs to
+ * decide whether *some* STUDENT identity exists.
  */
 export function JoinBatchPanel() {
-  const user = useAuthStore((s) => s.user);
+  const dashboardUser = useAuthStore((s) => s.user);
+  const student = useStudentSession((s) => s.student);
+  const isStudent = dashboardUser?.role === 'STUDENT' || student !== null;
   const queryClient = useQueryClient();
   const [code, setCode] = useState('');
   const [joinKey, setJoinKey] = useState('');
@@ -35,7 +38,7 @@ export function JoinBatchPanel() {
   const { data: enrollments } = useQuery({
     queryKey: queryKeys.myEnrollments,
     queryFn: batchesApi.myEnrollments,
-    enabled: user?.role === 'STUDENT',
+    enabled: isStudent,
   });
 
   const join = useMutation({
@@ -53,7 +56,7 @@ export function JoinBatchPanel() {
     },
   });
 
-  if (user?.role !== 'STUDENT') return null;
+  if (!isStudent) return null;
 
   return (
     <Card className="w-full max-w-2xl">

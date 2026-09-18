@@ -1,5 +1,23 @@
 import type { ActivityType, SessionRole, StationLifecycle } from './enums.js';
 
+/** Seat 1 is always the teacher seat ('T'); every other seat is
+ * `seatNo - 1` (the number a student actually typed at sign-in — see
+ * seatNoFromSystemNumber). `null` means the station hasn't been claimed
+ * or sat at yet. Centralized here so the status board, seat grid and
+ * session builder never re-derive this convention slightly differently. */
+export function seatLabel(seatNo: number | null): string {
+  if (seatNo === null) return '?';
+  if (seatNo === 1) return 'T';
+  return String(seatNo - 1);
+}
+
+/** The inverse of seatLabel for student-facing seats: the number a
+ * student sees printed on their PC's screen ("system number") maps to
+ * `seatNo = n + 1`, leaving seat 1 permanently reserved for the teacher. */
+export function seatNoFromSystemNumber(systemNumber: number): number {
+  return systemNumber + 1;
+}
+
 /** What a station tells the server on connect (design doc §4.2). */
 export interface StationHello {
   machineGuid: string;
@@ -46,11 +64,16 @@ export interface StationStatusRow {
   mic: boolean;
   screenSharing: boolean;
   monitored: boolean;
-  /** The enrolled student who self-claimed this seat (Station.currentUserId
-   * — StationsService.claim, "a roster pick, not a login"). Null until a
-   * student types their service number into the console's My Assignments
-   * panel, or after an admin/teacher force-releases it. */
+  /** The student currently signed in at this seat (Station.currentUserId
+   * — StationsService.claim, a real credentialed login). Null until a
+   * student signs in with their service number, password, system number
+   * and classroom code, or after the class ends / an admin or teacher
+   * releases the seat. */
   currentUser: { id: string; serviceNumber: string; fullName: string } | null;
+  /** The classroom this seat is currently in (Station.liveClassId), set
+   * together with currentUser at sign-in and cleared together with it —
+   * null exactly when currentUser is null. */
+  liveClass: { id: string; title: string; teacherName: string } | null;
 }
 
 /** How a command/broadcast is addressed (design doc §4.4). */

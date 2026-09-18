@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ActivityType, SessionRole, SessionState, UserRole, type CreateSessionDto } from '@lab/shared';
 import { mediaRoomForActivity } from '@lab/shared/events';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -9,6 +9,7 @@ import { AuditService } from '../audit/audit.service';
 import type { JwtPayload } from '../auth/auth.service';
 import { BatchAccessService } from '../batches/batch-access.service';
 import { BatchesService } from '../batches/batches.service';
+import { ClassAccessService } from '../classroom/class-access.service';
 
 /**
  * Session/group CRUD + the server-authoritative state machine (design
@@ -26,6 +27,7 @@ export class SessionsService {
     private readonly audit: AuditService,
     private readonly batchAccess: BatchAccessService,
     private readonly batches: BatchesService,
+    private readonly classAccess: ClassAccessService,
   ) {}
 
   async create(dto: CreateSessionDto, user: JwtPayload) {
@@ -34,6 +36,18 @@ export class SessionsService {
     const indices = new Set(dto.groups.map((g) => g.index));
     if (indices.size !== dto.groups.length) {
       throw new BadRequestException('Group indices must be unique within a session (max 6)');
+    }
+    if (user.role === UserRole.TEACHER) {
+      // Same "only my class" boundary ControlController/CommandsService
+      // enforce for live control (design decision: "a teacher sees and
+      // controls only the PCs in their active class") — a session built
+      // from a station outside the teacher's class would otherwise let
+      // them arm/start/monitor a group they have no other control over.
+      const allStationIds = dto.groups.flatMap((g) => g.memberStationIds);
+      const controllable = await this.classAccess.filterControllable(user, allStationIds);
+      if (controllable.length !== allStationIds.length) {
+        throw new ForbiddenException('Some selected computers are not in your class');
+      }
     }
 
     return this.prisma.classSession.create({

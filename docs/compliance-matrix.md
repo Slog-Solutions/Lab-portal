@@ -795,3 +795,78 @@ genuinely downloaded/executed third-party binary (Caddy, the actual
    live**: 40 real stations, real per-role LiveKit tokens minted for the
    interpreting group, all 40 stations received their post-arm snapshot
    in 266ms, session ended cleanly, zero server-side errors.
+
+## Student credential sign-in on the Electron seat (2026-09-12)
+
+A real student login was added at the seat — a student now signs in with
+their own service number + password, sees only their own assignments, and
+admin retains exclusive rights to create student accounts and set/reset
+passwords via the existing `/admin/users` page. This deliberately
+overturns the Phase 3 "roster pick, not a login" design (`StationsService.
+claim` — see its earlier doc comment) in favour of a real credential
+check, per an explicit product decision.
+
+**What changed:** `POST /stations/claim` (still `StationAuthGuard`-gated,
+so the caller must be a genuine station) now also requires a `password`
+and runs it through the same `AuthService.authenticate` a dashboard login
+uses — unknown service number, deactivated account, wrong password, and a
+valid non-student account (e.g. a teacher's own credentials typed at a
+seat by mistake) are all indistinguishable to the caller: one "Invalid
+credentials" response, matching `POST /auth/login`'s own oracle-free
+behaviour. On success it also mints a real STUDENT JWT
+(`AuthService.issueUserToken`) so the student has an independent session,
+and audits `station.claim_failed` with a `reason` on every failure path
+(`invalid_credentials` / `not_a_student` / `already_claimed`) — closing
+the "no audit on a failed credential check here" gap that existed before
+(mirroring `BatchesService.joinByCode`'s `batch.join_failed` pattern).
+Throttle tightened from 10/min to 5/min to match `/auth/login`, now that
+the route accepts a real password. `/attempts/*` and
+`/study-modules/library` are unchanged — they still resolve "which
+student" from `Station.currentUserId`, set at claim time, using the
+station's own token, not the new STUDENT JWT.
+
+On the seat, `AssignmentsPanel`'s old "type your service number, no
+password" claim card is gone, replaced by a full-screen
+`StudentSignInScreen` that only covers the content area — `StudentConsole`
+still always mounts and always connects `StationControlClient` regardless
+of sign-in state, matching the router's documented lesson that gating
+`/student` itself once broke server-initiated features on an idle seat.
+A live teacher-run activity (station/group-scoped, identity-free by
+design) still renders above the gate even while signed out. A new
+`useStudentSession` store (sessionStorage, not `useAuthStore`'s
+`localStorage` — a seat is shared hardware) holds the signed-in student;
+`apiFetch`/`apiUpload` fall back to it when there's no dashboard login, so
+`JoinBatchPanel` (self-join, needs a real STUDENT JWT) now actually works
+from a real seat instead of always rendering `null`. A boot-time check
+releases any claim the server still remembers from a previous occupant
+who didn't sign out cleanly, rather than silently resuming their identity
+the way the old passwordless recovery-on-refresh did — that resume was
+fine before because there was no credential to bypass; now it would be.
+
+**Verified against the real running stack**, not mocks or typechecking
+alone: `npx turbo run build typecheck` green across all 8 workspaces; a
+built server + real Postgres exercised via `socket.io-client` "stations"
+and plain `fetch` confirmed the failure oracle (wrong password, unknown
+service number, and valid teacher credentials all return byte-identical
+401s, each audited with a distinct `reason` and never the password
+itself), the 409 conflict on re-claiming an already-claimed student
+(and that releasing frees it), the 5/min throttle, and that a STUDENT JWT
+is correctly rejected with 403 on `/attempts/*` (still station-only). A
+full lifecycle was run end to end through the real HTTP API: a teacher
+account creates an assignment, a student signs in with real credentials
+at a station, sees exactly that assignment, starts an attempt (served
+items carry no answer keys), submits, and is scored. Then a real
+Playwright/Chromium session against the real Vite dev server
+(`localhost:5173/#/student` — `createHashRouter`, so the hash prefix is
+required) confirmed the actual UI: the sign-in gate renders when signed
+out and hides the assignments panel; a wrong password shows an inline
+error and leaves the seat signed out; correct credentials sign in, show
+the student's own name on "My Assignments", and reveal `JoinBatchPanel`
+for the first time on a real seat; sessionStorage survives a reload; and
+signing out returns to the gate. Finally, confirmed the regression this
+design exists to avoid did not recur: the browser console logged the
+station attempting to join its LiveKit broadcast room *while still on the
+sign-in screen*, and `GET /control/status-board` (queried live, as
+ADMIN-001) showed that same station's `lastSeenAt` current and heartbeat
+active while signed out — the gate is a render-level overlay, not a route
+guard, and the station runtime never stops.

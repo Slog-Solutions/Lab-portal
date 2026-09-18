@@ -2,13 +2,16 @@ import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import type { LoginDto } from '@lab/shared';
+import type { User } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 
 /**
  * Two kinds of principal share one token shape (`kind` discriminates):
- * a human User (dashboard login) or a Station (Phase 3 — see
- * mintStationToken). `kind` is optional and defaults to 'user' so tokens
- * signed before this field existed keep verifying unchanged.
+ * a human User (dashboard login, or a student who signed in at a seat via
+ * POST /classroom/sign-in — see StationsService.claim) or a Station
+ * (Phase 3 — see mintStationToken). `kind` is optional and defaults to
+ * 'user' so tokens signed before this field existed keep verifying
+ * unchanged.
  */
 export interface JwtPayload {
   sub: string;
@@ -24,17 +27,33 @@ export class AuthService {
     private readonly jwt: JwtService,
   ) {}
 
-  async login(dto: LoginDto): Promise<{ accessToken: string; user: { id: string; role: string; fullName: string } }> {
-    const user = await this.prisma.user.findUnique({ where: { serviceNumber: dto.serviceNumber } });
+  /**
+   * The credential check shared by POST /auth/login and POST
+   * /classroom/sign-in (a student signing in at a seat). One
+   * UnauthorizedException('Invalid credentials') for every failure —
+   * unknown service number, deactivated account, or wrong password — so
+   * neither caller can be used to enumerate valid service numbers.
+   */
+  async authenticate(serviceNumber: string, password: string): Promise<User> {
+    const user = await this.prisma.user.findUnique({ where: { serviceNumber } });
     if (!user || !user.active) {
       throw new UnauthorizedException('Invalid credentials');
     }
-    const valid = await bcrypt.compare(dto.password, user.passwordHash);
+    const valid = await bcrypt.compare(password, user.passwordHash);
     if (!valid) {
       throw new UnauthorizedException('Invalid credentials');
     }
+    return user;
+  }
+
+  async issueUserToken(user: User): Promise<string> {
     const payload: JwtPayload = { sub: user.id, role: user.role, serviceNumber: user.serviceNumber, kind: 'user' };
-    const accessToken = await this.jwt.signAsync(payload);
+    return this.jwt.signAsync(payload);
+  }
+
+  async login(dto: LoginDto): Promise<{ accessToken: string; user: { id: string; role: string; fullName: string } }> {
+    const user = await this.authenticate(dto.serviceNumber, dto.password);
+    const accessToken = await this.issueUserToken(user);
     return { accessToken, user: { id: user.id, role: user.role, fullName: user.fullName } };
   }
 

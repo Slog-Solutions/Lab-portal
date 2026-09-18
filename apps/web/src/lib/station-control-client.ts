@@ -14,6 +14,17 @@ export interface StationControlEvents {
   onRemoteControlStart?: (payload: { room: string; token: string }) => void;
   onRemoteControlStop?: (payload: { room: string }) => void;
   onActivityEvent?: (payload: ActivityEventPayload & { fromStationId: string }) => void;
+  /** Fired once the station token first exists (and again on every
+   * reconnect re-hello). Lets callers react to "the station is ready to
+   * authenticate a claim" with real state instead of polling getToken()
+   * on an interval (the pattern AssignmentsPanel/StudyLibraryPanel used
+   * before the student sign-in gate existed). */
+  onToken?: (token: string) => void;
+  /** The server ended this station's classroom membership — either the
+   * teacher ended the whole class, or an admin/teacher force-released
+   * this seat (see ClassroomService). StudentConsole reacts by clearing
+   * the local student session, which brings back the sign-in screen. */
+  onSignedOut?: (payload: { reason: 'class_ended' | 'released' }) => void;
 }
 
 /**
@@ -65,6 +76,7 @@ export class StationControlClient {
     this.socket.on('remote-control:start', (payload: { room: string; token: string }) => this.events.onRemoteControlStart?.(payload));
     this.socket.on('remote-control:stop', (payload: { room: string }) => this.events.onRemoteControlStop?.(payload));
     this.socket.on('activity:event', (payload: ActivityEventPayload & { fromStationId: string }) => this.events.onActivityEvent?.(payload));
+    this.socket.on('student:signed-out', (payload: { reason: 'class_ended' | 'released' }) => this.events.onSignedOut?.(payload));
 
     this.heartbeatTimer = setInterval(() => this.sendHeartbeat(), HEARTBEAT_INTERVAL_MS);
   }
@@ -99,6 +111,7 @@ export class StationControlClient {
       },
       (ack: StationHelloAck) => {
         this.stationToken = ack.token;
+        this.events.onToken?.(ack.token);
         // eslint-disable-next-line no-console
         console.log('[station-control] registered', { stationId: ack.stationId, seatNo: ack.seatNo });
       },

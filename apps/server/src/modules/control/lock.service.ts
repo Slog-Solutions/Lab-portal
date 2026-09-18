@@ -1,9 +1,23 @@
 import { Injectable } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 
 export interface LockEntry {
+  /** Identifies this particular lock — a fresh id per lock() call, so the
+   * station can tell a new Lock click apart from the same lock re-sent in
+   * a later snapshot (snapshots are pushed for many unrelated reasons). */
+  id: string;
   screen: boolean;
   input: boolean;
   message?: string;
+  lockedBy: string;
+  lockedAt: number;
+}
+
+export interface LockInput {
+  screen: boolean;
+  input: boolean;
+  message?: string;
+  lockedBy: string;
 }
 
 /**
@@ -20,8 +34,8 @@ export interface LockEntry {
 export class LockService {
   private readonly locks = new Map<string, LockEntry>();
 
-  lock(stationId: string, entry: LockEntry): void {
-    this.locks.set(stationId, entry);
+  lock(stationId: string, entry: LockInput): void {
+    this.locks.set(stationId, { ...entry, id: randomUUID(), lockedAt: Date.now() });
   }
 
   unlock(stationId: string): void {

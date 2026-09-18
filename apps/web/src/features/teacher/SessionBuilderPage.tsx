@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
-import type { StationStatusRow } from '@lab/shared';
+import { seatLabel, type StationStatusRow } from '@lab/shared';
 import { apiFetch } from '../../lib/api-client';
 import { mediaAssetsApi } from '../../lib/media-assets-api';
 import { GroupMonitorButton } from './GroupMonitorButton';
@@ -302,7 +302,7 @@ export function SessionBuilderPage() {
                         selected ? 'bg-sky-700 text-white' : takenElsewhere ? 'bg-slate-900 text-slate-700' : 'bg-slate-800 text-slate-300'
                       }`}
                     >
-                      Seat {s.seatNo}
+                      Seat {seatLabel(s.seatNo)}
                     </button>
                   );
                 })}
@@ -322,7 +322,7 @@ export function SessionBuilderPage() {
                       const station = availableStations.find((s) => s.stationId === id);
                       return (
                         <option key={id} value={id}>
-                          Seat {station?.seatNo ?? id.slice(0, 8)}
+                          Seat {station ? seatLabel(station.seatNo) : id.slice(0, 8)}
                         </option>
                       );
                     })}
@@ -338,7 +338,7 @@ export function SessionBuilderPage() {
                     const assigned = group.interpretingRoles[id] ?? { role: 'OBSERVER' as InterpretingRoleChoice, lang: '' };
                     return (
                       <div key={id} className="flex items-center gap-2">
-                        <span className="w-16 text-xs text-slate-500">Seat {station?.seatNo ?? id.slice(0, 8)}</span>
+                        <span className="w-16 text-xs text-slate-500">Seat {station ? seatLabel(station.seatNo) : id.slice(0, 8)}</span>
                         <select
                           value={assigned.role}
                           onChange={(e) => updateInterpretingRole(group.index, id, { role: e.target.value as InterpretingRoleChoice })}
