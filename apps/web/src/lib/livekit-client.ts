@@ -1,7 +1,20 @@
-import { Room, RoomEvent, Track, type RemoteParticipant, type RemoteTrack, type RemoteTrackPublication } from 'livekit-client';
+import {
+  Room,
+  RoomEvent,
+  Track,
+  type LocalTrackPublication,
+  type RemoteParticipant,
+  type RemoteTrack,
+  type RemoteTrackPublication,
+} from 'livekit-client';
 
 export interface RemoteTrackHandle {
   participantIdentity: string;
+  /** LiveKit participant display name (MediaService.mintToken's
+   * `displayName` — "System <n>" for a station, "Teacher (<serviceNumber>)"
+   * for a dashboard connection). Used to label a spotlighted screen-share
+   * pane without the caller needing to separately look up the station. */
+  participantName: string;
   source: Track.Source;
   track: RemoteTrack;
 }
@@ -13,6 +26,24 @@ export interface LiveKitRoomEvents {
   /** LiveKit data-channel payloads (design doc §3.4 remote-control input
    * replay uses topic REMOTE_CONTROL_DATA_TOPIC from packages/shared). */
   onDataReceived?: (payload: Uint8Array, topic: string | undefined) => void;
+  /** Browser autoplay blocked remote audio/video until a user gesture —
+   * fires false right after a fresh page load with tracks already
+   * subscribed, true again once startAudio() (called from a click
+   * handler) unblocks it. */
+  onAudioPlaybackChanged?: (canPlay: boolean) => void;
+  /** The local screen-share track was unpublished from outside our own
+   * setScreenShareEnabled(false) call — e.g. the teacher clicked
+   * Chrome's own "Stop sharing" bar instead of our button. */
+  onLocalScreenShareEnded?: () => void;
+  /** This participant's OWN publish right changed on the server — Round
+   * Table (Ser 3) grants/revokes the mic in place as the floor moves. Not an
+   * error: the caller just reflects it ("Waiting for the floor"). */
+  onLocalPermissionsChanged?: (canPublishMic: boolean) => void;
+  /** Identities of whoever LiveKit currently hears speaking (includes us). */
+  onActiveSpeakersChanged?: (identities: string[]) => void;
+  /** Fires on the first connect and again after LiveKit's own full reconnect. */
+  onConnected?: () => void;
+  onReconnected?: () => void;
 }
 
 /**
@@ -37,6 +68,16 @@ export class LiveKitRoomClient {
     this.room.on(RoomEvent.TrackUnsubscribed, this.handleTrackUnsubscribed);
     this.room.on(RoomEvent.Disconnected, () => this.events.onDisconnected?.());
     this.room.on(RoomEvent.DataReceived, (payload, _participant, _kind, topic) => this.events.onDataReceived?.(payload, topic));
+    this.room.on(RoomEvent.AudioPlaybackStatusChanged, () => this.events.onAudioPlaybackChanged?.(this.room.canPlaybackAudio));
+    this.room.on(RoomEvent.Connected, () => this.events.onConnected?.());
+    this.room.on(RoomEvent.Reconnected, () => this.events.onReconnected?.());
+    this.room.on(RoomEvent.ActiveSpeakersChanged, (speakers) => this.events.onActiveSpeakersChanged?.(speakers.map((p) => p.identity)));
+    this.room.on(RoomEvent.ParticipantPermissionsChanged, (_previous, participant) => {
+      if (participant === this.room.localParticipant) this.events.onLocalPermissionsChanged?.(this.canPublishMic);
+    });
+    this.room.on(RoomEvent.LocalTrackUnpublished, (publication: LocalTrackPublication) => {
+      if (publication.source === Track.Source.ScreenShare) this.events.onLocalScreenShareEnded?.();
+    });
   }
 
   /** Reliable delivery for clicks/keys, unreliable for high-rate mouse
@@ -50,6 +91,15 @@ export class LiveKitRoomClient {
     await this.room.localParticipant.publishData(payload as Uint8Array<ArrayBuffer>, { topic, reliable });
   }
 
+  /** Whether the server currently lets THIS participant publish a mic. */
+  get canPublishMic(): boolean {
+    return this.room.localParticipant.permissions?.canPublish ?? false;
+  }
+
+  get localIdentity(): string {
+    return this.room.localParticipant.identity;
+  }
+
   async connect(url: string, token: string): Promise<void> {
     await this.room.connect(url, token);
   }
@@ -58,25 +108,38 @@ export class LiveKitRoomClient {
     await this.room.disconnect();
   }
 
-  async setScreenShareEnabled(enabled: boolean): Promise<void> {
+  /** captureAudio defaults to false — a spotlighted/remote-controlled
+   * student's screen capture must NOT also grab system audio (Electron's
+   * `'loopback'` handler would pick up everything the seat is currently
+   * playing, including the teacher's own voice and other students'
+   * unmuted mics coming through this same console, and echo it back to
+   * the whole class). Only the teacher's own broadcast passes true. */
+  async setScreenShareEnabled(enabled: boolean, captureAudio = false): Promise<void> {
     // On the real student seat (Electron), getDisplayMedia is
     // auto-resolved with no OS picker via
     // session.setDisplayMediaRequestHandler (apps/desktop/src/main/index.ts)
     // — kiosk-appropriate. In a plain browser (teacher/admin dashboard),
     // Chrome's native picker appears, which is exactly what a teacher
     // manually starting a broadcast expects.
-    await this.room.localParticipant.setScreenShareEnabled(enabled, { audio: true });
+    await this.room.localParticipant.setScreenShareEnabled(enabled, { audio: captureAudio });
   }
 
   async setMicrophoneEnabled(enabled: boolean): Promise<void> {
     await this.room.localParticipant.setMicrophoneEnabled(enabled);
   }
 
+  /** Resumes remote audio/video playback after the browser's autoplay
+   * policy blocked it (see onAudioPlaybackChanged) — must be called from
+   * inside a user-gesture event handler. */
+  async startAudio(): Promise<void> {
+    await this.room.startAudio();
+  }
+
   private handleTrackSubscribed = (track: RemoteTrack, _publication: RemoteTrackPublication, participant: RemoteParticipant): void => {
-    this.events.onTrackSubscribed?.({ participantIdentity: participant.identity, source: track.source, track });
+    this.events.onTrackSubscribed?.({ participantIdentity: participant.identity, participantName: participant.name ?? participant.identity, source: track.source, track });
   };
 
   private handleTrackUnsubscribed = (track: RemoteTrack, _publication: RemoteTrackPublication, participant: RemoteParticipant): void => {
-    this.events.onTrackUnsubscribed?.({ participantIdentity: participant.identity, source: track.source, track });
+    this.events.onTrackUnsubscribed?.({ participantIdentity: participant.identity, participantName: participant.name ?? participant.identity, source: track.source, track });
   };
 }

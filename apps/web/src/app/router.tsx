@@ -4,16 +4,22 @@ import { StatusBoardPage } from '../features/admin/StatusBoardPage';
 import { BatchesPage } from '../features/admin/BatchesPage';
 import { BatchDetailPage } from '../features/admin/BatchDetailPage';
 import { UsersPage } from '../features/admin/UsersPage';
+import { RoundTableMonitorPage } from '../features/teacher/round-table/RoundTableMonitorPage';
 import { SessionBuilderPage } from '../features/teacher/SessionBuilderPage';
-import { MediaLibraryPage } from '../features/media/MediaLibraryPage';
+import { MyClassesPage } from '../features/teacher/MyClassesPage';
+import { ClassDetailPage } from '../features/teacher/ClassDetailPage';
 import { ExercisesPage } from '../features/exercises/ExercisesPage';
 import { ExerciseDetailPage } from '../features/exercises/ExerciseDetailPage';
-import { StudyModulesPage } from '../features/courseware/StudyModulesPage';
+import { StudyLibraryPage } from '../features/courseware/StudyLibraryPage';
 import { GradebookPage } from '../features/gradebook/GradebookPage';
 import { ReportsPage } from '../features/reports/ReportsPage';
 import { StudentConsole } from '../features/student/StudentConsole';
 import { PronunciationAuthoringPage } from '../features/exercises/PronunciationAuthoringPage';
 import { PronunciationReviewPage } from '../features/exercises/PronunciationReviewPage';
+import { PronunciationTestsPage } from '../features/exercises/PronunciationTestsPage';
+import { PronunciationTestResultsPage } from '../features/exercises/PronunciationTestResultsPage';
+import { CreateAssignmentPage } from '../features/assignments/CreateAssignmentPage';
+import { AssignmentResultsPage } from '../features/assignments/AssignmentResultsPage';
 import { ProtectedRoute } from './ProtectedRoute';
 import { TeacherLayout } from './TeacherLayout';
 import { getRuntimeConfig } from '../lib/runtime-config';
@@ -78,13 +84,40 @@ export const router = createHashRouter([
           </ProtectedRoute>
         ),
       },
+      // TEACHER-only: an ADMIN creates and manages classes on the Batches
+      // pages above (explicit code + key), so the sidebar hides this pair
+      // for them too rather than bouncing them to /login.
+      {
+        path: '/classes',
+        element: (
+          <ProtectedRoute roles={['TEACHER']}>
+            <MyClassesPage />
+          </ProtectedRoute>
+        ),
+      },
+      {
+        path: '/classes/:id',
+        element: (
+          <ProtectedRoute roles={['TEACHER']}>
+            <ClassDetailPage />
+          </ProtectedRoute>
+        ),
+      },
       { path: '/sessions', element: <SessionBuilderPage /> },
-      { path: '/media', element: <MediaLibraryPage /> },
+      { path: '/sessions/:sessionId/round-table', element: <RoundTableMonitorPage /> },
+      // The Media Library was merged into the Study Library page (Files tab).
+      { path: '/media', element: <Navigate to="/study-library?tab=files" replace /> },
       { path: '/exercises', element: <ExercisesPage /> },
       { path: '/exercises/:id', element: <ExerciseDetailPage /> },
       { path: '/pronunciation', element: <PronunciationAuthoringPage /> },
       { path: '/pronunciation/:id/review', element: <PronunciationReviewPage /> },
-      { path: '/study-library', element: <StudyModulesPage /> },
+      { path: '/pronunciation-tests', element: <PronunciationTestsPage /> },
+      { path: '/pronunciation-tests/:id', element: <PronunciationTestResultsPage /> },
+      // "Create Assignment": vocabulary | writing | listening (see assignment-kinds.ts).
+      { path: '/assignments', element: <Navigate to="/assignments/vocabulary" replace /> },
+      { path: '/assignments/:kind', element: <CreateAssignmentPage /> },
+      { path: '/assignments/:kind/:id', element: <AssignmentResultsPage /> },
+      { path: '/study-library', element: <StudyLibraryPage /> },
       { path: '/gradebook', element: <GradebookPage /> },
       { path: '/reports', element: <ReportsPage /> },
     ],

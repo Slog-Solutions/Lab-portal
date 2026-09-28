@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
 import { UserRole, zCreateSessionDto, type CreateSessionDto } from '@lab/shared';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import { Roles } from '../../common/decorators/roles.decorator';
@@ -16,9 +16,10 @@ export class SessionsController {
     return this.sessions.create(dto, user);
   }
 
+  /** `?batchId=` lists one class's sessions (its own activity screen). */
   @Get()
-  async list(@CurrentUser() user: JwtPayload) {
-    return this.sessions.list(user);
+  async list(@CurrentUser() user: JwtPayload, @Query('batchId') batchId?: string) {
+    return this.sessions.list(user, batchId || undefined);
   }
 
   // MUST be declared before ':id' — Nest/Express matches routes in

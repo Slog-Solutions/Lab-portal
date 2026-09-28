@@ -15,7 +15,7 @@ import type { RemoteInputEvent } from '@lab/shared/events';
  * handed down. serverUrl in particular MUST come from main's SERVER_URL
  * (not be re-derived from process.env here with its own fallback) —
  * main already resolves LAB_SERVER_URL with a dev-friendly
- * http://localhost:3000 default; a second, different hardcoded fallback
+ * http://localhost:3010 default; a second, different hardcoded fallback
  * here (previously https://labserver.lab.local, a prod-only hostname)
  * silently diverged from it whenever the env var was unset, sending the
  * renderer's socket.io client into an ERR_NAME_NOT_RESOLVED reconnect

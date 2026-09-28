@@ -7,6 +7,7 @@ import { gradebookApi } from '../../lib/gradebook-api';
 import { usersApi } from '../../lib/users-api';
 import { pronunciationApi } from '../../lib/pronunciation-api';
 import { queryKeys } from '../../lib/query-keys';
+import { kindByType } from '../assignments/assignment-kinds';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -168,6 +169,46 @@ export function ExerciseDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {exercise.type === ActivityType.PRONUNCIATION_TEST && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Pronunciation Test</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-sm text-muted-foreground">
+              Students record each word from their console; recordings and grading are on the test&apos;s results page.
+            </p>
+            <Link to={`/pronunciation-tests/${exercise.id}`} className="text-sm font-medium text-primary hover:underline">
+              Open test results →
+            </Link>
+          </CardContent>
+        </Card>
+      )}
+
+      {(() => {
+        const isHandMarked = exercise.type === ActivityType.WRITING_TEST || exercise.type === ActivityType.READING_TEST;
+        const assignmentKind =
+          exercise.type === ActivityType.WRITING_TEST || exercise.type === ActivityType.LISTENING_TEST || exercise.type === ActivityType.READING_TEST
+            ? kindByType(exercise.type)
+            : undefined;
+        if (!assignmentKind) return null;
+        return (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">{assignmentKind.label}</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2">
+              <p className="text-sm text-muted-foreground">
+                Questions, students&apos; answers{isHandMarked ? ' and marking' : ''} are on the assignment&apos;s results page.
+              </p>
+              <Link to={`/assignments/${assignmentKind.slug}/${exercise.id}`} className="text-sm font-medium text-primary hover:underline">
+                Open results →
+              </Link>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {exercise.type === ActivityType.CONTENT_EXERCISE && (
         <Card>

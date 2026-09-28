@@ -1,9 +1,17 @@
 import { Injectable } from '@nestjs/common';
-import { ActivityType, SessionRole, emptyDesiredState, type DesiredStationState } from '@lab/shared';
+import {
+  ActivityType,
+  SessionRole,
+  emptyDesiredState,
+  seatLabel,
+  type DesiredStationState,
+  type RoundTableView,
+} from '@lab/shared';
 import { BROADCAST_ROOM, classBroadcastRoom, mediaRoomForActivity } from '@lab/shared/events';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MediaService } from '../media/media.service';
 import { LockService } from './lock.service';
+import { RoundTableFloorStore } from './round-table-floor.store';
 
 const LOCK_HEARTBEAT_TTL_MS = 30_000; // design doc §3.3 — 30s without renewal auto-unlocks
 
@@ -26,6 +34,7 @@ export class SessionStateService {
     private readonly prisma: PrismaService,
     private readonly media: MediaService,
     private readonly locks: LockService,
+    private readonly roundTableFloors: RoundTableFloorStore,
   ) {}
 
   async getDesiredState(stationId: string): Promise<DesiredStationState> {
@@ -42,30 +51,40 @@ export class SessionStateService {
       : null;
 
     const isTeacher = station.seatNo === 1;
+    // The LiveKit-participant-visible name (design doc §2.2) — matches the
+    // seat-label convention ControlGateway.emitIdentity already uses
+    // ("System <n>"), not the raw hostname, since this is what a spotlight
+    // viewer (ScreenSpotlightPanel / StudentConsole's presenter label)
+    // shows for whoever is presenting. Falls back to hostname for a
+    // station that hasn't been assigned a seat yet.
+    const displayName = station.seatNo !== null ? `System ${seatLabel(station.seatNo)}` : station.hostname;
     await this.media.ensureBroadcastRoom();
     const broadcastToken = await this.media.mintToken({
       stationId,
-      displayName: station.hostname,
+      displayName,
       room: BROADCAST_ROOM,
       role: isTeacher ? 'TEACHER' : 'STUDENT',
     });
     // A station currently signed into a class also gets that class's own
     // scoped broadcast room, alongside the lab-wide one — see
     // MediaController.broadcastToken (TEACHER mints into this room, not
-    // BROADCAST_ROOM) and ClassroomService.start (which ensures the room
-    // exists; this only ever mints tokens for it, same pattern as the
-    // per-group rooms below).
+    // BROADCAST_ROOM). ClassroomService.start ensures the room once, at
+    // class creation, but that's a single unretried attempt (network
+    // blip, LiveKit hiccup) — unlike BROADCAST_ROOM above, which
+    // self-heals via ensureBroadcastRoom() on every snapshot. Re-ensuring
+    // here too (LiveKit's createRoom is idempotent — see ensureRoom's doc
+    // comment) means a station can never get stuck minting tokens for a
+    // room that silently never got created.
     const classRoomGrant = station.liveClass
-      ? {
-          room: classBroadcastRoom(station.liveClass.id),
-          token: await this.media.mintToken({
-            stationId,
-            displayName: station.hostname,
-            room: classBroadcastRoom(station.liveClass.id),
-            role: 'STUDENT' as const,
-          }),
-          publish: { mic: true, screen: false },
-        }
+      ? await (async () => {
+          const room = classBroadcastRoom(station.liveClass!.id);
+          await this.media.ensureRoom(room);
+          return {
+            room,
+            token: await this.media.mintToken({ stationId, displayName, room, role: 'STUDENT' as const }),
+            publish: { mic: true, screen: false },
+          };
+        })()
       : null;
 
     const member = await this.prisma.sessionMember.findFirst({
@@ -84,7 +103,7 @@ export class SessionStateService {
         groupId: null,
         role: null,
         activity: null,
-        lock: lock ? { id: lock.id, screen: lock.screen, input: lock.input, message: lock.message, expiresAt: Date.now() + LOCK_HEARTBEAT_TTL_MS } : null,
+        lock: lock ? { id: lock.id, mode: lock.mode, screen: lock.screen, input: lock.input, message: lock.message, expiresAt: Date.now() + LOCK_HEARTBEAT_TTL_MS } : null,
         media: {
           rooms: [
             { room: BROADCAST_ROOM, token: broadcastToken, publish: { mic: true, screen: isTeacher } },
@@ -103,17 +122,29 @@ export class SessionStateService {
     // room needs per-role publish grants (interpreter/delegate publish
     // their own channel, observer is subscribe-only) — every other
     // activity keeps the generic mic-for-everyone group grant.
-    const groupToken =
-      activityType === ActivityType.CONFERENCE_INTERPRETING
+    // Ser 3 Round Table: the SERVER owns the floor. Every member's token
+    // starts with canPublish:false — including the chairman's — and the
+    // floor service grants the right in place (RoundTableService), so a
+    // reconnect with a fresh token can never briefly hand a member an open mic.
+    const roundTable = activityType === ActivityType.ROUND_TABLE ? await this.roundTableView(member.groupId, stationId) : null;
+    const groupToken = roundTable
+      ? await this.media.mintMicGatedToken({
+          stationId,
+          displayName,
+          room: groupRoomName,
+          canPublishMic: false,
+          role: isTeacher ? 'TEACHER' : 'STUDENT',
+        })
+      : activityType === ActivityType.CONFERENCE_INTERPRETING
         ? await this.media.mintInterpretingToken({
             stationId,
-            displayName: station.hostname,
+            displayName,
             room: groupRoomName,
             canPublishMic: isTeacher || member.role === SessionRole.INTERPRETER || member.role === SessionRole.DELEGATE,
           })
         : await this.media.mintToken({
             stationId,
-            displayName: station.hostname,
+            displayName,
             room: groupRoomName,
             role: isTeacher ? 'TEACHER' : 'STUDENT',
           });
@@ -133,7 +164,7 @@ export class SessionStateService {
             config: this.sanitizeConfigForWire(member.group.activity.type as ActivityType, member.group.activity.config),
           }
         : null,
-      lock: lock ? { id: lock.id, screen: lock.screen, input: lock.input, message: lock.message, expiresAt: Date.now() + LOCK_HEARTBEAT_TTL_MS } : null,
+      lock: lock ? { id: lock.id, mode: lock.mode, screen: lock.screen, input: lock.input, message: lock.message, expiresAt: Date.now() + LOCK_HEARTBEAT_TTL_MS } : null,
       media: {
         rooms: [
           { room: BROADCAST_ROOM, token: broadcastToken, publish: { mic: true, screen: isTeacher } },
@@ -142,7 +173,11 @@ export class SessionStateService {
             room: groupRoomName,
             token: groupToken,
             publish: {
-              mic: activityType === ActivityType.CONFERENCE_INTERPRETING ? member.role !== SessionRole.OBSERVER : true,
+              mic: roundTable
+                ? roundTable.micAllowed
+                : activityType === ActivityType.CONFERENCE_INTERPRETING
+                  ? member.role !== SessionRole.OBSERVER
+                  : true,
               screen: false,
             },
           },
@@ -151,6 +186,33 @@ export class SessionStateService {
       stationEnabled: true,
       monitoringIndicator: true,
       liveClass,
+      ...(roundTable ? { roundTable: roundTable.view } : {}),
+    };
+  }
+
+  /** Floor + roster for a Round Table station's snapshot (see
+   * RoundTableFloorStore). Null when the group has no live floor. */
+  private async roundTableView(
+    groupId: string,
+    stationId: string,
+  ): Promise<{ view: RoundTableView; micAllowed: boolean } | null> {
+    const group = await this.roundTableFloors.ensure(groupId);
+    if (!group) return null;
+    const rows = await this.prisma.sessionMember.findMany({
+      where: { groupId },
+      include: { station: { select: { seatNo: true, currentUser: { select: { fullName: true } } } } },
+    });
+    const members = rows
+      .map((m) => ({
+        stationId: m.stationId,
+        seatNo: m.station.seatNo,
+        studentName: m.station.currentUser?.fullName ?? null,
+      }))
+      .sort((a, b) => (a.seatNo ?? 1e9) - (b.seatNo ?? 1e9));
+    const f = group.floor;
+    return {
+      view: { topic: group.config.topic, floor: { ...f, queue: [...f.queue] }, members },
+      micAllowed: f.phase === 'RUNNING' && (stationId === f.chairmanStationId || stationId === f.speakerStationId),
     };
   }
 

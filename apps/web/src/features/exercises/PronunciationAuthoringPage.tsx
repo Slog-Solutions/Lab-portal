@@ -1,12 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { ActivityType } from '@lab/shared';
-import { Mic, Volume2, Sparkles, RotateCcw, CheckCircle2, AlertTriangle, ChevronRight, Plus } from 'lucide-react';
-import { exercisesApi } from '../../lib/exercises-api';
-import { pronunciationApi } from '../../lib/pronunciation-api';
-import { gradebookApi } from '../../lib/gradebook-api';
+import { UserRole } from '@lab/shared';
+import { Mic, CheckCircle2, AlertTriangle, ChevronRight, Send } from 'lucide-react';
+import { pronunciationApi, type PronunciationVoice } from '../../lib/pronunciation-api';
+import { batchesApi } from '../../lib/batches-api';
+import { usersApi, type UserRow } from '../../lib/users-api';
 import { queryKeys } from '../../lib/query-keys';
+import { StudentPicker } from './StudentPicker';
+import { AssignPronunciationDialog } from './AssignPronunciationDialog';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -16,122 +18,92 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 
-interface PronunciationConfig {
-  sourceText: string;
-  voice: 'en_US' | 'en_GB';
-  ipaAssetId?: string;
-  modelAudioAssetId?: string;
-}
+/** Radix &lt;Select&gt; reserves value="" for "cleared". */
+const ALL_STUDENTS = '__all__';
 
-/** Ser 7 "Pronunciation Activity" — teacher authoring side.
- * Turns any text into a pronunciation exercise: generates IPA + model
- * audio via the offline eSpeak-NG/Piper pipeline and lets the teacher
- * preview both before saving. The student-side player (PronunciationPlayer)
- * reads these exact config fields at runtime. */
+/** Ser 7 "Pronunciation Activity" — teacher authoring side. One step: a
+ * sentence, paragraph or single word, the students, and a due date —
+ * "Create & send" does both at once (PronunciationService.createExercise),
+ * the same shape as the Vocabulary/Writing/Listening Test forms. IPA and
+ * model audio are never generated here; they're synthesized on demand —
+ * by the student's "Listen to pronunciation" button and by this page's own
+ * Review screen — so creating an exercise is never gated on the offline
+ * speech pipeline being reachable. */
 export function PronunciationAuthoringPage() {
   const queryClient = useQueryClient();
 
-  // ── Pipeline status ──────────────────────────────────────────────────
   const { data: pipelineStatus } = useQuery({
     queryKey: queryKeys.pronunciationStatus,
     queryFn: pronunciationApi.status,
     staleTime: 60_000,
   });
 
-  // ── Authoring state ───────────────────────────────────────────────────
-  const [sourceText, setSourceText] = useState('');
-  const [voice, setVoice] = useState<'en_US' | 'en_GB'>('en_GB');
-  const [ipaText, setIpaText] = useState<string | null>(null);
-  const [modelAudioUrl, setModelAudioUrl] = useState<string | null>(null);
-  const [generatedAssets, setGeneratedAssets] = useState<{
-    ipaAssetId?: string;
-    modelAudioAssetId?: string;
-  } | null>(null);
-  const [generateWarnings, setGenerateWarnings] = useState<string[]>([]);
-  const audioRef = useRef<string | null>(null);
+  const { data: pronunciationExercises } = useQuery({
+    queryKey: queryKeys.pronunciationExercises,
+    queryFn: pronunciationApi.exercises.list,
+  });
 
-  // ── Save-as-exercise state ────────────────────────────────────────────
+  // ── New exercise form ─────────────────────────────────────────────────
   const [title, setTitle] = useState('');
-  const [saveError, setSaveError] = useState<string | null>(null);
-  const [saveSuccess, setSaveSuccess] = useState(false);
+  const [sourceText, setSourceText] = useState('');
+  const [voice, setVoice] = useState<PronunciationVoice>('en_GB');
+  const [classId, setClassId] = useState('');
+  const [selected, setSelected] = useState<string[]>([]);
+  const [dueDate, setDueDate] = useState('');
+  const [autoSelected, setAutoSelected] = useState(false);
+  const [created, setCreated] = useState<{ exerciseId: string; assigned: number } | null>(null);
+  const [assignTarget, setAssignTarget] = useState<{ id: string; title: string } | null>(null);
 
-  // Revoke blob URL on unmount / regeneration
+  const { data: myClasses } = useQuery({ queryKey: queryKeys.myClasses, queryFn: batchesApi.mine });
+  const { data: allStudents } = useQuery({
+    queryKey: queryKeys.users(UserRole.STUDENT),
+    queryFn: () => usersApi.list(UserRole.STUDENT),
+    enabled: !classId,
+  });
+  const { data: classStudents, isLoading: classStudentsLoading } = useQuery({
+    queryKey: queryKeys.classStudents(classId),
+    queryFn: () => batchesApi.listStudents(classId),
+    enabled: Boolean(classId),
+  });
+
+  const classStudentRows: UserRow[] = (classStudents ?? [])
+    .filter((s) => s.user.active)
+    .map((s) => ({ id: s.userId, serviceNumber: s.user.serviceNumber, fullName: s.user.fullName, role: 'STUDENT' as const, rank: null, active: true }));
+  const activeStudents = classId ? classStudentRows : (allStudents ?? []).filter((s) => s.active);
+
+  // Auto-select everyone in the chosen class, once — same pattern as
+  // CreateAssignmentPage's ?classId flow.
   useEffect(() => {
-    return () => {
-      if (audioRef.current) URL.revokeObjectURL(audioRef.current);
-    };
-  }, []);
+    if (classId && classStudentRows.length > 0 && !autoSelected) {
+      setSelected(classStudentRows.map((s) => s.id));
+      setAutoSelected(true);
+    }
+  }, [classId, classStudentRows.length, autoSelected]);
 
-  // ── Existing pronunciation exercises list ─────────────────────────────
-  const { data: allExercises } = useQuery({
-    queryKey: queryKeys.exercises,
-    queryFn: exercisesApi.list,
-  });
-  const pronunciationExercises = allExercises?.filter((ex) => ex.type === ActivityType.PRONUNCIATION) ?? [];
-
-  // ── Generate IPA + model audio ────────────────────────────────────────
-  const generate = useMutation({
-    mutationFn: () => pronunciationApi.generate(sourceText.trim(), voice),
-    onSuccess: async (res) => {
-      setGeneratedAssets({ ipaAssetId: res.ipaAssetId ?? undefined, modelAudioAssetId: res.modelAudioAssetId ?? undefined });
-      setGenerateWarnings(res.warnings);
-
-      // Fetch IPA text if asset was created
-      if (res.ipaAssetId) {
-        try {
-          const text = await gradebookApi.fetchMediaAssetText(res.ipaAssetId);
-          setIpaText(text.trim());
-        } catch {
-          setIpaText(null);
-        }
-      } else {
-        setIpaText(null);
-      }
-
-      // Fetch model audio blob for preview playback
-      if (audioRef.current) URL.revokeObjectURL(audioRef.current);
-      if (res.modelAudioAssetId) {
-        try {
-          const url = await gradebookApi.fetchMediaAssetBlob(res.modelAudioAssetId);
-          audioRef.current = url;
-          setModelAudioUrl(url);
-        } catch {
-          setModelAudioUrl(null);
-        }
-      } else {
-        setModelAudioUrl(null);
-      }
-    },
-  });
-
-  // ── Save exercise ─────────────────────────────────────────────────────
-  const save = useMutation({
+  const create = useMutation({
     mutationFn: () =>
-      exercisesApi.create({
-        type: ActivityType.PRONUNCIATION,
+      pronunciationApi.exercises.create({
         title: title.trim(),
-        config: {
-          sourceText: sourceText.trim(),
-          voice,
-          ipaAssetId: generatedAssets?.ipaAssetId,
-          modelAudioAssetId: generatedAssets?.modelAudioAssetId,
-        } satisfies PronunciationConfig,
+        sourceText: sourceText.trim(),
+        voice,
+        studentIds: selected,
+        batchId: classId || undefined,
+        dueAt: dueDate ? new Date(`${dueDate}T23:59:59`).toISOString() : undefined,
       }),
-    onSuccess: () => {
+    onSuccess: (res) => {
       void queryClient.invalidateQueries({ queryKey: queryKeys.exercises });
-      setSaveSuccess(true);
+      void queryClient.invalidateQueries({ queryKey: queryKeys.pronunciationExercises });
+      setCreated(res);
       setTitle('');
       setSourceText('');
-      setIpaText(null);
-      setModelAudioUrl(null);
-      setGeneratedAssets(null);
-      setTimeout(() => setSaveSuccess(false), 3000);
+      setSelected([]);
+      setDueDate('');
+      setClassId('');
+      setAutoSelected(false);
     },
-    onError: (err) => setSaveError(err instanceof Error ? err.message : 'Save failed'),
   });
 
-  const canGenerate = sourceText.trim().length > 0;
-  const canSave = Boolean(title.trim()) && Boolean(generatedAssets);
+  const canCreate = Boolean(title.trim()) && Boolean(sourceText.trim()) && selected.length > 0;
 
   return (
     <div className="space-y-8">
@@ -142,7 +114,7 @@ export function PronunciationAuthoringPage() {
           <h1 className="text-xl font-semibold">Pronunciation Activity</h1>
         </div>
         <p className="text-sm text-muted-foreground">
-          Annexure-I Ser 7 — turn any text into a listen-and-repeat exercise with model pronunciation and IPA transcription.
+          Annexure-I Ser 7 — give students a sentence, paragraph or word to record themselves saying; you listen and score their pronunciation.
         </p>
       </div>
 
@@ -163,205 +135,168 @@ export function PronunciationAuthoringPage() {
           <div>
             <span className="font-medium">Offline speech pipeline: </span>
             {pipelineStatus.ipa && pipelineStatus.voice
-              ? 'eSpeak-NG (IPA) and Piper (model voice) are both available.'
-              : `${!pipelineStatus.ipa ? 'eSpeak-NG (IPA) not configured. ' : ''}${!pipelineStatus.voice ? 'Piper (model voice) not configured.' : ''} Recording and self-assessment still work without the pipeline.`}
+              ? 'eSpeak-NG (IPA) and Piper (model voice) are both available — students can hear a model reading before they record.'
+              : `${!pipelineStatus.ipa ? 'eSpeak-NG (IPA) not configured. ' : ''}${!pipelineStatus.voice ? 'Piper (model voice) not configured.' : ''} Recording still works without the pipeline — students just won't hear a model voice.`}
           </div>
         </div>
       )}
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
-        {/* ── Left: Authoring workspace ─────────────────────────────── */}
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Source Text</CardTitle>
-              <CardDescription>
-                The text students will listen to and repeat. Aim for 10–60 words for best results.
-              </CardDescription>
-            </CardHeader>
-            <CardContent className="space-y-4">
-              <div className="space-y-1.5">
-                <div className="flex items-center justify-between">
-                  <Label htmlFor="source-text">Text</Label>
-                  <span className="text-xs text-muted-foreground">{sourceText.length}/2000</span>
-                </div>
-                <Textarea
-                  id="source-text"
-                  value={sourceText}
-                  onChange={(e) => {
-                    setSourceText(e.target.value);
-                    // Reset generated assets if text changes
-                    if (generatedAssets) {
-                      setGeneratedAssets(null);
-                      setIpaText(null);
-                      setModelAudioUrl(null);
-                    }
-                  }}
-                  placeholder="The quick brown fox jumps over the lazy dog."
-                  rows={5}
-                  maxLength={2000}
-                  className="resize-none font-medium text-base leading-relaxed"
-                />
-              </div>
+      <div className="grid grid-cols-1 gap-6 xl:grid-cols-2">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">New pronunciation exercise</CardTitle>
+            <CardDescription>Students see it under My Assignments within about 30 seconds.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="pe-title">Title</Label>
+              <Input id="pe-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder='e.g. "Unit 3 — daily routines"' maxLength={200} />
+            </div>
 
-              <div className="space-y-1.5">
-                <Label htmlFor="voice-select">Model Voice</Label>
-                <Select value={voice} onValueChange={(v) => setVoice(v as 'en_US' | 'en_GB')}>
-                  <SelectTrigger id="voice-select" className="w-48">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="en_GB">🇬🇧 en_GB (British)</SelectItem>
-                    <SelectItem value="en_US">🇺🇸 en_US (American)</SelectItem>
-                  </SelectContent>
-                </Select>
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between">
+                <Label htmlFor="pe-text">Text (a sentence, paragraph or word)</Label>
+                <span className="text-xs text-muted-foreground">{sourceText.length}/2000</span>
               </div>
+              <Textarea
+                id="pe-text"
+                value={sourceText}
+                onChange={(e) => setSourceText(e.target.value)}
+                placeholder="The quick brown fox jumps over the lazy dog."
+                rows={5}
+                maxLength={2000}
+                className="resize-none text-base leading-relaxed"
+              />
+            </div>
 
-              <Button
-                onClick={() => generate.mutate()}
-                disabled={generate.isPending || !canGenerate}
-                className="w-full gap-2"
+            <div className="space-y-1.5">
+              <Label htmlFor="pe-voice">Model voice</Label>
+              <Select value={voice} onValueChange={(v) => setVoice(v as PronunciationVoice)}>
+                <SelectTrigger id="pe-voice" className="w-48">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="en_GB">🇬🇧 en_GB (British)</SelectItem>
+                  <SelectItem value="en_US">🇺🇸 en_US (American)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="pe-class">Class (optional)</Label>
+              <Select
+                value={classId || ALL_STUDENTS}
+                onValueChange={(v) => {
+                  setClassId(v === ALL_STUDENTS ? '' : v);
+                  setSelected([]);
+                  setAutoSelected(false);
+                }}
               >
-                {generate.isPending ? (
-                  <>
-                    <RotateCcw className="h-4 w-4 animate-spin" />
-                    Generating IPA + Model Audio…
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="h-4 w-4" />
-                    Generate IPA + Model Audio
-                  </>
-                )}
-              </Button>
-
-              {generateWarnings.length > 0 && (
-                <div className="rounded-md border border-amber-400/30 bg-amber-50 px-3 py-2 text-xs text-amber-700 dark:bg-amber-900/20 dark:text-amber-400">
-                  {generateWarnings.map((w, i) => (
-                    <p key={i}>{w}</p>
+                <SelectTrigger id="pe-class">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL_STUDENTS}>All students</SelectItem>
+                  {(myClasses ?? []).map((c) => (
+                    <SelectItem key={c.id} value={c.id}>
+                      {c.name} ({c.studentCount})
+                    </SelectItem>
                   ))}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+                </SelectContent>
+              </Select>
+              {classId && classStudentsLoading && <p className="text-xs text-muted-foreground">Loading students…</p>}
+            </div>
 
-          {/* ── Generated preview ──────────────────────────────────── */}
-          {generatedAssets && (
-            <Card className="border-primary/20 bg-primary/5">
-              <CardHeader className="pb-3">
-                <CardTitle className="flex items-center gap-2 text-base">
-                  <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                  Generated Assets
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                {ipaText ? (
-                  <div className="space-y-1">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">IPA Transcription</p>
-                    <div className="rounded-md border border-border bg-card px-3 py-2">
-                      <p className="font-mono text-sm leading-relaxed">{ipaText}</p>
-                    </div>
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground">IPA not generated (eSpeak-NG not configured).</p>
-                )}
+            <div className="space-y-1.5">
+              <Label>Students</Label>
+              <StudentPicker students={activeStudents} selected={selected} onChange={setSelected} />
+            </div>
 
-                {modelAudioUrl ? (
-                  <div className="space-y-1">
-                    <div className="flex items-center gap-1.5">
-                      <Volume2 className="h-3.5 w-3.5 text-muted-foreground" />
-                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Model Audio ({voice})</p>
-                    </div>
-                    <audio controls src={modelAudioUrl} className="w-full h-10" />
-                  </div>
-                ) : (
-                  <p className="text-xs text-muted-foreground">Model audio not generated (Piper not configured).</p>
-                )}
+            <div className="space-y-1.5">
+              <Label htmlFor="pe-due">Due date (optional)</Label>
+              <Input id="pe-due" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="w-44" />
+            </div>
 
-                {/* Save as exercise */}
-                <div className="border-t border-border pt-3 space-y-3">
-                  <p className="text-sm font-medium">Save as Exercise</p>
-                  <div className="space-y-1.5">
-                    <Label htmlFor="exercise-title">Exercise Title</Label>
-                    <Input
-                      id="exercise-title"
-                      value={title}
-                      onChange={(e) => setTitle(e.target.value)}
-                      placeholder='e.g. "Unit 3 — Daily Routines pronunciation drill"'
-                    />
-                  </div>
-                  {saveError && <p className="text-sm text-destructive">{saveError}</p>}
-                  {saveSuccess && (
-                    <p className="flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400">
-                      <CheckCircle2 className="h-4 w-4" /> Exercise saved successfully!
-                    </p>
-                  )}
-                  <Button
-                    onClick={() => save.mutate()}
-                    disabled={save.isPending || !canSave}
-                    className="w-full gap-2"
-                    variant="default"
-                  >
-                    <Plus className="h-4 w-4" />
-                    {save.isPending ? 'Saving…' : 'Save Exercise'}
-                  </Button>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </div>
+            {create.isError && <p className="text-sm text-destructive">{create.error instanceof Error ? create.error.message : 'Could not create the exercise'}</p>}
+            {created && (
+              <p className="flex flex-wrap items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400">
+                <CheckCircle2 className="h-4 w-4" />
+                Sent to {created.assigned} {created.assigned === 1 ? 'student' : 'students'}.
+                <Link to={`/pronunciation/${created.exerciseId}/review`} className="font-medium underline">
+                  View results
+                </Link>
+              </p>
+            )}
+            <Button
+              className="w-full"
+              disabled={!canCreate || create.isPending}
+              onClick={() => {
+                setCreated(null);
+                create.mutate();
+              }}
+            >
+              {create.isPending ? 'Creating…' : `Create & send to ${selected.length} ${selected.length === 1 ? 'student' : 'students'}`}
+            </Button>
+          </CardContent>
+        </Card>
 
-        {/* ── Right: Existing exercises table ───────────────────────── */}
-        <div className="space-y-4">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Your Pronunciation Exercises</CardTitle>
-              <CardDescription>Click an exercise to assign it or review student attempts.</CardDescription>
-            </CardHeader>
-            <CardContent className="p-0">
-              {pronunciationExercises.length === 0 ? (
-                <div className="flex flex-col items-center gap-2 py-12 text-center">
-                  <Mic className="h-8 w-8 text-muted-foreground/40" />
-                  <p className="text-sm text-muted-foreground">No pronunciation exercises yet.</p>
-                  <p className="text-xs text-muted-foreground">Generate text and model audio on the left, then save.</p>
-                </div>
-              ) : (
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Title</TableHead>
-                      <TableHead>Voice</TableHead>
-                      <TableHead>IPA</TableHead>
-                      <TableHead>Audio</TableHead>
-                      <TableHead />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {pronunciationExercises.map((ex) => {
-                      const cfg = ex.config as Partial<PronunciationConfig>;
-                      return (
-                        <TableRow key={ex.id} className="group">
-                          <TableCell className="font-medium">{ex.title}</TableCell>
-                          <TableCell>
-                            <Badge variant="outline" className="text-xs">
-                              {cfg.voice ?? '—'}
+        {/* ── Existing exercises table ─────────────────────────────────── */}
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Your Pronunciation Exercises</CardTitle>
+            <CardDescription>Open one to assign it to more students or review what's been recorded.</CardDescription>
+          </CardHeader>
+          <CardContent className="p-0">
+            {!pronunciationExercises || pronunciationExercises.length === 0 ? (
+              <div className="flex flex-col items-center gap-2 py-12 text-center">
+                <Mic className="h-8 w-8 text-muted-foreground/40" />
+                <p className="text-sm text-muted-foreground">No pronunciation exercises yet.</p>
+                <p className="text-xs text-muted-foreground">Fill in the form on the left to send your first one.</p>
+              </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Title</TableHead>
+                    <TableHead>Voice</TableHead>
+                    <TableHead>Assigned</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {pronunciationExercises.map((ex) => {
+                    const toReview = ex.submitted - ex.reviewed;
+                    return (
+                      <TableRow key={ex.id} className="group">
+                        <TableCell className="font-medium">{ex.title}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline" className="text-xs">
+                            {ex.config.voice ?? '—'}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          {ex.assigned === 0 ? (
+                            <span className="text-xs text-muted-foreground">Not assigned</span>
+                          ) : toReview > 0 ? (
+                            <Badge variant="warning" className="text-xs">
+                              {toReview} to review
                             </Badge>
-                          </TableCell>
-                          <TableCell>
-                            {cfg.ipaAssetId ? (
-                              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                            ) : (
-                              <span className="text-xs text-muted-foreground">—</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
-                            {cfg.modelAudioAssetId ? (
-                              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-                            ) : (
-                              <span className="text-xs text-muted-foreground">—</span>
-                            )}
-                          </TableCell>
-                          <TableCell>
+                          ) : (
+                            <span className="text-sm">
+                              {ex.submitted}/{ex.assigned} submitted
+                            </span>
+                          )}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center justify-end gap-3">
+                            <button
+                              type="button"
+                              onClick={() => setAssignTarget({ id: ex.id, title: ex.title })}
+                              className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                            >
+                              <Send className="h-3.5 w-3.5" />
+                              Assign
+                            </button>
                             <Link
                               to={`/pronunciation/${ex.id}/review`}
                               className="inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
@@ -369,17 +304,19 @@ export function PronunciationAuthoringPage() {
                               Review
                               <ChevronRight className="h-3.5 w-3.5" />
                             </Link>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              )}
-            </CardContent>
-          </Card>
-        </div>
+                          </div>
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            )}
+          </CardContent>
+        </Card>
       </div>
+
+      <AssignPronunciationDialog exercise={assignTarget} onClose={() => setAssignTarget(null)} />
     </div>
   );
 }

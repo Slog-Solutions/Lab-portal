@@ -22,6 +22,7 @@ extraResources:
 # filesystem search that cannot see inside asar (design doc §1.5, §3.4).
 asarUnpack:
   - '**/node_modules/@nut-tree-fork/**'
+  - '**/node_modules/koffi/**'
   - '**/prebuilds/**'
 
 win:

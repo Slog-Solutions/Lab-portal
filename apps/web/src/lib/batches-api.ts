@@ -1,3 +1,4 @@
+import type { ClassHistoryView, CreateClassroomDto, MyBatchView } from '@lab/shared';
 import { apiFetch } from './api-client';
 
 export interface BatchRow {
@@ -46,7 +47,18 @@ export interface UpdateBatchInput {
 
 export const batchesApi = {
   list: () => apiFetch<BatchRow[]>('/batches'),
-  mine: () => apiFetch<BatchRow[]>('/batches/mine'),
+  /** The caller's own classes — enrolled (student), taught (teacher) or all
+   * (admin). `joinKey` is present only for staff. */
+  mine: () => apiFetch<MyBatchView[]>('/batches/mine'),
+  /** A student's record of one of their classes: the live activities they
+   * took part in and the assignments created from it. */
+  myActivity: (id: string) => apiFetch<ClassHistoryView>(`/batches/${id}/my-activity`),
+  /** A teacher creating their own class: code and join key may be omitted and
+   * the server generates them. Returns the full row, key included. */
+  createClassroom: (dto: Pick<CreateClassroomDto, 'name'> & Partial<Pick<CreateClassroomDto, 'code' | 'joinKey' | 'joinOpen'>>) =>
+    apiFetch<BatchRow>('/batches', { method: 'POST', body: JSON.stringify(dto) }),
+  /** Rotates the join key; the old one stops working at once. */
+  regenerateKey: (id: string) => apiFetch<{ joinKey: string }>(`/batches/${id}/regenerate-key`, { method: 'POST' }),
   get: (id: string) => apiFetch<BatchDetail>(`/batches/${id}`),
   create: (dto: CreateBatchInput) => apiFetch<BatchRow>('/batches', { method: 'POST', body: JSON.stringify(dto) }),
   update: (id: string, patch: UpdateBatchInput) =>

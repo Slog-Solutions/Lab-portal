@@ -1,7 +1,17 @@
-import { Body, Controller, ForbiddenException, Get, NotFoundException, Param, Post, ServiceUnavailableException } from '@nestjs/common';
+import {
+  Body,
+  ConflictException,
+  Controller,
+  ForbiddenException,
+  Get,
+  NotFoundException,
+  Param,
+  Post,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { z } from 'zod';
 import { CommandType, StationLifecycle, UserRole, type StationStatusRow } from '@lab/shared';
-import { BROADCAST_ROOM, controlRoom, mediaRoomForActivity } from '@lab/shared/events';
+import { BROADCAST_ROOM, classBroadcastRoom, controlRoom, mediaRoomForActivity } from '@lab/shared/events';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
@@ -9,6 +19,7 @@ import type { JwtPayload } from '../auth/auth.service';
 import { PrismaService } from '../../prisma/prisma.service';
 import { LockService } from './lock.service';
 import { RemoteControlSessionService } from './remote-control-session.service';
+import { ScreenShareService } from './screen-share.service';
 import { CommandsService } from './commands.service';
 import { SessionStateService } from './session-state.service';
 import { ControlGateway } from './control.gateway';
@@ -26,13 +37,20 @@ const zTarget = z.union([
   z.object({ kind: z.literal('seats'), seats: z.array(z.number().int()) }),
 ]);
 
-const zLockDto = z.object({ target: zTarget, screen: z.boolean(), input: z.boolean(), message: z.string().optional() });
+const zLockDto = z.object({
+  target: zTarget,
+  mode: z.enum(['soft', 'windows']).default('soft'),
+  screen: z.boolean(),
+  input: z.boolean(),
+  message: z.string().optional(),
+});
 const zUnlockDto = z.object({ target: zTarget });
 const zTargetOnlyDto = z.object({ target: zTarget });
 const zLaunchProgramDto = z.object({ target: zTarget, programId: z.string(), args: z.array(z.string()).optional() });
 const zOpenUrlDto = z.object({ target: zTarget, url: z.string().url() });
 const zMessageDto = z.object({ target: zTarget, text: z.string().min(1), severity: z.enum(['info', 'warning']) });
-const zPromoteDto = z.object({ stationId: z.string(), room: z.string().default(BROADCAST_ROOM) });
+const zPromoteDto = z.object({ stationId: z.string(), mic: z.boolean().default(false) });
+const zRevokeDto = z.object({ stationId: z.string() });
 const zPushFileDto = z.object({
   target: zTarget,
   assetId: z.string(),
@@ -51,6 +69,7 @@ export class ControlController {
   constructor(
     private readonly locks: LockService,
     private readonly remoteControlSessions: RemoteControlSessionService,
+    private readonly screenShares: ScreenShareService,
     private readonly commands: CommandsService,
     private readonly sessionState: SessionStateService,
     private readonly gateway: ControlGateway,
@@ -84,6 +103,7 @@ export class ControlController {
         lock: online ? (patch.lock ?? null) : null,
         lastSeenAt: online ? (patch.lastSeenAt ?? row.lastSeenAt) : row.lastSeenAt,
         ip: online ? (patch.ip ?? row.ip) : row.ip,
+        screenSharing: online ? (patch.screenSharing ?? false) : false,
       };
     });
     // A TEACHER sees only the PCs in their active class — an ADMIN still
@@ -97,19 +117,31 @@ export class ControlController {
   @Post('lock')
   async lock(@Body(new ZodValidationPipe(zLockDto)) dto: z.infer<typeof zLockDto>, @CurrentUser() user: JwtPayload) {
     const stationIds = await this.resolveAndPush(dto.target, user, async (stationId) => {
-      this.locks.lock(stationId, { screen: dto.screen, input: dto.input, message: dto.message, lockedBy: user.sub });
+      await this.locks.lock(stationId, { mode: dto.mode, screen: dto.screen, input: dto.input, message: dto.message, lockedBy: user.sub });
     });
-    await this.audit.log({ actorId: user.sub, action: 'control.lock', detail: { target: dto.target, stationIds } });
+    const userIds = this.affectedUserIds(stationIds);
+    await this.audit.log({ actorId: user.sub, action: 'control.lock', detail: { target: dto.target, mode: dto.mode, screen: dto.screen, input: dto.input, stationIds, userIds } });
     return { ok: true, stationCount: stationIds.length };
   }
 
   @Post('unlock')
   async unlock(@Body(new ZodValidationPipe(zUnlockDto)) dto: z.infer<typeof zUnlockDto>, @CurrentUser() user: JwtPayload) {
     const stationIds = await this.resolveAndPush(dto.target, user, async (stationId) => {
-      this.locks.unlock(stationId);
+      await this.locks.unlock(stationId);
     });
-    await this.audit.log({ actorId: user.sub, action: 'control.unlock', detail: { target: dto.target, stationIds } });
+    // Unlock doesn't touch seat occupancy, so this is just as accurate
+    // read after the fact as before it — same pattern as lock() above.
+    const userIds = this.affectedUserIds(stationIds);
+    await this.audit.log({ actorId: user.sub, action: 'control.unlock', detail: { target: dto.target, stationIds, userIds } });
     return { ok: true, stationCount: stationIds.length };
+  }
+
+  /** Which student(s) — if any — currently sit at these stations, for the
+   * audit log's `userIds` (falls out of LockService's own seat-occupant
+   * tracking, unaffected by the lock/unlock that just ran). */
+  private affectedUserIds(stationIds: string[]): string[] {
+    const userIds = stationIds.map((id) => this.locks.getSeatOccupant(id)).filter((id): id is string => id !== null);
+    return Array.from(new Set(userIds));
   }
 
   @Post('shutdown')
@@ -186,22 +218,99 @@ export class ControlController {
     return this.setEnabled(dto.target, false, user);
   }
 
-  /** Grants a student's screen into lab:broadcast so the whole class can
-   * see it (design doc §2.2 "promoted student's screen"). */
+  /**
+   * Spotlights a student's screen to the whole class (Ser 1 "broadcast any
+   * student's screen to others" — design doc §2.2 "promoted student's
+   * screen"). Publishes into the room the class is ALREADY in (an ADMIN's
+   * lab-wide lab:broadcast, or a TEACHER's own classBroadcastRoom — same
+   * resolution as MediaController.broadcastToken), because every signed-in
+   * student is already connected there with a live subscribe grant;
+   * minting a fresh token with a screen grant would be silently ignored —
+   * StudentConsole.reconcileRooms only ever connects to rooms it isn't
+   * already in. So the server upgrades the station's existing LiveKit
+   * publish permissions in place (MediaService.promoteScreenShare) and
+   * then tells it to actually start publishing (screen-share:set) — one
+   * without the other does nothing.
+   *
+   * One spotlight per room: promoting a second station first revokes and
+   * stops whichever one was presenting (ScreenShareService.set).
+   */
   @Post('promote-screen')
   async promoteScreen(@Body(new ZodValidationPipe(zPromoteDto)) dto: z.infer<typeof zPromoteDto>, @CurrentUser() user: JwtPayload) {
     await this.classAccess.assertCanControlStation(user, dto.stationId);
-    await this.media.promoteScreenShare(dto.room, dto.stationId);
-    await this.audit.log({ actorId: user.sub, stationId: dto.stationId, action: 'control.promote_screen', detail: { room: dto.room } });
+    const room = await this.resolveBroadcastRoom(user);
+
+    if (!(await this.media.ensureRoom(room))) {
+      throw new ServiceUnavailableException(
+        'Could not reach the class broadcast room — is the LiveKit media server running?',
+      );
+    }
+
+    const { previousStationId } = this.screenShares.set(room, dto.stationId, dto.mic);
+    if (previousStationId) {
+      await this.media.revokeScreenShare(room, previousStationId);
+      this.gateway.setScreenShare(previousStationId, { room, screen: false, mic: false });
+      await this.gateway.sendStatusRow(previousStationId);
+    }
+
+    try {
+      await this.media.promoteScreenShare(room, dto.stationId);
+    } catch {
+      // LiveKit throws if the participant isn't actually in `room` — the
+      // student isn't signed into this class, or its media connection
+      // never came up. Undo the reservation we just took so a failed
+      // promote doesn't leave a phantom presenter on the board.
+      this.screenShares.clearRoom(room);
+      throw new ConflictException(
+        "That computer isn't connected to the class yet — the student needs to be signed in.",
+      );
+    }
+
+    this.gateway.setScreenShare(dto.stationId, { room, screen: true, mic: dto.mic });
+    await this.gateway.sendStatusRow(dto.stationId);
+    await this.audit.log({ actorId: user.sub, stationId: dto.stationId, action: 'control.promote_screen', detail: { room, mic: dto.mic } });
+
+    const viewerToken = await this.media.mintToken({
+      // A distinct identity from the teacher's own `teacher:<sub>` broadcast
+      // connection (MediaController.broadcastToken) — two LiveKit
+      // connections sharing one identity in the same room evict each
+      // other, which would kill the teacher's own broadcast the instant
+      // they open this preview.
+      stationId: `teacher:${user.sub}:viewer`,
+      displayName: `Teacher (${user.serviceNumber})`,
+      room,
+      role: 'TEACHER',
+      hidden: true,
+    });
+    return { room, viewerToken };
+  }
+
+  /** Ends the spotlight — the presenting station's screen (and any
+   * presenter mic) stops publishing and its promoted permissions are
+   * revoked back to mic-only. */
+  @Post('revoke-screen')
+  async revokeScreen(@Body(new ZodValidationPipe(zRevokeDto)) dto: z.infer<typeof zRevokeDto>, @CurrentUser() user: JwtPayload) {
+    await this.classAccess.assertCanControlStation(user, dto.stationId);
+    const room = await this.resolveBroadcastRoom(user);
+    await this.media.revokeScreenShare(room, dto.stationId);
+    this.screenShares.clearByStation(dto.stationId);
+    this.gateway.setScreenShare(dto.stationId, { room, screen: false, mic: false });
+    await this.gateway.sendStatusRow(dto.stationId);
+    await this.audit.log({ actorId: user.sub, stationId: dto.stationId, action: 'control.revoke_screen', detail: { room } });
     return { ok: true };
   }
 
-  @Post('revoke-screen')
-  async revokeScreen(@Body(new ZodValidationPipe(zPromoteDto)) dto: z.infer<typeof zPromoteDto>, @CurrentUser() user: JwtPayload) {
-    await this.classAccess.assertCanControlStation(user, dto.stationId);
-    await this.media.revokeScreenShare(dto.room, dto.stationId);
-    await this.audit.log({ actorId: user.sub, stationId: dto.stationId, action: 'control.revoke_screen', detail: { room: dto.room } });
-    return { ok: true };
+  /** Same ADMIN-vs-TEACHER room resolution as MediaController.broadcastToken
+   * — kept in sync deliberately rather than shared, since the two callers
+   * (mint a viewer token vs. resolve a promote target) diverge just enough
+   * that a shared helper would need its own conditional anyway. */
+  private async resolveBroadcastRoom(user: JwtPayload): Promise<string> {
+    if (user.role === UserRole.ADMIN) return BROADCAST_ROOM;
+    const activeClass = await this.classAccess.activeClassForTeacher(user.sub);
+    if (!activeClass) {
+      throw new ConflictException('Start a class before sharing a student’s screen');
+    }
+    return classBroadcastRoom(activeClass.id);
   }
 
   /**

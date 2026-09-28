@@ -45,3 +45,17 @@ body {
     'Segoe UI',
     sans-serif;
 }
+
+/* Slide-in for ui/sheet.tsx (no tw-animate plugin in this project). */
+@keyframes sheet-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.sheet-content[data-state='open'] {
+  animation: sheet-in-left 180ms ease-out;
+}

@@ -6,6 +6,8 @@ import {
   type StartAttemptDto,
   type SubmitAttemptDto,
   type VocabularyTestConfig,
+  type WritingTestConfig,
+  countWords,
 } from '@lab/shared';
 import { getActivity } from '@lab/shared/activities';
 import { PrismaService } from '../../prisma/prisma.service';
@@ -26,7 +28,32 @@ export interface ServedItem {
 // Types startable through this module — the assessment activities.
 // Everything else (MODEL_IMITATION, ROUND_TABLE, ...) is Phase 2's live
 // ActivityInstance flow, which doesn't create Exercise/Attempt rows.
-const ATTEMPTABLE_TYPES: ActivityType[] = [ActivityType.CONTENT_EXERCISE, ActivityType.VOCABULARY_TEST, ActivityType.PRONUNCIATION];
+const ATTEMPTABLE_TYPES: ActivityType[] = [
+  ActivityType.CONTENT_EXERCISE,
+  ActivityType.VOCABULARY_TEST,
+  ActivityType.PRONUNCIATION,
+  ActivityType.PRONUNCIATION_TEST,
+  ActivityType.WRITING_TEST,
+  ActivityType.LISTENING_TEST,
+  ActivityType.READING_TEST,
+];
+
+// Teacher-controlled tests, as opposed to open practice: each can only be
+// started through the student's own Assignment and, once submitted, is
+// locked — a re-take needs the teacher to send it again. VOCABULARY_TEST is
+// deliberately not here: it stays a retryable self-paced exercise. Nor is
+// PRONUNCIATION — that stays retryable, self-rated practice; READING_TEST is
+// its one-shot, teacher-marked counterpart (see submitReadingTest).
+const ONE_SHOT_TYPES: ActivityType[] = [
+  ActivityType.PRONUNCIATION_TEST,
+  ActivityType.WRITING_TEST,
+  ActivityType.LISTENING_TEST,
+  ActivityType.READING_TEST,
+];
+
+// A writing test with no teacher-set maximum still gets a ceiling, so one
+// submit can't carry an unbounded payload.
+const DEFAULT_MAX_WORDS = 5000;
 
 /**
  * Attempts + scoring (Ser 4, Ser 5, Ser 7, Ser 10). Grading authority
@@ -49,6 +76,10 @@ export class AttemptsService {
     if (!exercise) throw new NotFoundException('Exercise not found');
     if (!ATTEMPTABLE_TYPES.includes(exercise.type)) {
       throw new BadRequestException(`${exercise.type} attempts are not started through this endpoint — it is a live-session activity`);
+    }
+
+    if (ONE_SHOT_TYPES.includes(exercise.type)) {
+      await this.assertTestStartable(studentId, exercise.id, dto.assignmentId);
     }
 
     const { maxScore, itemOrder, items } = await this.prepareServe(exercise.id, exercise.type, exercise.config);
@@ -118,26 +149,67 @@ export class AttemptsService {
    * assessment activities (Ser 10 "teacher-tailored courses"). Each
    * assignment is joined with its most recent attempt (if any) so the
    * student console can show Start / Resume / Review correctly. */
+  /**
+   * A student can now be in several classes, so each row says where it came
+   * from: `source.teacherName` always, and `source.className` when that
+   * teacher teaches exactly ONE of the student's classes — unless the
+   * assignment was created from a class (Assignment.batchId), which names it
+   * directly. Either way it is a label only and never authorises anything; a
+   * teacher who shares two classes with the student, or none any longer,
+   * leaves className null and the UI falls back to the teacher.
+   */
   async listAssignmentsForStudent(studentId: string) {
-    const assignments = await this.prisma.assignment.findMany({
-      where: { studentId },
-      include: { exercise: true },
-      orderBy: { createdAt: 'desc' },
-    });
+    const [assignments, enrollments] = await Promise.all([
+      this.prisma.assignment.findMany({
+        where: { studentId },
+        include: { exercise: true, teacher: { select: { fullName: true } }, batch: { select: { name: true } } },
+        orderBy: { createdAt: 'desc' },
+      }),
+      this.prisma.enrollment.findMany({
+        where: { userId: studentId },
+        select: { batch: { select: { name: true, teachers: { select: { teacherId: true } } } } },
+      }),
+    ]);
+    const classNameFor = (teacherId: string): string | null => {
+      const shared = enrollments.filter((e) => e.batch.teachers.some((t) => t.teacherId === teacherId));
+      return shared.length === 1 ? (shared[0]?.batch.name ?? null) : null;
+    };
+
     const results = await Promise.all(
-      assignments.map(async (a) => {
+      assignments.map(async ({ teacher, batch, ...a }) => {
         const latestAttempt = await this.prisma.attempt.findFirst({
           where: { studentId, exerciseId: a.exerciseId, assignmentId: a.id },
           orderBy: { startedAt: 'desc' },
           include: { scoreOverride: true },
         });
-        return { assignment: a, exercise: a.exercise, latestAttempt };
+        return {
+          assignment: a,
+          exercise: a.exercise,
+          latestAttempt,
+          // An assignment created from a class knows it; older ones fall back to the guess.
+          source: { teacherName: teacher.fullName, className: batch?.name ?? classNameFor(a.teacherId) },
+        };
       }),
     );
     return results;
   }
 
   // ---- Serving (start) ----------------------------------------------------
+
+  /** See ONE_SHOT_TYPES: started only through the student's own
+   * Assignment, locked once submitted — a re-take needs the teacher to
+   * send it again (a fresh Assignment). */
+  private async assertTestStartable(studentId: string, exerciseId: string, assignmentId?: string): Promise<void> {
+    if (!assignmentId) throw new BadRequestException('A test can only be started from your assignments');
+    const assignment = await this.prisma.assignment.findUnique({ where: { id: assignmentId } });
+    if (!assignment || assignment.studentId !== studentId || assignment.exerciseId !== exerciseId) {
+      throw new ForbiddenException('This test is not assigned to you');
+    }
+    const submitted = await this.prisma.attempt.count({
+      where: { assignmentId, status: { in: [AttemptStatus.SUBMITTED, AttemptStatus.SCORED] } },
+    });
+    if (submitted > 0) throw new BadRequestException('You have already submitted this test');
+  }
 
   private async prepareServe(
     exerciseId: string,
@@ -146,6 +218,51 @@ export class AttemptsService {
   ): Promise<{ maxScore: number; itemOrder: string[]; items?: ServedItem[] }> {
     if (type === ActivityType.PRONUNCIATION) return { maxScore: 5, itemOrder: [] };
     if (type === ActivityType.CONTENT_EXERCISE) return { maxScore: 100, itemOrder: [] };
+
+    if (type === ActivityType.PRONUNCIATION_TEST || type === ActivityType.WRITING_TEST || type === ActivityType.READING_TEST) {
+      // Words (or the writing prompt / reading passage) are served in the
+      // teacher's authored order (no shuffling — the teacher reads them back
+      // in that order when grading). Model audio is fetched on demand via
+      // /pronunciation/speak, never carried as a mediaAssetId here — except
+      // for a reading test, where mediaAssetId instead means the teacher's
+      // uploaded PDF (there is no per-item audio for this type, so the
+      // field can't be ambiguous between the two).
+      const bank = await this.prisma.itemBank.findUnique({
+        where: { exerciseId },
+        include: { items: { orderBy: { order: 'asc' } } },
+      });
+      if (!bank || bank.items.length === 0) {
+        throw new BadRequestException(
+          type === ActivityType.WRITING_TEST ? 'This test has no prompt' : type === ActivityType.READING_TEST ? 'This test has no passage' : 'This test has no words',
+        );
+      }
+      return {
+        maxScore: 100,
+        itemOrder: bank.items.map((i) => i.id),
+        items: bank.items.map((i) => ({
+          id: i.id,
+          prompt: i.prompt,
+          choices: [],
+          mediaAssetId: type === ActivityType.READING_TEST ? (i.mediaAssetId ?? undefined) : undefined,
+        })),
+      };
+    }
+
+    if (type === ActivityType.LISTENING_TEST) {
+      // Questions follow the audio, so they keep the teacher's order; only
+      // each question's choices are shuffled (see shuffleChoices). The clip
+      // itself is in the exercise config, not per item.
+      const bank = await this.prisma.itemBank.findUnique({
+        where: { exerciseId },
+        include: { items: { orderBy: { order: 'asc' } } },
+      });
+      if (!bank || bank.items.length === 0) throw new BadRequestException('This test has no questions');
+      return {
+        maxScore: 100,
+        itemOrder: bank.items.map((i) => i.id),
+        items: bank.items.map((i) => ({ id: i.id, prompt: i.prompt, choices: shuffleChoices(i.choices) })),
+      };
+    }
 
     // VOCABULARY_TEST
     const cfg = config as VocabularyTestConfig;
@@ -157,7 +274,7 @@ export class AttemptsService {
       return {
         maxScore: 100,
         itemOrder: sampled.map((i) => i.id),
-        items: sampled.map((i) => ({ id: i.id, prompt: i.prompt, choices: i.choices, mediaAssetId: i.mediaAssetId ?? undefined })),
+        items: sampled.map((i) => ({ id: i.id, prompt: i.prompt, choices: shuffleChoices(i.choices), mediaAssetId: i.mediaAssetId ?? undefined })),
       };
     }
 
@@ -189,20 +306,145 @@ export class AttemptsService {
     }
 
     if (exercise.type === ActivityType.PRONUNCIATION) {
-      const r = response as { selfAssessedScore?: number };
-      // Awaits a teacher's assessment (via the gradebook's ScoreOverride —
-      // "oldScore: null" legitimately means "first score", not "editing a
-      // machine score") rather than auto-scoring off a self-rating.
-      return { rawScore: r.selfAssessedScore ?? null, status: AttemptStatus.SUBMITTED };
+      return this.submitPronunciation(attempt, response as { studentAudioAssetId: string; selfAssessedScore?: number });
+    }
+
+    if (exercise.type === ActivityType.PRONUNCIATION_TEST) {
+      return this.submitPronunciationTest(attempt, itemResponses);
+    }
+
+    if (exercise.type === ActivityType.WRITING_TEST) {
+      return this.submitWritingTest(attempt, exercise.config as WritingTestConfig, itemResponses);
+    }
+
+    if (exercise.type === ActivityType.READING_TEST) {
+      return this.submitReadingTest(attempt, response as { studentAudioAssetId: string });
+    }
+
+    // A listening test is graded exactly like a bank-mode vocabulary test:
+    // each question against its stored answer.
+    if (exercise.type === ActivityType.LISTENING_TEST) {
+      return this.scoreVocabularyTest(attempt, {}, itemResponses);
     }
 
     // VOCABULARY_TEST
     return this.scoreVocabularyTest(attempt, exercise.config as VocabularyTestConfig, itemResponses);
   }
 
+  /** No score yet — a teacher marks the essay later
+   * (AssessmentsService.grade). The server, not the client, is the
+   * authority on the word limits: the student console's counter is only a
+   * convenience. */
+  private async submitWritingTest(
+    attempt: { id: string; itemOrder: string[] },
+    config: WritingTestConfig,
+    itemResponses: ItemResponseDto[],
+  ): Promise<{ rawScore: number | null; status: string }> {
+    const givenByItemId = new Map(itemResponses.map((r) => [r.itemId, r.given]));
+    const minWords = config.minWords ?? 1;
+    const maxWords = config.maxWords ?? DEFAULT_MAX_WORDS;
+
+    const rows = attempt.itemOrder.map((itemId, order) => ({
+      attemptId: attempt.id,
+      itemId,
+      given: (givenByItemId.get(itemId) ?? '').trim(),
+      order,
+    }));
+    for (const row of rows) {
+      const words = countWords(row.given);
+      if (words === 0) throw new BadRequestException('Write your answer before submitting');
+      if (words < minWords) throw new BadRequestException(`Too short — write at least ${minWords} words (you have ${words})`);
+      if (words > maxWords) throw new BadRequestException(`Too long — write at most ${maxWords} words (you have ${words})`);
+    }
+
+    await this.prisma.itemResponse.createMany({ data: rows });
+    return { rawScore: null, status: AttemptStatus.SUBMITTED };
+  }
+
+  /** The student can re-record (Improvise) any number of times before
+   * submitting, so this asserts the CLAIMED take is a finished recording of
+   * THIS attempt — ActivityRecorder.stop() only logs a failed upload, so
+   * without this a student could submit a take that never arrived. Shared
+   * by submitPronunciation and submitReadingTest. */
+  private async assertReadyTake(attemptId: string, recordingId: string): Promise<void> {
+    const recording = await this.prisma.recording.findUnique({
+      where: { id: recordingId },
+      select: { attemptId: true, status: true },
+    });
+    if (!recording || recording.attemptId !== attemptId || recording.status !== 'ready') {
+      throw new BadRequestException('Your recording did not finish uploading — record it again before submitting');
+    }
+  }
+
+  /** Awaits a teacher's assessment (via the gradebook's ScoreOverride —
+   * "oldScore: null" legitimately means "first score", not "editing a
+   * machine score") rather than auto-scoring off a self-rating. */
+  private async submitPronunciation(
+    attempt: { id: string },
+    response: { studentAudioAssetId: string },
+  ): Promise<{ rawScore: number | null; status: string }> {
+    await this.assertReadyTake(attempt.id, response.studentAudioAssetId);
+    const r = response as { selfAssessedScore?: number };
+    return { rawScore: r.selfAssessedScore ?? null, status: AttemptStatus.SUBMITTED };
+  }
+
+  /** No score yet — a teacher marks the recording later
+   * (AssessmentsService.grade), same as a writing test's essay. The
+   * passage is served as this attempt's one item (itemOrder[0]), so the
+   * recording id is stored against that item's id — never trusting the
+   * client to name it — and the teacher's results page finds it the same
+   * way it finds a written essay. */
+  private async submitReadingTest(
+    attempt: { id: string; itemOrder: string[] },
+    response: { studentAudioAssetId: string },
+  ): Promise<{ rawScore: number | null; status: string }> {
+    await this.assertReadyTake(attempt.id, response.studentAudioAssetId);
+    const itemId = attempt.itemOrder[0];
+    if (!itemId) throw new BadRequestException('This test has no passage');
+    await this.prisma.itemResponse.createMany({
+      data: [{ attemptId: attempt.id, itemId, given: response.studentAudioAssetId, order: 0 }],
+    });
+    return { rawScore: null, status: AttemptStatus.SUBMITTED };
+  }
+
+  /** No score yet — a teacher rates each word later (PronunciationTestsService.grade).
+   * What the server can and must check here is that every word actually
+   * has its own finished recording of THIS attempt: ActivityRecorder.stop()
+   * only logs a failed upload, so without this a student could submit a
+   * test whose audio never arrived. */
+  private async submitPronunciationTest(
+    attempt: { id: string; itemOrder: string[] },
+    itemResponses: ItemResponseDto[],
+  ): Promise<{ rawScore: number | null; status: string }> {
+    const recordingByItemId = new Map(itemResponses.map((r) => [r.itemId, r.given]));
+    const claimed = attempt.itemOrder.map((itemId) => recordingByItemId.get(itemId));
+
+    const ready = await this.prisma.recording.findMany({
+      where: { id: { in: claimed.filter((id): id is string => Boolean(id)) }, attemptId: attempt.id, status: 'ready' },
+      select: { id: true },
+    });
+    const readyIds = new Set(ready.map((r) => r.id));
+    const missingItemIds = attempt.itemOrder.filter((_, i) => !claimed[i] || !readyIds.has(claimed[i]!));
+    if (missingItemIds.length > 0) {
+      const words = await this.prisma.item.findMany({ where: { id: { in: missingItemIds } }, select: { id: true, prompt: true } });
+      const promptById = new Map(words.map((w) => [w.id, w.prompt]));
+      throw new BadRequestException(
+        `Record every word before submitting — missing: ${missingItemIds.map((id) => promptById.get(id) ?? id).join(', ')}`,
+      );
+    }
+    if (new Set(claimed).size !== claimed.length) {
+      throw new BadRequestException('Each word needs its own recording');
+    }
+
+    await this.prisma.itemResponse.createMany({
+      data: attempt.itemOrder.map((itemId, order) => ({ attemptId: attempt.id, itemId, given: recordingByItemId.get(itemId)!, order })),
+    });
+    return { rawScore: null, status: AttemptStatus.SUBMITTED };
+  }
+
   private async scoreVocabularyTest(
     attempt: { id: string; itemOrder: string[] },
-    config: VocabularyTestConfig,
+    config: Pick<VocabularyTestConfig, 'items'>,
     itemResponses: ItemResponseDto[],
   ): Promise<{ rawScore: number; status: string }> {
     if (attempt.itemOrder.length === 0) return { rawScore: 0, status: AttemptStatus.SCORED };
@@ -245,7 +487,14 @@ export class AttemptsService {
   }
 
   private async recordSkillProgress(studentId: string, type: ActivityType, rawScore: number, maxScore: number): Promise<void> {
-    const skill = type === ActivityType.VOCABULARY_TEST ? 'vocabulary' : type === ActivityType.PRONUNCIATION ? 'pronunciation' : 'reading';
+    const skill =
+      type === ActivityType.VOCABULARY_TEST
+        ? 'vocabulary'
+        : type === ActivityType.PRONUNCIATION
+          ? 'pronunciation'
+          : type === ActivityType.LISTENING_TEST
+            ? 'listening'
+            : 'reading';
     const percentage = maxScore > 0 ? (rawScore / maxScore) * 100 : 0;
     await this.prisma.skillProgress.create({ data: { studentId, skill, score: percentage } });
   }
@@ -258,6 +507,13 @@ function shuffle<T>(arr: T[]): T[] {
     [copy[i], copy[j]] = [copy[j]!, copy[i]!];
   }
   return copy;
+}
+
+/** MCQ choices are stored answer-first (see parseWordListText), so serving
+ * them as stored would hand every student the correct answer in slot one.
+ * Free-response items have no choices and pass through untouched. */
+function shuffleChoices(choices: string[]): string[] {
+  return choices.length > 1 ? shuffle(choices) : choices;
 }
 
 function normalize(s: string): string {

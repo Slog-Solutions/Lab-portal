@@ -1,42 +1,11 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import type { StationControlClient } from '../../lib/station-control-client';
 import { stationApi, type StartedAttempt } from '../../lib/station-api';
-import { getRuntimeConfig } from '../../lib/runtime-config';
+import { ItemAudio } from './ItemAudio';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
-
-/** Listening-skill items (Ser 10's "four key skills") carry a MediaAsset
- * id (attempts.service.ts's ServedItem, Phase 4) — <audio src> can't
- * carry an Authorization header, so this fetches the same way every other
- * authenticated player asset does (PronunciationPlayer's fetchAsObjectUrl). */
-function ItemAudio({ assetId, token }: { assetId: string; token: string | null }) {
-  const [url, setUrl] = useState<string | null>(null);
-  useEffect(() => {
-    const { serverUrl } = getRuntimeConfig();
-    let objectUrl: string | null = null;
-    let cancelled = false;
-    fetch(`${serverUrl}/api/media-assets/${assetId}/file`, { headers: token ? { Authorization: `Bearer ${token}` } : {} })
-      .then((res) => {
-        if (!res.ok) throw new Error(`Failed to load audio (${res.status})`);
-        return res.blob();
-      })
-      .then((blob) => {
-        if (cancelled) return;
-        objectUrl = URL.createObjectURL(blob);
-        setUrl(objectUrl);
-      })
-      .catch(() => setUrl(null));
-    return () => {
-      cancelled = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
-    };
-  }, [assetId, token]);
-
-  if (!url) return null;
-  return <audio controls src={url} className="w-full" />;
-}
 
 /**
  * Ser 5 "Vocabulary Test" — manual entry or ItemBank-backed (Ser 10

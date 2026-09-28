@@ -2,8 +2,7 @@ import { NavLink, Outlet } from 'react-router-dom';
 import {
   LayoutDashboard,
   Users2,
-  FolderOpen,
-  BookOpen,
+  // BookOpen, // only used by the commented-out Exercises link below
   GraduationCap,
   ClipboardList,
   FileBarChart,
@@ -11,20 +10,31 @@ import {
   Building2,
   UserCog,
   Mic,
+  ClipboardCheck,
+  School,
 } from 'lucide-react';
 import { useAuthStore } from '../stores/auth-store';
+import { ASSIGNMENT_KINDS } from '../features/assignments/assignment-kinds';
 import { cn } from '@/lib/utils';
 
 const NAV = [
   { to: '/dashboard', label: 'Lab Control', icon: LayoutDashboard },
+  // Teachers create and run their own classes here; an ADMIN uses the
+  // Batches pages instead (see router.tsx), so it is hidden for them.
+  { to: '/classes', label: 'My Classes', icon: School, teacherOnly: true },
   { to: '/sessions', label: 'Sessions', icon: Users2 },
-  { to: '/media', label: 'Media Library', icon: FolderOpen },
-  { to: '/exercises', label: 'Exercises', icon: BookOpen },
+  // { to: '/exercises', label: 'Exercises', icon: BookOpen },
   { to: '/pronunciation', label: 'Pronunciation', icon: Mic },
+  // { to: '/pronunciation-tests', label: 'Pronunciation Tests', icon: ClipboardCheck },
   { to: '/study-library', label: 'Study Library', icon: GraduationCap },
   { to: '/gradebook', label: 'Gradebook', icon: ClipboardList },
   { to: '/reports', label: 'Reports', icon: FileBarChart },
 ];
+
+// "Create Assignment" section — one link per assignment type, for both
+// TEACHER and ADMIN. A results page (/assignments/<slug>/<id>) sits under
+// its type's link, so NavLink's prefix match keeps the right one highlighted.
+const ASSIGNMENT_NAV = ASSIGNMENT_KINDS.map(({ slug, label, icon }) => ({ to: `/assignments/${slug}`, label, icon }));
 
 // ADMIN-only (server-enforced too — UsersController/BatchesController's
 // write routes are ADMIN-only). Kept as a second group with its own
@@ -60,7 +70,14 @@ export function TeacherLayout() {
           <p className="text-xs text-muted-foreground">{user?.fullName}</p>
         </div>
         <nav className="flex-1 space-y-1 p-2">
-          {NAV.map(({ to, label, icon: Icon }) => (
+          {NAV.filter((item) => !item.teacherOnly || !isAdmin).map(({ to, label, icon: Icon }) => (
+            <NavLink key={to} to={to} className={navLinkClassName}>
+              <Icon className="h-4 w-4" />
+              {label}
+            </NavLink>
+          ))}
+          <p className="px-3 pb-1 pt-4 text-xs font-semibold uppercase tracking-wide text-muted-foreground">Create Assignment</p>
+          {ASSIGNMENT_NAV.map(({ to, label, icon: Icon }) => (
             <NavLink key={to} to={to} className={navLinkClassName}>
               <Icon className="h-4 w-4" />
               {label}

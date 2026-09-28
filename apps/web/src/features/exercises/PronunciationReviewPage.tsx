@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { ArrowLeft, Mic, Volume2, Star, CheckCircle2, PlayCircle, Loader2, AlertTriangle } from 'lucide-react';
 import { exercisesApi } from '../../lib/exercises-api';
 import { gradebookApi, type AttemptRow } from '../../lib/gradebook-api';
+import { pronunciationApi, base64ToAudioUrl } from '../../lib/pronunciation-api';
 import { queryKeys } from '../../lib/query-keys';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,6 +20,17 @@ interface PronunciationConfig {
   voice: 'en_US' | 'en_GB';
   ipaAssetId?: string;
   modelAudioAssetId?: string;
+}
+
+/** The student's 1-5 self-rating. There is no separate selfAssessedScore
+ * field anywhere in the API — AttemptsService.submitPronunciation stores it
+ * straight into Attempt.rawScore on the activity's native 0-5 scale (see
+ * schema.prisma's Attempt comment), so it only reads as a self-score before
+ * a teacher's ScoreOverride replaces rawScore with a 0-100 value. */
+function selfScoreOf(attempt: AttemptRow): number | null {
+  if (attempt.scoreOverride) return null;
+  if (attempt.rawScore === null || attempt.maxScore !== 5) return null;
+  return attempt.rawScore;
 }
 
 /** Attempt detail view used in the inline review dialog. Shows student
@@ -49,17 +61,19 @@ function AttemptReviewDialog({
       setAudioUrl(null);
     }
 
-    const cfg = attempt as AttemptRow & { config?: Record<string, unknown> };
-
     // First try loading the full attempt details to find recordings
     setAudioLoading(true);
     gradebookApi
       .getAttempt(attempt.id)
       .then((full: unknown) => {
         const f = full as {
-          recordings?: Array<{ id: string }>;
+          // Server orders these newest-first (gradebook.service.ts's
+          // getAttempt) — a student can Improvise (re-record) any number
+          // of times before submitting, so the newest READY one is the
+          // take that was actually submitted, not necessarily [0].
+          recordings?: Array<{ id: string; status: string }>;
         };
-        const recordingId = f.recordings?.[0]?.id;
+        const recordingId = f.recordings?.find((r) => r.status === 'ready')?.id;
         if (!recordingId) {
           setAudioLoading(false);
           return;
@@ -106,8 +120,7 @@ function AttemptReviewDialog({
 
   if (!attempt) return null;
 
-  const selfScore =
-    (attempt as AttemptRow & { selfAssessedScore?: number }).selfAssessedScore ?? null;
+  const selfScore = selfScoreOf(attempt);
   const existingOverride = attempt.scoreOverride;
 
   return (
@@ -233,7 +246,17 @@ export function PronunciationReviewPage() {
     enabled: Boolean(id),
   });
 
-  // Load model audio + IPA for preview in the header
+  const { data: assignments } = useQuery({
+    queryKey: queryKeys.gradebookAssignments({ exerciseId: id }),
+    queryFn: () => gradebookApi.listAssignments({ exerciseId: id! }),
+    enabled: Boolean(id),
+  });
+
+  // Load model audio + IPA for preview in the header. Most exercises now
+  // come from the one-step form (PronunciationAuthoringPage), which never
+  // pre-generates these — so absent both asset ids, fall back to the same
+  // on-demand pipeline the student's "Listen to pronunciation" button uses,
+  // rather than showing an empty preview.
   useEffect(() => {
     if (!exercise) return;
     const cfg = exercise.config as Partial<PronunciationConfig>;
@@ -256,6 +279,21 @@ export function PronunciationReviewPage() {
         .catch(() => setModelAudioUrl(null));
     }
 
+    if (!cfg.ipaAssetId && !cfg.modelAudioAssetId && cfg.sourceText) {
+      pronunciationApi
+        .speak(cfg.sourceText, cfg.voice ?? 'en_GB')
+        .then((res) => {
+          if (res.ipa) setIpaText(res.ipa);
+          if (res.audioBase64) {
+            if (modelUrlRef.current) URL.revokeObjectURL(modelUrlRef.current);
+            const url = base64ToAudioUrl(res.audioBase64);
+            modelUrlRef.current = url;
+            setModelAudioUrl(url);
+          }
+        })
+        .catch(() => void 0); // preview is a nicety — grading doesn't depend on it
+    }
+
     return () => {
       if (modelUrlRef.current) URL.revokeObjectURL(modelUrlRef.current);
     };
@@ -272,6 +310,8 @@ export function PronunciationReviewPage() {
   const cfg = exercise.config as PronunciationConfig;
   const submittedAttempts = attempts?.filter((a) => a.status !== 'IN_PROGRESS') ?? [];
   const scoredCount = submittedAttempts.filter((a) => a.status === 'SCORED').length;
+  const submittedStudentIds = new Set(submittedAttempts.map((a) => a.studentId));
+  const notYetSubmitted = (assignments ?? []).filter((a) => !submittedStudentIds.has(a.studentId));
 
   return (
     <div className="space-y-6">
@@ -331,6 +371,23 @@ export function PronunciationReviewPage() {
         </CardContent>
       </Card>
 
+      {/* ── Assigned but not yet answered ────────────────────────────── */}
+      {notYetSubmitted.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Waiting on {notYetSubmitted.length} {notYetSubmitted.length === 1 ? 'student' : 'students'}</CardTitle>
+          </CardHeader>
+          <CardContent className="flex flex-wrap gap-2">
+            {notYetSubmitted.map((a) => (
+              <Badge key={a.id} variant="secondary" className="text-xs">
+                {a.student.fullName}
+                {a.dueAt && ` · due ${new Date(a.dueAt).toLocaleDateString()}`}
+              </Badge>
+            ))}
+          </CardContent>
+        </Card>
+      )}
+
       {/* ── Attempts table ─────────────────────────────────────────────── */}
       <Card>
         <CardHeader>
@@ -366,7 +423,7 @@ export function PronunciationReviewPage() {
               </TableHeader>
               <TableBody>
                 {submittedAttempts.map((a) => {
-                  const selfScoreRaw = (a as AttemptRow & { selfAssessedScore?: number }).selfAssessedScore;
+                  const selfScoreRaw = selfScoreOf(a);
                   const teacherScore = a.scoreOverride?.newScore;
                   return (
                     <TableRow key={a.id}>

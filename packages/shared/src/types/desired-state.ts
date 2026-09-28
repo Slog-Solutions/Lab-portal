@@ -1,5 +1,6 @@
 import type { ActivityType, CommandType, SessionRole } from './enums.js';
 import type { CommandTarget, StationMediaGrant } from './station.js';
+import type { RoundTableView } from './round-table.js';
 
 /**
  * Declarative, reconciled state (design doc §4.3). The server pushes a
@@ -26,6 +27,10 @@ export interface DesiredStationState {
      * so the station can tell "still the same lock" from "a brand new
      * Lock" apart (see WorkstationLockController.apply). */
     id: string;
+    /** 'soft'    = app overlay + OS input suppression; the teacher's Unlock releases it.
+     *  'windows' = real LockWorkStation; only the student's Windows password releases it.
+     *  Absent on a snapshot from an older server → treat as 'soft'. */
+    mode?: 'soft' | 'windows';
     screen: boolean;
     input: boolean;
     message?: string;
@@ -41,6 +46,10 @@ export interface DesiredStationState {
   /** Mirrors StationStatusRow.liveClass — lets the student console show
    * "Class: {title} · {teacherName}" without a separate fetch. */
   liveClass: { id: string; title: string; teacherName: string } | null;
+  /** Ser 3: floor, queue and roster for a station in a Round Table group.
+   * Absent for other stations and for an older server. A reconnecting
+   * station renders purely from this — no recovery code. */
+  roundTable?: RoundTableView | null;
 }
 
 export function emptyDesiredState(seq = 0): DesiredStationState {

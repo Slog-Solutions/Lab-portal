@@ -7,7 +7,9 @@ import { PresenceService } from './presence.service';
 import { SessionStateService } from './session-state.service';
 import { LockService } from './lock.service';
 import { RemoteControlSessionService } from './remote-control-session.service';
+import { ScreenShareService } from './screen-share.service';
 import { CommandsService } from './commands.service';
+import { RoundTableFloorStore } from './round-table-floor.store';
 import { StationsModule } from '../stations/stations.module';
 import { MediaModule } from '../media/media.module';
 import { AuthModule } from '../auth/auth.module';
@@ -29,7 +31,25 @@ import { ClassAccessModule } from '../classroom/class-access.module';
     }),
   ],
   controllers: [ControlController],
-  providers: [ControlGateway, PresenceService, SessionStateService, LockService, RemoteControlSessionService, CommandsService],
-  exports: [PresenceService, SessionStateService, LockService, RemoteControlSessionService, CommandsService, ControlGateway],
+  providers: [
+    ControlGateway,
+    PresenceService,
+    SessionStateService,
+    LockService,
+    RemoteControlSessionService,
+    ScreenShareService,
+    CommandsService,
+    RoundTableFloorStore,
+  ],
+  exports: [
+    PresenceService,
+    SessionStateService,
+    LockService,
+    RemoteControlSessionService,
+    ScreenShareService,
+    CommandsService,
+    ControlGateway,
+    RoundTableFloorStore,
+  ],
 })
 export class ControlModule {}

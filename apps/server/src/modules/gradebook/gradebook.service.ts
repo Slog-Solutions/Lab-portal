@@ -1,7 +1,9 @@
-import { Injectable, NotFoundException } from '@nestjs/common';
-import { AttemptStatus, type AssignmentDto, type ScoreOverrideDto } from '@lab/shared';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { AttemptStatus, UserRole, type AssignmentDto, type ScoreOverrideDto } from '@lab/shared';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import type { JwtPayload } from '../auth/auth.service';
+import { BatchAccessService } from '../batches/batch-access.service';
 
 /**
  * Ser 4 "report tool: view, edit and save scores" + Ser 10 "teacher-
@@ -17,28 +19,78 @@ export class GradebookService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly audit: AuditService,
+    private readonly batchAccess: BatchAccessService,
   ) {}
 
   /** Fan-out create: one Assignment row per (student, exercise) pair —
-   * Ser 10 "set hours... specify the score for students to attain". */
-  async createAssignments(teacherId: string, dto: AssignmentDto) {
-    const rows = dto.studentIds.flatMap((studentId) =>
-      dto.exerciseIds.map((exerciseId) => ({
-        teacherId,
-        studentId,
-        exerciseId,
-        targetScore: dto.targetScore,
-        allocatedHours: dto.allocatedHours,
-        dueAt: dto.dueAt,
-      })),
+   * Ser 10 "set hours... specify the score for students to attain". A pair
+   * that already has an outstanding (not yet submitted) assignment is
+   * skipped rather than duplicated — re-clicking Assign shouldn't pile up
+   * identical rows in the student's list. A pair whose prior assignment
+   * WAS submitted/scored still gets a fresh row: that's the documented
+   * "send again = a new attempt" re-take path (see PronunciationTestResultsPage's
+   * "Send to more students"). */
+  async createAssignments(user: JwtPayload, dto: AssignmentDto) {
+    const teacherId = user.sub;
+    const studentIds = [...new Set(dto.studentIds)];
+    const students = await this.prisma.user.findMany({
+      where: { id: { in: studentIds }, role: UserRole.STUDENT, active: true },
+      select: { id: true },
+    });
+    if (students.length !== studentIds.length) {
+      const found = new Set(students.map((s) => s.id));
+      throw new BadRequestException(`Not active students: ${studentIds.filter((id) => !found.has(id)).join(', ')}`);
+    }
+
+    if (dto.batchId) await this.assertClassRoster(user, dto.batchId, studentIds);
+
+    const existing = await this.prisma.assignment.findMany({
+      where: { studentId: { in: studentIds }, exerciseId: { in: dto.exerciseIds } },
+      select: {
+        studentId: true,
+        exerciseId: true,
+        attempts: { select: { status: true } },
+      },
+    });
+    const hasOutstanding = new Set(
+      existing
+        .filter((a) => !a.attempts.some((t) => t.status === AttemptStatus.SUBMITTED || t.status === AttemptStatus.SCORED))
+        .map((a) => `${a.studentId}:${a.exerciseId}`),
     );
-    await this.prisma.assignment.createMany({ data: rows });
+
+    const rows = studentIds.flatMap((studentId) =>
+      dto.exerciseIds
+        .filter((exerciseId) => !hasOutstanding.has(`${studentId}:${exerciseId}`))
+        .map((exerciseId) => ({
+          teacherId,
+          studentId,
+          exerciseId,
+          targetScore: dto.targetScore,
+          allocatedHours: dto.allocatedHours,
+          dueAt: dto.dueAt,
+          batchId: dto.batchId,
+        })),
+    );
+    const skipped = studentIds.length * dto.exerciseIds.length - rows.length;
+
+    if (rows.length > 0) await this.prisma.assignment.createMany({ data: rows });
     await this.audit.log({
       actorId: teacherId,
       action: 'assignment.create',
-      detail: { studentCount: dto.studentIds.length, exerciseCount: dto.exerciseIds.length },
+      detail: { studentCount: studentIds.length, exerciseCount: dto.exerciseIds.length, created: rows.length, skipped },
     });
-    return { created: rows.length };
+    return { created: rows.length, skipped };
+  }
+
+  /** An assignment created from a class is filed under it for the
+   * students' class history, so the teacher must teach that class and
+   * every student must be in it — same check as AssessmentsService's. */
+  private async assertClassRoster(user: JwtPayload, batchId: string, studentIds: string[]): Promise<void> {
+    await this.batchAccess.assertCanUseBatch(user, batchId);
+    const enrolled = await this.prisma.enrollment.count({ where: { batchId, userId: { in: studentIds } } });
+    if (enrolled !== studentIds.length) {
+      throw new BadRequestException('Some of these students are not in this class');
+    }
   }
 
   async listAssignments(filter: { studentId?: string; exerciseId?: string }) {
@@ -69,7 +121,10 @@ export class GradebookService {
         student: { select: { id: true, fullName: true, serviceNumber: true } },
         itemResponses: { include: { item: true }, orderBy: { order: 'asc' } },
         scoreOverride: true,
-        recordings: true,
+        // Newest first: a student can re-record (Improvise) before
+        // submitting, leaving several takes on one attempt — the newest
+        // *ready* one is the take that was actually submitted.
+        recordings: { orderBy: { createdAt: 'desc' } },
       },
     });
     if (!attempt) throw new NotFoundException('Attempt not found');

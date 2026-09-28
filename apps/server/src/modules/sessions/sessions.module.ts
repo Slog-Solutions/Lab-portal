@@ -5,9 +5,10 @@ import { MediaModule } from '../media/media.module';
 import { ControlModule } from '../control/control.module';
 import { BatchesModule } from '../batches/batches.module';
 import { ClassAccessModule } from '../classroom/class-access.module';
+import { RoundTableModule } from '../round-table/round-table.module';
 
 @Module({
-  imports: [MediaModule, ControlModule, BatchesModule, ClassAccessModule],
+  imports: [MediaModule, ControlModule, BatchesModule, ClassAccessModule, RoundTableModule],
   controllers: [SessionsController],
   providers: [SessionsService],
   exports: [SessionsService],

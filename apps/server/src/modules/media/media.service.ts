@@ -1,6 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { AccessToken, RoomServiceClient, TrackSource } from 'livekit-server-sdk';
+import { AccessToken, RoomServiceClient, TrackSource, TrackType, type ParticipantInfo } from 'livekit-server-sdk';
 import { BROADCAST_ROOM } from '@lab/shared/events';
 import type { EnvConfig } from '../../config/env.validation';
 
@@ -167,11 +167,30 @@ export class MediaService {
     room: string;
     canPublishMic: boolean;
   }): Promise<string> {
+    return this.mintMicGatedToken({ ...params, role: 'STUDENT' });
+  }
+
+  /**
+   * A subscribe-everything token whose mic-publish right is decided by the
+   * caller. Used where the SERVER, not the client, owns who may talk: the
+   * interpreting room (role-based) and Round Table (floor-based, see
+   * RoundTableService — those tokens are minted with canPublishMic:false
+   * and the floor service grants the right in place with setMicPermission,
+   * so a reconnect can never briefly hand a member an open mic). Never
+   * hidden: monitoring is never silent (Round Table spec D4).
+   */
+  async mintMicGatedToken(params: {
+    stationId: string;
+    displayName: string;
+    room: string;
+    canPublishMic: boolean;
+    role: StationMediaRole;
+  }): Promise<string> {
     const at = new AccessToken(this.apiKey, this.apiSecret, {
       identity: `st:${params.stationId}`,
       name: params.displayName,
       ttl: '4h',
-      metadata: JSON.stringify({ role: 'STUDENT' }),
+      metadata: JSON.stringify({ role: params.role }),
     });
     at.addGrant({
       roomJoin: true,
@@ -183,6 +202,52 @@ export class MediaService {
       canUpdateOwnMetadata: false,
     });
     return at.toJwt();
+  }
+
+  /**
+   * Changes one participant's mic-publish right in place. updateParticipant
+   * REPLACES the whole permission set, so every field a mic-gated token
+   * grants is passed again (leaving canPublishData out would silently
+   * reset it). Revoking canPublish makes LiveKit unpublish the track
+   * server-side — that is what actually silences the seat.
+   */
+  async setMicPermission(room: string, identity: string, allowed: boolean): Promise<void> {
+    await this.roomService.updateParticipant(room, identity, undefined, {
+      canPublish: allowed,
+      canPublishSources: allowed ? [TrackSource.MICROPHONE] : [],
+      canSubscribe: true,
+      canPublishData: true,
+    });
+  }
+
+  /** Throws if LiveKit is unreachable; a missing room reads as empty. */
+  async listParticipants(room: string): Promise<ParticipantInfo[]> {
+    try {
+      return await this.roomService.listParticipants(room);
+    } catch (err) {
+      if (/not found|does not exist/i.test((err as Error).message)) return [];
+      throw err;
+    }
+  }
+
+  async removeParticipant(room: string, identity: string): Promise<void> {
+    try {
+      await this.roomService.removeParticipant(room, identity);
+    } catch (err) {
+      this.logger.debug(`removeParticipant(${room}, ${identity}) failed (may already be gone): ${(err as Error).message}`);
+    }
+  }
+
+  /** Server-side mute of every published mic track this participant has. */
+  async muteMicTracks(room: string, participant: ParticipantInfo): Promise<void> {
+    for (const track of participant.tracks) {
+      if (track.type !== TrackType.AUDIO || track.muted) continue;
+      try {
+        await this.roomService.mutePublishedTrack(room, participant.identity, track.sid, true);
+      } catch (err) {
+        this.logger.debug(`mutePublishedTrack failed for ${participant.identity}: ${(err as Error).message}`);
+      }
+    }
   }
 
   /** Server-granted screen-share promotion (design doc §2.2) — revoking

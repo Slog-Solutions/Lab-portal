@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Link } from 'react-router-dom';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { seatLabel, type StationStatusRow } from '@lab/shared';
 import { apiFetch } from '../../lib/api-client';
@@ -10,6 +10,8 @@ import { getControlSocket } from '../../lib/socket-client';
 import { useAuthStore } from '../../stores/auth-store';
 import { BroadcastPanel } from '../teacher/BroadcastPanel';
 import { RemoteControlView } from '../teacher/RemoteControlView';
+import { ScreenSpotlightPanel } from '../teacher/ScreenSpotlightPanel';
+import { SessionList } from '../teacher/sessions/SessionList';
 
 const TOTAL_SEATS = 41; // Annexure-I: 1 teacher + 40 student stations
 
@@ -21,6 +23,7 @@ const TOTAL_SEATS = 41; // Annexure-I: 1 teacher + 40 student stations
  * this session into something a teacher can actually operate.
  */
 export function StatusBoardPage() {
+  const navigate = useNavigate();
   const user = useAuthStore((s) => s.user);
   const { data: initial, refetch } = useQuery({
     queryKey: ['stations', 'status-board'],
@@ -40,6 +43,12 @@ export function StatusBoardPage() {
   const [lastAction, setLastAction] = useState<string | null>(null);
   const [remoteControlTarget, setRemoteControlTarget] = useState<string | null>(null);
   const [assigningId, setAssigningId] = useState<string | null>(null);
+  // Ser 1 "broadcast any student's screen to others" — the teacher's own
+  // preview of whichever seat is currently spotlighted. Independent of
+  // `selected`/SeatDetailPanel: the panel stays open (and the spotlight
+  // stays live for the class) even if the teacher deselects the seat or
+  // clicks elsewhere on the board.
+  const [spotlight, setSpotlight] = useState<{ stationId: string; room: string; viewerToken: string; mic: boolean } | null>(null);
 
   useEffect(() => {
     if (!initial) return;
@@ -79,6 +88,16 @@ export function StatusBoardPage() {
 
   const selectedIds = useMemo(() => Array.from(selected), [selected]);
   const target = { kind: 'stations' as const, stationIds: selectedIds };
+  // Exclude the teacher seat (seatNo 1) from destructive input-lock actions
+  // so the teacher can't freeze their own mouse and lose the ability to
+  // click Unlock. Uses the same filter as handleCreateActivity.
+  const studentTarget = useMemo(
+    () => ({ kind: 'stations' as const, stationIds: selectedIds.filter((id) => {
+      const seatNo = rows.get(id)?.seatNo;
+      return seatNo != null && seatNo !== 1;
+    }) }),
+    [selectedIds, rows],
+  );
 
   async function handleAssignSeat(stationId: string, seatNo: number): Promise<void> {
     setAssigningId(stationId);
@@ -94,6 +113,35 @@ export function StatusBoardPage() {
     }
   }
 
+  /** Ser 1 "broadcast any student's screen to others". Re-usable for both
+   * the initial "Share to class" click and the panel's own mic toggle
+   * (POST /control/promote-screen is idempotent — re-promoting the same
+   * station with a different `mic` just re-applies it, no separate
+   * endpoint). */
+  async function handleShareToClass(stationId: string, mic: boolean): Promise<void> {
+    setLastAction(null);
+    try {
+      const { room, viewerToken } = await controlApi.promoteScreen(stationId, mic);
+      setSpotlight({ stationId, room, viewerToken, mic });
+      setLastAction('Sharing screen with the class');
+      await refetch();
+    } catch (err) {
+      setLastAction(`Share to class failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  }
+
+  async function handleStopSharing(stationId: string): Promise<void> {
+    setLastAction(null);
+    try {
+      await controlApi.revokeScreen(stationId);
+      setSpotlight((prev) => (prev?.stationId === stationId ? null : prev));
+      setLastAction('Stopped sharing');
+      await refetch();
+    } catch (err) {
+      setLastAction(`Stop sharing failed: ${err instanceof Error ? err.message : 'unknown error'}`);
+    }
+  }
+
   function toggleSeat(stationId: string | undefined): void {
     if (!stationId) return;
     setSelected((prev) => {
@@ -102,6 +150,18 @@ export function StatusBoardPage() {
       else next.add(stationId);
       return next;
     });
+  }
+
+  /** Hands the console's seat selection off to the Session Builder to start
+   * an activity (Round Table first) for exactly this group — dropping the
+   * teacher seat / any unclaimed tile, which the builder's own candidate
+   * list can never accept. */
+  function handleCreateActivity(): void {
+    const stationIds = selectedIds.filter((id) => {
+      const seatNo = rows.get(id)?.seatNo;
+      return seatNo != null && seatNo !== 1;
+    });
+    navigate('/sessions', { state: { preselectedStationIds: stationIds } });
   }
 
   async function runAction(label: string, action: () => Promise<unknown>, successMessage?: string): Promise<void> {
@@ -126,7 +186,10 @@ export function StatusBoardPage() {
           <h1 className="text-lg font-semibold">Lab Control Console</h1>
           <p className="text-sm text-slate-400">
             {viewerIsTeacher
-              ? `${seatedCount} student${seatedCount === 1 ? '' : 's'} in your class · signed in as ${user?.fullName} · ${selectedIds.length} selected`
+              ? // A TEACHER now sees/controls every lab PC, always (see
+                // ClassAccessService) — not just their own class, so this
+                // counts stations, not seated students.
+                `${onlineCount} / ${rows.size} station${rows.size === 1 ? '' : 's'} online · ${seatedCount} seated · signed in as ${user?.fullName} · ${selectedIds.length} selected`
               : `${onlineCount} / ${TOTAL_SEATS} seats online · ${seatedCount} / ${TOTAL_SEATS - 1} students seated · signed in as ${user?.fullName} (${user?.role}) · ${selectedIds.length} selected`}
           </p>
         </div>
@@ -153,8 +216,29 @@ export function StatusBoardPage() {
         }}
       />
 
-      <BroadcastPanel />
-      <Toolbar busy={busy || selectedIds.length === 0} onAction={runAction} target={target} />
+      <BroadcastPanel isAdmin={isAdmin} classId={currentClass?.id ?? null} />
+
+      <section className="mb-6 rounded-lg border border-slate-800 bg-slate-900 p-4">
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-slate-300">Ongoing Activities</h2>
+          <Link to="/sessions" className="text-xs text-sky-400 hover:underline">
+            Manage all sessions →
+          </Link>
+        </div>
+        <SessionList onlyActive emptyText="No ongoing activities — select seats below and click Create Activity to start one." />
+      </section>
+
+      <Toolbar busy={busy || selectedIds.length === 0} onAction={runAction} target={target} studentTarget={studentTarget}>
+        {selectedIds.length > 0 && (
+          <button
+            type="button"
+            onClick={handleCreateActivity}
+            className="ml-auto rounded-md bg-violet-700 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-violet-600"
+          >
+            Create Activity ({selectedIds.length} seat{selectedIds.length === 1 ? '' : 's'}) →
+          </button>
+        )}
+      </Toolbar>
       {lastAction && <p className="mb-4 text-sm text-sky-400">{lastAction}</p>}
 
       <div className="grid grid-cols-7 gap-3 sm:grid-cols-8 md:grid-cols-10">
@@ -179,9 +263,56 @@ export function StatusBoardPage() {
             >
               <span className="text-xs font-medium">{seatLabel(seatNo)}</span>
               {station?.currentUser && (
-                <span className="mt-0.5 max-w-full truncate text-[9px] leading-none text-slate-300/80">
-                  {station.currentUser.serviceNumber.replace('STU-', '')}
+                <span className="mt-0.5 max-w-full truncate px-1 text-[10px] leading-tight text-slate-100" title={station.currentUser.fullName}>
+                  {station.currentUser.fullName}
                 </span>
+              )}
+              {/* Lock-type badge: 🔒 = screen locked, ⌨️ = keyboard+mouse only */}
+              {station?.lock && (
+                <span
+                  className="absolute left-1 top-1 text-[10px] leading-none"
+                  title={station.lock.screen ? 'Screen locked' : 'Keyboard & mouse locked'}
+                >
+                  {station.lock.screen ? '🔒' : '⌨️'}
+                </span>
+              )}
+              {station?.screenSharing && (
+                <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-400" title="Sharing to class" />
+              )}
+            </button>
+          );
+        })}
+        {/* Stations nobody has signed into yet (no seatNo) get no tile in
+            the 41-seat grid above — before this pass a teacher couldn't
+            even see these, let alone lock/shut down/restart them. They're
+            appended here, selectable through the same `selected` set, so
+            the Toolbar above works on them with no further change. */}
+        {unclaimedStations.map((station) => {
+          const isSelected = selected.has(station.stationId);
+          return (
+            <button
+              key={station.stationId}
+              type="button"
+              onClick={() => toggleSeat(station.stationId)}
+              className={seatClasses(station.lifecycle, false, isSelected)}
+              title={
+                `${station.hostname} · ${station.appVersion ?? 'unknown'}` +
+                (station.currentUser ? ` · ${station.currentUser.fullName} (${station.currentUser.serviceNumber})` : ' · no student seated') +
+                ' · no seat assigned yet'
+              }
+            >
+              <span className="max-w-full truncate px-1 text-center text-[9px] font-medium leading-tight">{station.hostname}</span>
+              {/* Lock-type badge for unclaimed stations */}
+              {station.lock && (
+                <span
+                  className="absolute left-1 top-1 text-[10px] leading-none"
+                  title={station.lock.screen ? 'Screen locked' : 'Keyboard & mouse locked'}
+                >
+                  {station.lock.screen ? '🔒' : '⌨️'}
+                </span>
+              )}
+              {station.screenSharing && (
+                <span className="absolute right-1 top-1 h-1.5 w-1.5 rounded-full bg-emerald-400" title="Sharing to class" />
               )}
             </button>
           );
@@ -193,6 +324,8 @@ export function StatusBoardPage() {
           station={rows.get(selectedIds[0]!)}
           isAdmin={isAdmin}
           onTakeRemoteControl={() => setRemoteControlTarget(selectedIds[0]!)}
+          onShareToClass={() => void handleShareToClass(selectedIds[0]!, false)}
+          onStopSharing={() => void handleStopSharing(selectedIds[0]!)}
           onReleaseStudent={async () => {
             setLastAction(null);
             try {
@@ -206,6 +339,17 @@ export function StatusBoardPage() {
         />
       )}
       {remoteControlTarget && <RemoteControlView stationId={remoteControlTarget} onClose={() => setRemoteControlTarget(null)} />}
+      {spotlight && (
+        <ScreenSpotlightPanel
+          stationId={spotlight.stationId}
+          seatNo={rows.get(spotlight.stationId)?.seatNo ?? null}
+          room={spotlight.room}
+          viewerToken={spotlight.viewerToken}
+          mic={spotlight.mic}
+          onMicToggle={() => void handleShareToClass(spotlight.stationId, !spotlight.mic)}
+          onStop={() => void handleStopSharing(spotlight.stationId)}
+        />
+      )}
     </div>
   );
 }
@@ -219,11 +363,15 @@ function SeatDetailPanel({
   station,
   isAdmin,
   onTakeRemoteControl,
+  onShareToClass,
+  onStopSharing,
   onReleaseStudent,
 }: {
   station: StationStatusRow | undefined;
   isAdmin: boolean;
   onTakeRemoteControl: () => void;
+  onShareToClass: () => void;
+  onStopSharing: () => void;
   onReleaseStudent: () => Promise<void>;
 }) {
   const [releasing, setReleasing] = useState(false);
@@ -235,6 +383,11 @@ function SeatDetailPanel({
   // empty Socket.IO room). Surface that up front instead of letting the
   // teacher click into a black screen with no explanation.
   const canTakeControl = station.lifecycle !== 'OFFLINE' && station.lifecycle !== 'UNCLAIMED';
+  // A spotlight also needs a signed-in student — an empty seat holds no
+  // class-room grant at all (SessionStateService only mints the
+  // classBroadcastRoom token for a station with a liveClassId), so
+  // promote-screen would just 409.
+  const canShareScreen = canTakeControl && !!station.currentUser;
 
   return (
     <div className="mt-4 flex flex-wrap items-center gap-3 rounded-md border border-slate-800 bg-slate-900/60 px-4 py-3 text-sm">
@@ -269,12 +422,37 @@ function SeatDetailPanel({
       ) : (
         <span className="text-slate-500">No student seated — student self-claims from the console</span>
       )}
+      {station.screenSharing ? (
+        <button
+          type="button"
+          onClick={onStopSharing}
+          className="ml-auto rounded-md bg-red-800 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-red-700"
+        >
+          Stop sharing
+        </button>
+      ) : (
+        <button
+          type="button"
+          disabled={!canShareScreen}
+          onClick={onShareToClass}
+          title={
+            canShareScreen
+              ? undefined
+              : !canTakeControl
+                ? 'Station is offline — sharing needs the seat to be connected'
+                : 'No student signed in at this seat yet'
+          }
+          className="ml-auto rounded-md bg-emerald-700 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600 disabled:cursor-not-allowed disabled:opacity-40"
+        >
+          Share to class
+        </button>
+      )}
       <button
         type="button"
         disabled={!canTakeControl}
         onClick={onTakeRemoteControl}
         title={canTakeControl ? undefined : 'Station is offline — remote control needs the seat to be connected'}
-        className="ml-auto rounded-md bg-violet-700 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-40"
+        className="rounded-md bg-violet-700 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-violet-600 disabled:cursor-not-allowed disabled:opacity-40"
       >
         Take Remote Control
       </button>
@@ -286,10 +464,16 @@ function Toolbar({
   busy,
   onAction,
   target,
+  studentTarget,
+  children,
 }: {
   busy: boolean;
   onAction: (label: string, action: () => Promise<unknown>, successMessage?: string) => Promise<void>;
   target: { kind: 'stations'; stationIds: string[] };
+  /** Target with the teacher seat excluded — used for input-lock actions
+   * so the teacher can't freeze their own mouse and lose the Unlock button. */
+  studentTarget: { kind: 'stations'; stationIds: string[] };
+  children?: ReactNode;
 }) {
   const btn = 'rounded-md px-3 py-1.5 text-sm font-medium transition disabled:cursor-not-allowed disabled:opacity-40';
   return (
@@ -297,16 +481,46 @@ function Toolbar({
       <button
         disabled={busy}
         className={`${btn} bg-red-700 text-white hover:bg-red-600`}
-        onClick={() => onAction('Lock', () => controlApi.lock(target, { screen: true, input: true, message: 'Screen locked by instructor' }))}
+        onClick={() =>
+          onAction('Lock', () => controlApi.lock(target, { mode: 'soft', screen: true, input: true, message: 'Screen locked by instructor' }))
+        }
       >
-        Lock Screen
+        Lock
+      </button>
+      <button
+        disabled={busy || studentTarget.stationIds.length === 0}
+        className={`${btn} bg-orange-700 text-white hover:bg-orange-600`}
+        title="Blocks physical keyboard and mouse only — screen stays visible. Unlock from here releases it."
+        onClick={() =>
+          onAction(
+            'Lock Keyboard & Mouse',
+            () => controlApi.lock(studentTarget, { mode: 'soft', screen: false, input: true, message: 'Keyboard and mouse locked by instructor' }),
+          )
+        }
+      >
+        Lock Keyboard &amp; Mouse
+      </button>
+      <button
+        disabled={busy}
+        className={`${btn} bg-red-900 text-white hover:bg-red-800`}
+        onClick={() => {
+          const count = target.stationIds.length;
+          if (
+            window.confirm(
+              `Windows-lock ${count} station(s)? This is the real Windows lock — only the student's own Windows password releases it, Unlock from here will NOT work. Use this at end of day, not mid-class.`,
+            )
+          ) {
+            return onAction('Windows Lock', () => controlApi.lock(target, { mode: 'windows', screen: true, input: true, message: 'Screen locked by instructor' }));
+          }
+        }}
+      >
+        Windows Lock
       </button>
       <button
         disabled={busy}
         className={`${btn} bg-emerald-700 text-white hover:bg-emerald-600`}
-        onClick={() =>
-          onAction('Unlock', () => controlApi.unlock(target), 'Lock released — students sign in with their Windows password')
-        }
+        title="Releases any active lock (screen or keyboard & mouse). Applies to selected stations."
+        onClick={() => onAction('Unlock', () => controlApi.unlock(target))}
       >
         Unlock
       </button>
@@ -359,17 +573,20 @@ function Toolbar({
       >
         Enable Station
       </button>
+      {children}
     </div>
   );
 }
 
 /**
- * Manual override, admin-only (a TEACHER never receives an unseated row
- * at all — the server's /control/status-board filters a TEACHER's view
- * to their own class, and a station only ever gets a seat number/class
- * together, at a real classroom sign-in — see StationsService.claim).
- * PCs get numbered automatically at first sign-in now; this panel exists
- * for the rare case an admin needs to pre-assign a seat by hand.
+ * Manual seat assignment, admin-only. A station only ever gets a seat
+ * number/class together, at a real classroom sign-in (see
+ * StationsService.claim) — PCs get numbered automatically at first
+ * sign-in, so this panel exists only for the rare case an admin needs to
+ * pre-assign a seat by hand. An unseated station is otherwise fully
+ * controllable (lock/shutdown/restart/…) as one of the extra tiles
+ * appended after the seat grid above — this panel is purely about
+ * assigning it a seat number, not about who can act on it.
  */
 function UnclaimedStationsPanel({
   stations,
@@ -495,7 +712,7 @@ function ClassroomPanel({
     setBusy(true);
     setError(null);
     try {
-      await classroomApi.start(title.trim() || undefined);
+      await classroomApi.start({ title: title.trim() || undefined });
       setTitle('');
       await onChanged();
     } catch (err) {
@@ -566,7 +783,7 @@ function ClassroomPanel({
 
 function seatClasses(lifecycle: StationStatusRow['lifecycle'] | undefined, isTeacher: boolean, isSelected?: boolean): string {
   const base =
-    'flex flex-col aspect-square items-center justify-center rounded-md border text-slate-50 transition disabled:cursor-not-allowed';
+    'relative flex flex-col aspect-square items-center justify-center rounded-md border text-slate-50 transition disabled:cursor-not-allowed';
   if (!lifecycle || lifecycle === 'UNCLAIMED')
     return `${base} border-dashed border-slate-700 bg-slate-900 text-slate-600`;
   const colors: Record<StationStatusRow['lifecycle'], string> = {

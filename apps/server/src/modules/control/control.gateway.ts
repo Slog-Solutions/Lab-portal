@@ -12,6 +12,7 @@ import {
 import { JwtService } from '@nestjs/jwt';
 import type { Server, Socket } from 'socket.io';
 import {
+  ALL_DASHBOARDS_ROOM,
   ALL_STATIONS_ROOM,
   CONTROL_NAMESPACE,
   groupRoom,
@@ -36,6 +37,7 @@ import { ClassAccessService } from '../classroom/class-access.service';
 import { PresenceService } from './presence.service';
 import { SessionStateService } from './session-state.service';
 import { LockService } from './lock.service';
+import { ScreenShareService } from './screen-share.service';
 import { CommandsService } from './commands.service';
 
 const LOCK_HEARTBEAT_INTERVAL_MS = 15_000; // design doc §3.3 — must be < the 30s auto-unlock threshold
@@ -81,6 +83,7 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
     private readonly presence: PresenceService,
     private readonly sessionState: SessionStateService,
     private readonly locks: LockService,
+    private readonly screenShares: ScreenShareService,
     private readonly commands: CommandsService,
     private readonly audit: AuditService,
     private readonly classAccess: ClassAccessService,
@@ -135,14 +138,18 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
           socket.data.auth = { kind: 'user', user: payload };
           if (payload.role === 'ADMIN') {
             socket.join('dashboards');
+            socket.join(ALL_DASHBOARDS_ROOM);
             socket.emit('lab:status', await this.stations.listStatusBoard());
           } else if (payload.role === 'TEACHER') {
-            // A TEACHER only ever sees/controls the stations currently in
-            // their own ACTIVE class (design decision: "a teacher sees and
-            // controls only the PCs in their active class") — dash:<userId>
-            // is this teacher's own room, joined regardless of whether a
-            // class is active yet (starting one doesn't reconnect the socket).
+            // A TEACHER now sees/controls every lab PC, always (design
+            // decision 2026-09-18 — see ClassAccessService's doc comment),
+            // not just the ones in their own active class. dash:<userId>
+            // stays for the targeted full-board push
+            // (sendFullStatusToTeacher); ALL_DASHBOARDS_ROOM is what makes
+            // an unseated station's delta — which has no classTeacherId to
+            // route a dash:<teacherId> emit to — reach this teacher at all.
             socket.join(dashRoom(payload.sub));
+            socket.join(ALL_DASHBOARDS_ROOM);
             socket.emit('lab:status', await this.controllableStatusRows(payload));
           }
         }
@@ -156,12 +163,20 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
   handleDisconnect(socket: AuthedSocket): void {
     const auth = socket.data.auth;
     if (auth?.kind === 'station') {
-      // Read before remove() — once the presence entry is gone,
-      // classTeacherId is gone with it, and the delta below would only
-      // ever reach 'dashboards', never the class's own teacher room.
-      const classTeacherId = this.presence.get(auth.stationId)?.classTeacherId ?? null;
-      this.presence.remove(auth.stationId);
-      this.broadcastStatusDelta(auth.stationId, classTeacherId);
+      // A packaged station opens TWO sockets (main process + renderer)
+      // under the same stationId — only the one that empties the socket
+      // set actually took the station offline (see PresenceService.removeSocket's
+      // doc comment). A renderer reload dropping its own socket while the
+      // main-process socket stays connected must not clear presence or
+      // the spotlight reservation out from under a station that's still live.
+      const wentOffline = this.presence.removeSocket(auth.stationId, socket.id);
+      if (!wentOffline) return;
+      // A presenting station that drops off (crash, network loss, closed
+      // tab) must not leave a phantom spotlight on the board — nothing
+      // else would ever clear it, since the matching revoke-screen call
+      // this station can no longer make.
+      this.screenShares.clearByStation(auth.stationId);
+      this.broadcastStatusDelta(auth.stationId);
     }
   }
 
@@ -320,11 +335,14 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
     this.server.to(stationRoom(stationId)).emit(event, payload as never);
   }
 
-  /** Used by ClassroomService to tell a station its classroom membership
-   * just ended (class ended, or an admin/teacher force-released the seat)
+  /** Used by ClassroomService to tell a station it was force-released (an
+   * admin/teacher released the seat, or the student released themselves)
    * — the student console reacts by clearing its local session (see
-   * useStudentSession.clear via StudentConsole's onSignedOut wiring). */
-  emitToStation(stationId: string, event: 'student:signed-out', payload: { reason: 'class_ended' | 'released' }): void {
+   * useStudentSession.clear via StudentConsole's onSignedOut wiring).
+   * Ending a class does NOT go through this: a class ending only drops the
+   * station's live-class link (a fresh session:snapshot covers that), the
+   * signed-in student stays put. */
+  emitToStation(stationId: string, event: 'student:signed-out', payload: { reason: 'released' }): void {
     this.server.to(stationRoom(stationId)).emit(event, payload);
   }
 
@@ -346,9 +364,11 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
     const result = await this.stations.getStatusRow(stationId);
     if (!result) return;
     const merged = this.mergeWithPresence(result.row);
-    this.server.to('dashboards').emit('lab:status:delta', merged);
-    const teacherId = result.classTeacherId ?? this.presence.get(stationId)?.classTeacherId;
-    if (teacherId) this.server.to(dashRoom(teacherId)).emit('lab:status:delta', merged);
+    // Every dashboard now needs every station's delta (a TEACHER controls
+    // the whole lab, not just their own class — see ClassAccessService),
+    // including unseated stations that have no classTeacherId to route a
+    // targeted dash:<teacherId> emit to at all.
+    this.server.to(ALL_DASHBOARDS_ROOM).emit('lab:status:delta', merged);
   }
 
   /** Pushes this teacher's full (filtered) board to their own dashboard
@@ -380,6 +400,7 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
       lock: online ? (patch.lock ?? null) : null,
       lastSeenAt: online ? (patch.lastSeenAt ?? row.lastSeenAt) : row.lastSeenAt,
       ip: online ? (patch.ip ?? row.ip) : row.ip,
+      screenSharing: online ? (patch.screenSharing ?? false) : false,
     };
   }
 
@@ -387,22 +408,32 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
     this.server.to(stationRoom(stationId)).emit('remote-control:start', { room, token });
   }
 
+  /** Teacher spotlight (Ser 1) — tells the station to start/stop publishing
+   * its screen (and optionally mic) into `room`, which it is already
+   * connected to with a live grant. The server must have already upgraded
+   * the station's LiveKit publish permissions via
+   * MediaService.promoteScreenShare BEFORE calling this — see
+   * ControlController.promoteScreen. */
+  setScreenShare(stationId: string, payload: { room: string; screen: boolean; mic: boolean }): void {
+    this.server.to(stationRoom(stationId)).emit('screen-share:set', payload);
+  }
+
   stopRemoteControl(stationId: string, room: string): void {
     this.server.to(stationRoom(stationId)).emit('remote-control:stop', { room });
   }
 
-  private broadcastStatusDelta(stationId: string, classTeacherId?: string | null): void {
+  private broadcastStatusDelta(stationId: string): void {
     const patch = this.presence.toStatusPatch(stationId);
-    this.server.to('dashboards').emit('lab:status:delta', patch);
-    const teacherId = classTeacherId ?? this.presence.get(stationId)?.classTeacherId;
-    if (teacherId) this.server.to(dashRoom(teacherId)).emit('lab:status:delta', patch);
+    // See sendStatusRow — every dashboard needs this now, not just
+    // 'dashboards' (ADMIN) plus one teacher's own dash:<teacherId> room.
+    this.server.to(ALL_DASHBOARDS_ROOM).emit('lab:status:delta', patch);
   }
 
   private sweepPresence(): void {
     const wentOffline = this.presence.sweepMissedHeartbeats();
-    for (const { stationId, classTeacherId } of wentOffline) {
+    for (const { stationId } of wentOffline) {
       this.logger.warn(`Station ${stationId} went offline (missed heartbeats)`);
-      this.broadcastStatusDelta(stationId, classTeacherId);
+      this.broadcastStatusDelta(stationId);
     }
   }
 

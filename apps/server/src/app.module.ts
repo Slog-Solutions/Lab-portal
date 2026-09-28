@@ -18,10 +18,12 @@ import { AttemptsModule } from './modules/attempts/attempts.module';
 import { GradebookModule } from './modules/gradebook/gradebook.module';
 import { ReportsModule } from './modules/reports/reports.module';
 import { PronunciationModule } from './modules/pronunciation/pronunciation.module';
+import { AssessmentsModule } from './modules/assessments/assessments.module';
 import { StudyModulesModule } from './modules/study-modules/study-modules.module';
 import { AdminModule } from './modules/admin/admin.module';
 import { BatchesModule } from './modules/batches/batches.module';
 import { ClassroomModule } from './modules/classroom/classroom.module';
+import { RoundTableModule } from './modules/round-table/round-table.module';
 
 /**
  * Phase 0-5 wiring.
@@ -40,6 +42,7 @@ import { ClassroomModule } from './modules/classroom/classroom.module';
     BatchesModule,
     ClassroomModule,
     SessionsModule,
+    RoundTableModule,
     RecordingsModule,
     MediaAssetsModule,
     ContentPackagesModule,
@@ -48,6 +51,7 @@ import { ClassroomModule } from './modules/classroom/classroom.module';
     GradebookModule,
     ReportsModule,
     PronunciationModule,
+    AssessmentsModule,
     StudyModulesModule,
     AdminModule,
   ],

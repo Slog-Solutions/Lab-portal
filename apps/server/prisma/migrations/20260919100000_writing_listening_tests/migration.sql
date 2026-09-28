@@ -1,0 +1,3 @@
+-- AlterEnum
+ALTER TYPE "ActivityType" ADD VALUE 'WRITING_TEST';
+ALTER TYPE "ActivityType" ADD VALUE 'LISTENING_TEST';

@@ -1,11 +1,18 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { StationLifecycle, type StationStatusRow } from '@lab/shared';
 import { LockService } from './lock.service';
+import { ScreenShareService } from './screen-share.service';
 
 interface PresenceEntry {
   stationId: string;
   seatNo: number | null;
-  socketId: string;
+  /** A packaged Electron station opens TWO sockets with the same
+   * machineGuid — the main process and the renderer both call
+   * station:hello. Tracking every live socket id (rather than just the
+   * most recent one) is what lets a renderer reload/reconnect survive
+   * without the station briefly reading OFFLINE: the entry is only ever
+   * torn down once this set empties, not when any one socket drops. */
+  socketIds: Set<string>;
   appVersion: string;
   osBuild: string;
   ip: string | null;
@@ -19,6 +26,10 @@ interface PresenceEntry {
    * to `dash:<teacherId>` without a DB round trip on every heartbeat. */
   classTeacherId: string | null;
 }
+
+/** Fired when a station appears (first socket) or disappears (last socket
+ * dropped, missed heartbeats, or explicit remove). */
+export type PresenceListener = (stationId: string, online: boolean) => void;
 
 const HEARTBEAT_INTERVAL_MS = 5_000;
 const OFFLINE_AFTER_MISSES = 3; // 15s, matches design doc §4.4
@@ -34,12 +45,37 @@ const OFFLINE_AFTER_MISSES = 3; // 15s, matches design doc §4.4
 export class PresenceService {
   private readonly logger = new Logger(PresenceService.name);
   private readonly byStation = new Map<string, PresenceEntry>();
+  private readonly listeners = new Set<PresenceListener>();
 
-  constructor(private readonly locks: LockService) {}
+  constructor(
+    private readonly locks: LockService,
+    private readonly screenShares: ScreenShareService,
+  ) {}
 
-  upsert(entry: Omit<PresenceEntry, 'missedHeartbeats'>): void {
+  /** Subscribe to online/offline transitions (Round Table's chairman/speaker
+   * disconnect handling). Returns an unsubscribe function. */
+  onChange(listener: PresenceListener): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private notify(stationId: string, online: boolean): void {
+    for (const listener of this.listeners) {
+      try {
+        listener(stationId, online);
+      } catch (err) {
+        this.logger.error(`presence listener failed for ${stationId}`, err as Error);
+      }
+    }
+  }
+
+  upsert(entry: Omit<PresenceEntry, 'missedHeartbeats' | 'socketIds'> & { socketId: string }): void {
+    const { socketId, ...rest } = entry;
     const existing = this.byStation.get(entry.stationId);
-    this.byStation.set(entry.stationId, { ...entry, missedHeartbeats: existing?.missedHeartbeats ?? 0 });
+    const socketIds = existing?.socketIds ?? new Set<string>();
+    socketIds.add(socketId);
+    this.byStation.set(entry.stationId, { ...rest, socketIds, missedHeartbeats: existing?.missedHeartbeats ?? 0 });
+    if (!existing) this.notify(entry.stationId, true);
   }
 
   heartbeat(
@@ -66,7 +102,25 @@ export class PresenceService {
   }
 
   remove(stationId: string): void {
+    if (this.byStation.delete(stationId)) this.notify(stationId, false);
+  }
+
+  /** Drops one of a station's (possibly several) live sockets. Returns
+   * `true` only when that was the last one — the caller (ControlGateway's
+   * handleDisconnect) must treat that, and only that, as "the station
+   * actually went offline": a renderer reload dropping its own socket
+   * while the main-process socket stays up must NOT tear down presence,
+   * or a live PC would briefly read OFFLINE on the dashboard for no
+   * reason (heartbeat() also no-ops without an entry, so the surviving
+   * socket couldn't resurrect it either). */
+  removeSocket(stationId: string, socketId: string): boolean {
+    const entry = this.byStation.get(stationId);
+    if (!entry) return false;
+    entry.socketIds.delete(socketId);
+    if (entry.socketIds.size > 0) return false;
     this.byStation.delete(stationId);
+    this.notify(stationId, false);
+    return true;
   }
 
   get(stationId: string): PresenceEntry | undefined {
@@ -90,6 +144,7 @@ export class PresenceService {
         if (entry.missedHeartbeats >= OFFLINE_AFTER_MISSES) {
           wentOffline.push({ stationId, classTeacherId: entry.classTeacherId });
           this.byStation.delete(stationId);
+          this.notify(stationId, false);
         }
       }
     }
@@ -117,6 +172,7 @@ export class PresenceService {
       ip: entry.ip,
       lastSeenAt: entry.lastHeartbeatAt,
       lock,
+      screenSharing: this.screenShares.isPresenting(stationId),
     };
   }
 

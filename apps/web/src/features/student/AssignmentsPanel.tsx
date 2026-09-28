@@ -1,28 +1,52 @@
 import { useEffect, useState } from 'react';
+import { NO_WRITTEN_FEEDBACK } from '@lab/shared';
 import type { StationControlClient } from '../../lib/station-control-client';
 import { stationApi, type StartedAttempt } from '../../lib/station-api';
-import { useStudentSession } from '../../stores/student-session-store';
 import { VocabularyTestPlayer } from '../activities/VocabularyTestPlayer';
 import { ContentExercisePlayer } from '../activities/ContentExercisePlayer';
 import { PronunciationPlayer } from '../activities/PronunciationPlayer';
+import { PronunciationTestPlayer } from '../activities/PronunciationTestPlayer';
+import { WritingTestPlayer } from '../activities/WritingTestPlayer';
+import { ListeningTestPlayer } from '../activities/ListeningTestPlayer';
+import { ReadingTestPlayer } from '../activities/ReadingTestPlayer';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 
 type AssignmentRow = Awaited<ReturnType<typeof stationApi.myAssignments>>[number];
 
+const POLL_MS = 30_000;
+
+const TYPE_LABEL: Record<string, string> = {
+  VOCABULARY_TEST: 'Vocabulary test',
+  WRITING_TEST: 'Writing test',
+  LISTENING_TEST: 'Listening test',
+  READING_TEST: 'Reading test',
+  PRONUNCIATION: 'Pronunciation exercise',
+  PRONUNCIATION_TEST: 'Pronunciation test',
+};
+
+// Teacher-controlled tests, mirroring the server's ONE_SHOT_TYPES: a single
+// submission each, so a finished one shows its state instead of a Start button.
+const ONE_SHOT_TYPES = new Set(['PRONUNCIATION_TEST', 'WRITING_TEST', 'LISTENING_TEST', 'READING_TEST']);
+
 /**
  * Self-paced assessment (Ser 10 "teacher-tailored courses" — targetScore/
  * allocatedHours/dueAt) — deliberately independent of live session state,
  * matching Ser 1's "self-study even when teacher not present". Only
  * renders once a student has signed in at this seat (StudentConsole gates
- * on useStudentSession — see StudentSignInScreen), so this component no
- * longer owns any credential UI itself; it fetches assignments as soon as
+ * on useStudentSession — see StudentSignInScreen), so this component owns
+ * no credential or sign-out UI itself (sign-out lives in the student
+ * drawer); it fetches assignments as soon as
  * it mounts, using the student's own JWT-backed studentToken.
+ *
+ * A teacher can send a pronunciation test (Ser 7) to a seat that is
+ * already signed in and mid-class, so the list is also refreshed every
+ * POLL_MS while it is showing (paused while an exercise is open — a
+ * refetch there would only churn state under an in-progress recording)
+ * and on demand via the Refresh button.
  */
 export function AssignmentsPanel({ control }: { control: StationControlClient }) {
-  const student = useStudentSession((s) => s.student);
-  const clearSession = useStudentSession((s) => s.clear);
   const [assignments, setAssignments] = useState<AssignmentRow[] | null>(null);
   const [started, setStarted] = useState<StartedAttempt | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -31,9 +55,9 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
   // doc comment) — it resolves "which student" from Station.currentUserId,
   // set at claim time, not from a JWT `sub`. So these calls use the
   // station's own token (control.getToken()), never the student's JWT.
-  // This panel only ever mounts once a student is signed in, so a plain
-  // mount-effect fetch is enough — no polling needed (that workaround
-  // existed only for the old claim recovery flow).
+  // This panel only ever mounts once a student is signed in, so the
+  // initial fetch needs no claim-recovery workaround — the interval below
+  // exists only to pick up assignments a teacher sends mid-class.
   useEffect(() => {
     stationApi
       .myAssignments(control.getToken())
@@ -41,9 +65,27 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
       .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load assignments'));
   }, [control]);
 
-  async function release(): Promise<void> {
-    await stationApi.release(control.getToken());
-    clearSession();
+  useEffect(() => {
+    if (started) return;
+    const timer = setInterval(() => {
+      // Background refresh failures stay silent — the manual Refresh button
+      // reports them, and a flaky moment shouldn't flash an error at a
+      // student who is just reading the list.
+      stationApi
+        .myAssignments(control.getToken())
+        .then(setAssignments)
+        .catch(() => void 0);
+    }, POLL_MS);
+    return () => clearInterval(timer);
+  }, [control, started]);
+
+  async function refresh(): Promise<void> {
+    setError(null);
+    try {
+      setAssignments(await stationApi.myAssignments(control.getToken()));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load assignments');
+    }
   }
 
   async function startAssignment(row: AssignmentRow): Promise<void> {
@@ -72,6 +114,14 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
         return <ContentExercisePlayer control={control} started={started} onDone={() => void onDone()} />;
       case 'PRONUNCIATION':
         return <PronunciationPlayer control={control} started={started} onDone={() => void onDone()} />;
+      case 'PRONUNCIATION_TEST':
+        return <PronunciationTestPlayer control={control} started={started} onDone={() => void onDone()} />;
+      case 'WRITING_TEST':
+        return <WritingTestPlayer control={control} started={started} onDone={() => void onDone()} />;
+      case 'LISTENING_TEST':
+        return <ListeningTestPlayer control={control} started={started} onDone={() => void onDone()} />;
+      case 'READING_TEST':
+        return <ReadingTestPlayer control={control} started={started} onDone={() => void onDone()} />;
       default:
         return <p className="text-sm text-muted-foreground">{started.exercise.type} has no self-paced player.</p>;
     }
@@ -80,9 +130,9 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
   return (
     <Card className="w-full max-w-2xl">
       <CardHeader className="flex-row items-center justify-between">
-        <CardTitle className="text-base">My Assignments — {student?.fullName}</CardTitle>
-        <Button variant="ghost" size="sm" onClick={() => void release()}>
-          Sign out
+        <CardTitle className="text-base">My Assignments</CardTitle>
+        <Button variant="ghost" size="sm" onClick={() => void refresh()}>
+          Refresh
         </Button>
       </CardHeader>
       <CardContent className="space-y-2">
@@ -93,17 +143,34 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
           const pct = latest?.rawScore !== undefined && latest?.rawScore !== null && latest?.maxScore
             ? Math.round((latest.rawScore / latest.maxScore) * 100)
             : null;
+          // A test is a one-shot assessment (the server rejects a second
+          // start — AttemptsService.assertTestStartable), so once submitted
+          // the row shows its state instead of a Start/Retry button.
+          const isTest = ONE_SHOT_TYPES.has(row.exercise.type);
+          const locked = isTest && (latest?.status === 'SUBMITTED' || latest?.status === 'SCORED');
+          const badgeText = locked && latest?.status === 'SUBMITTED' ? 'Awaiting review' : pct !== null ? `${pct}%` : latest?.status;
           return (
-            <div key={row.assignment.id} className="flex items-center justify-between rounded-md border border-border p-2.5">
-              <div>
+            <div key={row.assignment.id} className="flex items-center justify-between gap-3 rounded-md border border-border p-2.5">
+              <div className="min-w-0">
                 <p className="text-sm font-medium">{row.exercise.title}</p>
-                <p className="text-xs text-muted-foreground">{row.exercise.type}</p>
+                {/* A student can be in several classes now, so every row says
+                    where it came from — the class name when the server could
+                    pin it down, otherwise just the assigning teacher. */}
+                <p className="text-xs text-muted-foreground">
+                  {TYPE_LABEL[row.exercise.type] ?? row.exercise.type} · {row.source.className ?? `From ${row.source.teacherName}`}
+                  {row.assignment.dueAt && ` · Due ${new Date(row.assignment.dueAt).toLocaleDateString()}`}
+                </p>
+                {locked && latest?.scoreOverride?.reason && latest.scoreOverride.reason !== NO_WRITTEN_FEEDBACK && (
+                  <p className="mt-1 text-xs text-muted-foreground">Teacher: {latest.scoreOverride.reason}</p>
+                )}
               </div>
-              <div className="flex items-center gap-2">
-                {latest && <Badge variant={latest.status === 'SCORED' ? 'success' : 'secondary'}>{pct !== null ? `${pct}%` : latest.status}</Badge>}
-                <Button size="sm" onClick={() => void startAssignment(row)}>
-                  {latest ? 'Retry' : 'Start'}
-                </Button>
+              <div className="flex shrink-0 items-center gap-2">
+                {latest && <Badge variant={latest.status === 'SCORED' ? 'success' : 'secondary'}>{badgeText}</Badge>}
+                {!locked && (
+                  <Button size="sm" onClick={() => void startAssignment(row)}>
+                    {isTest ? 'Start test' : latest ? 'Retry' : 'Start'}
+                  </Button>
+                )}
               </div>
             </div>
           );
