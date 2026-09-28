@@ -1,4 +1,4 @@
-import { BookOpen, ClipboardList, GraduationCap, LayoutDashboard, LogOut, Mic, School, type LucideIcon } from 'lucide-react';
+import { BookOpen, ClipboardList, GraduationCap, LayoutDashboard, LogOut, Mic, School, Search, type LucideIcon } from 'lucide-react';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
 import type { StudentSessionUser } from '../../stores/student-session-store';
@@ -41,6 +41,7 @@ export function StudentDrawer({
   student,
   seatText,
   inLiveClass,
+  onOpenDictionary,
   onSignOut,
   signingOut,
 }: {
@@ -51,6 +52,10 @@ export function StudentDrawer({
   student: StudentSessionUser;
   seatText: string | null;
   inLiveClass: boolean;
+  /** Offline dictionary (spec §6.1) — a permanent sidebar item that opens
+   * the docked panel rather than switching `section`: the dictionary
+   * coexists with whatever section is showing, it doesn't replace it. */
+  onOpenDictionary: () => void;
   onSignOut: () => void;
   signingOut: boolean;
 }) {
@@ -95,6 +100,17 @@ export function StudentDrawer({
             </button>
           ))}
         </nav>
+        <button
+          type="button"
+          onClick={() => {
+            onOpenDictionary();
+            onOpenChange(false);
+          }}
+          className="flex items-center gap-2 border-t border-border px-4 py-3 text-left text-sm font-medium text-muted-foreground transition-colors hover:bg-accent/50 hover:text-foreground"
+        >
+          <Search className="h-4 w-4" />
+          Dictionary
+        </button>
         <button
           type="button"
           onClick={onSignOut}

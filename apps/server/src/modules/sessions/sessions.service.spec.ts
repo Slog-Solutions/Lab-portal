@@ -19,20 +19,22 @@ function makeRig(seated: Array<{ id: string; seatNo: number; currentUserId: stri
       update: vi.fn().mockResolvedValue({}),
     },
     sessionMember: { findMany: vi.fn().mockResolvedValue([]), update: vi.fn() },
-    activityInstance: { updateMany: vi.fn() },
+    activityInstance: { updateMany: vi.fn(), update: vi.fn() },
   };
+  const sessionState = { getDesiredState: vi.fn().mockResolvedValue({}) };
+  const gateway = { pushSnapshot: vi.fn() };
   const svc = new SessionsService(
     prisma as never,
     { ensureBroadcastRoom: vi.fn(), ensureRoom: vi.fn(), deleteRoom: vi.fn() } as never,
-    { getDesiredState: vi.fn().mockResolvedValue({}) } as never,
-    { pushSnapshot: vi.fn() } as never,
+    sessionState as never,
+    gateway as never,
     { log: vi.fn() } as never,
     { assertCanUseBatch: vi.fn() } as never,
     {} as never,
     { filterControllable: vi.fn() } as never,
     { prepareOnArm: vi.fn(), onSessionState: vi.fn() } as never,
   );
-  return { svc, prisma };
+  return { svc, prisma, sessionState, gateway };
 }
 
 const dto = (over: Partial<CreateSessionDto> = {}): CreateSessionDto => ({
@@ -126,5 +128,45 @@ describe('SessionsService arm/start — re-stamping who does the activity', () =
 
     expect(prisma.sessionMember.findMany.mock.calls[0]![0].where).toEqual({ group: { sessionId: 's1' }, studentId: null });
     expect(prisma.sessionMember.update).toHaveBeenCalledWith({ where: { id: 'm1' }, data: { studentId: 'stu-late' } });
+  });
+});
+
+describe('SessionsService.setGroupDictionary', () => {
+  const sessionWithGroup = () => ({
+    id: 's1',
+    batchId: BATCH,
+    state: 'RUNNING',
+    groups: [
+      {
+        id: 'g1',
+        activity: { id: 'act1', type: 'VOCABULARY_TEST' },
+        members: [{ stationId: ST_A }, { stationId: ST_B }],
+      },
+    ],
+  });
+
+  it('updates the activity row and pushes a fresh snapshot to only that group\'s stations', async () => {
+    const { svc, prisma, gateway } = makeRig([]);
+    prisma.classSession.findUnique.mockResolvedValue(sessionWithGroup());
+
+    const result = await svc.setGroupDictionary('s1', 'g1', true, ADMIN);
+
+    expect(prisma.activityInstance.update).toHaveBeenCalledWith({ where: { id: 'act1' }, data: { dictionaryEnabled: true } });
+    expect(prisma.classSession.update).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 's1' } }));
+    expect(gateway.pushSnapshot).toHaveBeenCalledTimes(2);
+    expect(gateway.pushSnapshot.mock.calls.map((c: unknown[]) => c[0])).toEqual([ST_A, ST_B]);
+    expect(result).toEqual({ ok: true, enabled: true });
+  });
+
+  it('rejects a group that does not belong to this session', async () => {
+    const { svc, prisma } = makeRig([]);
+    prisma.classSession.findUnique.mockResolvedValue(sessionWithGroup());
+    await expect(svc.setGroupDictionary('s1', 'no-such-group', true, ADMIN)).rejects.toThrow(/Group not found/);
+  });
+
+  it('rejects a group with no activity to configure', async () => {
+    const { svc, prisma } = makeRig([]);
+    prisma.classSession.findUnique.mockResolvedValue({ ...sessionWithGroup(), groups: [{ id: 'g1', activity: null, members: [] }] });
+    await expect(svc.setGroupDictionary('s1', 'g1', true, ADMIN)).rejects.toThrow(BadRequestException);
   });
 });

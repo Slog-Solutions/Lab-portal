@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { NO_WRITTEN_FEEDBACK } from '@lab/shared';
 import type { StationControlClient } from '../../lib/station-control-client';
 import { stationApi, type StartedAttempt } from '../../lib/station-api';
+import { useDictionaryStore } from '../../stores/dictionary-store';
 import { VocabularyTestPlayer } from '../activities/VocabularyTestPlayer';
 import { ContentExercisePlayer } from '../activities/ContentExercisePlayer';
 import { PronunciationPlayer } from '../activities/PronunciationPlayer';
@@ -105,6 +106,18 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
     setStarted(null);
     setAssignments(await stationApi.myAssignments(control.getToken()));
   }
+
+  // Offline dictionary (SPEC-offline-dictionary.md §7, Phase 0 decision
+  // 2026-09-28): a self-paced Assignment test is a second, independent
+  // block source alongside the live-session activity toggle DictionaryPanel
+  // already reads from the station snapshot — looking up the answer during
+  // a vocabulary test defeats the test whether it's delivered live or as
+  // an assignment. The server enforces this independently either way
+  // (DictionaryPolicyService); this only drives the client-side hide.
+  useEffect(() => {
+    useDictionaryStore.getState().setDisabledReason(started && !started.exercise.dictionaryEnabled ? 'test' : null);
+    return () => useDictionaryStore.getState().setDisabledReason(null);
+  }, [started]);
 
   if (started) {
     switch (started.exercise.type) {

@@ -2,7 +2,7 @@ import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, nativeImage, powerM
 import path from 'node:path';
 import { loadNativeBridge } from '@lab/native-bridge';
 import type { RemoteInputEvent } from '@lab/shared/events';
-import { registerAppScheme, handleAppScheme, APP_SCHEME } from './protocol';
+import { registerAppScheme, handleAppScheme, applyContentSecurityPolicy, APP_SCHEME } from './protocol';
 import { ControlClient } from './control-client';
 import { LockOverlayManager } from './lock-overlay';
 import { SoftLockController } from './soft-lock';
@@ -251,6 +251,10 @@ if (!gotSingleInstanceLock) {
   app.whenReady().then(async () => {
     const webRoot = path.join(process.resourcesPath, 'web');
     handleAppScheme(webRoot);
+    // Report-only for now — see applyContentSecurityPolicy's own doc
+    // comment on why this isn't enforcing yet. Session-level (not
+    // per-window), so registered once here rather than in createMainWindow.
+    applyContentSecurityPolicy(SERVER_URL, LIVEKIT_URL);
     initUpdater();
 
     if (app.isPackaged) {

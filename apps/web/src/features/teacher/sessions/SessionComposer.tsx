@@ -7,6 +7,7 @@ import { RoundTableAuthoring, validateRoundTableForm } from '../round-table/Roun
 import {
   ACTIVITY_OPTIONS,
   buildActivityConfig,
+  defaultDictionaryEnabled,
   emptyGroup,
   type BuilderActivityType,
   type GroupDraft,
@@ -85,6 +86,10 @@ export function SessionComposer({
               memberStationIds: g.memberStationIds,
               chairmanStationId:
                 g.activityType === 'ROUND_TABLE' && g.chairmanAssignment === 'manual' && g.chairmanStationId ? g.chairmanStationId : undefined,
+              // Omitted (not false) when the teacher never touched the
+              // checkbox — the server then applies the activity type's own
+              // default (spec §7) rather than freezing today's default in.
+              dictionaryEnabled: g.dictionaryEnabledTouched ? g.dictionaryEnabled : undefined,
             })),
           expectedStudents: Object.keys(expected).length > 0 ? expected : undefined,
         }),
@@ -206,7 +211,15 @@ export function SessionComposer({
               <span className="text-xs font-semibold text-slate-400">Group {group.index}</span>
               <select
                 value={group.activityType}
-                onChange={(e) => updateGroup(group.index, { activityType: e.target.value as BuilderActivityType })}
+                onChange={(e) => {
+                  const activityType = e.target.value as BuilderActivityType;
+                  updateGroup(group.index, {
+                    activityType,
+                    // Follows the new type's own default until the teacher
+                    // explicitly touches the checkbox below (session-draft.ts).
+                    ...(group.dictionaryEnabledTouched ? {} : { dictionaryEnabled: defaultDictionaryEnabled(activityType) }),
+                  });
+                }}
                 className="rounded-md border border-slate-700 bg-slate-800 px-2 py-1 text-xs"
               >
                 {options.map((o) => (
@@ -215,6 +228,14 @@ export function SessionComposer({
                   </option>
                 ))}
               </select>
+              <label className="flex items-center gap-1.5 text-xs text-slate-400">
+                <input
+                  type="checkbox"
+                  checked={group.dictionaryEnabled}
+                  onChange={(e) => updateGroup(group.index, { dictionaryEnabled: e.target.checked, dictionaryEnabledTouched: true })}
+                />
+                Allow dictionary
+              </label>
               {groups.length > 1 && (
                 <button type="button" onClick={() => removeGroup(group.index)} className="ml-auto text-xs text-red-400 hover:underline">
                   Remove

@@ -50,6 +50,12 @@ export interface DesiredStationState {
    * Absent for other stations and for an older server. A reconnecting
    * station renders purely from this — no recovery code. */
   roundTable?: RoundTableView | null;
+  /** Offline dictionary (SPEC-offline-dictionary.md §7) — whether the
+   * current activity (or no activity) permits dictionary lookups from
+   * this seat. Defaults true (see resolveDictionaryEnabled); the server
+   * enforces this independently on every /dictionary/* call, so hiding
+   * the panel on false is a UX courtesy, not the actual gate. */
+  dictionaryEnabled: boolean;
 }
 
 export function emptyDesiredState(seq = 0): DesiredStationState {
@@ -64,6 +70,7 @@ export function emptyDesiredState(seq = 0): DesiredStationState {
     stationEnabled: true,
     monitoringIndicator: true,
     liveClass: null,
+    dictionaryEnabled: true,
   };
 }
 

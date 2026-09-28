@@ -1,4 +1,5 @@
 import type { ActivityType, AttemptStatus, RecordingKind, SessionRole, SessionState } from './enums.js';
+import type { ClassRecordingHistoryEntry } from './recording.js';
 
 /** One row of GET /batches/mine — the caller's own classes (taught or
  * enrolled). `joinKey` is present ONLY for TEACHER/ADMIN callers; a
@@ -58,4 +59,8 @@ export interface ClassHistoryView {
   activities: ClassActivityEntry[];
   /** Newest first. */
   assignments: ClassAssignmentEntry[];
+  /** Recordings the teacher made of the whole class broadcast (not a
+   * per-student activity take) — same rows for every student in the
+   * class. Newest first. */
+  classRecordings: ClassRecordingHistoryEntry[];
 }

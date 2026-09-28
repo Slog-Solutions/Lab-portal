@@ -81,6 +81,8 @@ export const RecordingKind = {
   PRESENTATION: 'PRESENTATION',
   INTERPRETATION: 'INTERPRETATION',
   PRONUNCIATION: 'PRONUNCIATION',
+  /** A teacher's own recording of their class broadcast — see ClassRecordingView. */
+  CLASS_BROADCAST: 'CLASS_BROADCAST',
 } as const;
 export type RecordingKind = (typeof RecordingKind)[keyof typeof RecordingKind];
 

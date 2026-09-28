@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { ArrowLeft, ClipboardList, Mic, Play, Users } from 'lucide-react';
-import type { ClassActivityEntry, ClassAssignmentEntry } from '@lab/shared';
+import { ArrowLeft, ClipboardList, Mic, Play, Users, Video } from 'lucide-react';
+import type { ClassActivityEntry, ClassAssignmentEntry, ClassRecordingHistoryEntry } from '@lab/shared';
 import type { StationControlClient } from '../../lib/station-control-client';
 import { stationApi } from '../../lib/station-api';
 import { batchesApi } from '../../lib/batches-api';
@@ -83,6 +83,20 @@ export function StudentClassDetail({
               {data.class.teacherNames.length > 0 ? `Taught by ${data.class.teacherNames.join(', ')}` : 'No teacher assigned yet'}
             </p>
           </div>
+
+          {data.classRecordings.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Class recording</CardTitle>
+                <CardDescription>Recorded by your teacher — the whole class, not just your own turn.</CardDescription>
+              </CardHeader>
+              <CardContent className="space-y-3">
+                {data.classRecordings.map((r, i) => (
+                  <ClassRecordingRow key={r.id} entry={r} label={data.classRecordings.length > 1 ? `Recording ${i + 1}` : 'Class recording'} />
+                ))}
+              </CardContent>
+            </Card>
+          )}
 
           <Card>
             <CardHeader>
@@ -208,6 +222,75 @@ function RecordingPlayback({
   const length = durationMs ? ` (${formatDuration(durationMs)})` : '';
   if (!ready) return <p className="text-xs text-muted-foreground">{label} is still being saved…</p>;
   if (url) return <audio controls autoPlay src={url} className="h-8 w-full" aria-label={label} />;
+  return (
+    <div className="flex items-center gap-2">
+      <Button size="sm" variant="secondary" onClick={() => void load()} disabled={loading}>
+        <Play className="mr-1.5 h-3.5 w-3.5" />
+        {loading ? 'Loading…' : `${label}${length}`}
+      </Button>
+      {failed && <span className="text-xs text-destructive">Could not load the recording.</span>}
+    </div>
+  );
+}
+
+/** The teacher's whole-class recording — same rows for every student, so
+ * this fetches with the STUDENT session JWT (batch enrollment check),
+ * not the station token RecordingPlayback uses above. A <video>, not
+ * <audio>: it's the shared screen, not just a voice. */
+function ClassRecordingRow({ entry, label }: { entry: ClassRecordingHistoryEntry; label: string }) {
+  const [url, setUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => () => {
+    if (url) URL.revokeObjectURL(url);
+  }, [url]);
+
+  async function load(): Promise<void> {
+    setLoading(true);
+    setFailed(false);
+    try {
+      setUrl(await batchesApi.fetchClassRecordingBlob(entry.id));
+    } catch {
+      setFailed(true);
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  const length = entry.durationMs ? ` (${formatDuration(entry.durationMs)})` : '';
+  if (entry.status === 'recording') {
+    return (
+      <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+        <Video className="h-3.5 w-3.5" /> {label} is still being recorded…
+      </p>
+    );
+  }
+  if (url) {
+    return (
+      <video
+        controls
+        autoPlay
+        src={url}
+        className="w-full rounded-md bg-black"
+        style={{ maxHeight: '50vh' }}
+        aria-label={label}
+        onLoadedMetadata={(e) => {
+          const el = e.currentTarget;
+          // MediaRecorder-produced WebM carries no duration in its header,
+          // so the seek bar reports Infinity until forced to compute it.
+          if (el.duration === Infinity || Number.isNaN(el.duration)) {
+            el.currentTime = 1e101;
+            const onTimeUpdate = () => {
+              el.currentTime = 0;
+              el.removeEventListener('timeupdate', onTimeUpdate);
+            };
+            el.addEventListener('timeupdate', onTimeUpdate);
+          }
+        }}
+      />
+    );
+  }
   return (
     <div className="flex items-center gap-2">
       <Button size="sm" variant="secondary" onClick={() => void load()} disabled={loading}>

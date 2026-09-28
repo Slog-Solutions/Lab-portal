@@ -51,6 +51,8 @@ model User {
   lockGrant         LockGrant?         @relation("LockSubject")
   locksIssued       LockGrant[]        @relation("LockIssuer")
   sessionMemberships SessionMember[]   @relation("SessionMemberStudent")
+  // CLASS_BROADCAST recordings this user (teacher/admin) started.
+  createdRecordings  Recording[]       @relation("RecordingCreatedBy")
 
   @@index([role])
 }
@@ -190,6 +192,8 @@ model LiveClass {
   batch     Batch?          @relation(fields: [batchId], references: [id], onDelete: SetNull)
 
   stations Station[]
+  // CLASS_BROADCAST recordings made while this class was live.
+  recordings Recording[]
 
   @@index([teacherId, state])
   @@index([batchId, state])
@@ -322,6 +326,13 @@ model ActivityInstance {
   state     Json         @default("{}")
   startedAt DateTime?
   endedAt   DateTime?
+  // Offline dictionary (SPEC-offline-dictionary.md §7) — null means "use
+  // the activity type's own default" (see resolveDictionaryEnabled in
+  // @lab/shared, which defaults VOCABULARY_TEST to false and everything
+  // else to true); a teacher's explicit per-group toggle overrides that.
+  // Lives as its own column, not inside `config`, because per-activity
+  // config schemas (Activity Type Registry) validate away unknown keys.
+  dictionaryEnabled Boolean?
 
   attempts       Attempt[]
   recordings     Recording[]
@@ -469,6 +480,12 @@ model Exercise {
   title     String
   config    Json
   createdAt DateTime     @default(now())
+  // Offline dictionary (SPEC-offline-dictionary.md §7) — same
+  // null-means-default convention as ActivityInstance.dictionaryEnabled,
+  // for the assignment-based (self-paced) path: a VOCABULARY_TEST
+  // Exercise defaults the dictionary off during an attempt at it, same as
+  // a live-session VOCABULARY_TEST group.
+  dictionaryEnabled Boolean?
 
   itemBank    ItemBank?
   assignments Assignment[]
@@ -583,6 +600,10 @@ enum RecordingKind {
   PRESENTATION
   INTERPRETATION
   PRONUNCIATION
+  // Teacher-initiated recording of their own class broadcast (screen +,
+  // optionally, mic/screen audio) — see ClassRecordingsController. Unlike
+  // every other kind above, this is never created by a station.
+  CLASS_BROADCAST
 }
 
 // Row is created BEFORE capture starts and reconciled via LiveKit webhook
@@ -605,6 +626,21 @@ model Recording {
   status             String            @default("pending") // pending | recording | finalizing | ready | failed
   createdAt          DateTime          @default(now())
   finalizedAt         DateTime?
+
+  // CLASS_BROADCAST only, below — a teacher/admin recording, not a station one.
+  liveClassId String?
+  liveClass   LiveClass? @relation(fields: [liveClassId], references: [id], onDelete: SetNull)
+  createdById String?
+  createdBy   User?      @relation("RecordingCreatedBy", fields: [createdById], references: [id], onDelete: SetNull)
+  // Whether the class recording includes teacher mic + screen audio.
+  withAudio   Boolean?
+  // Next expected chunk sequence number for the streamed upload (design
+  // doc: a 1-2h class recording streams in ~5s chunks, never one blob).
+  chunkCount  Int        @default(0)
+  updatedAt   DateTime   @default(now()) @updatedAt
+
+  @@index([liveClassId])
+  @@index([createdById])
 }
 
 model SkillProgress {
@@ -632,6 +668,26 @@ model ScoreOverride {
   newScore  Float
   reason    String
   createdAt DateTime @default(now())
+}
+
+// Offline dictionary lookup telemetry (SPEC-offline-dictionary.md §8,
+// optional-but-built). No FKs to Station/Session/User, same reasoning as
+// RoundTableTurn's own comment: a replaced station, an ended session or a
+// deleted user must not erase the record of what was looked up, and a
+// bounded-retention telemetry table (see DICTIONARY_LOG_RETENTION_DAYS)
+// is exactly the kind of row that should degrade gracefully, not cascade.
+model DictionaryLookup {
+  id                String   @id @default(cuid())
+  stationId         String?
+  studentId         String?
+  sessionId         String?
+  word              String
+  resolvedHeadword  String?
+  found             Boolean
+  at                DateTime @default(now())
+
+  @@index([at])
+  @@index([studentId, at])
 }
 
 // Every privileged action — screen viewed, remote control started,

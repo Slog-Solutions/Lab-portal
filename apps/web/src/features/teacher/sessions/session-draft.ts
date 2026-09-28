@@ -29,6 +29,20 @@ export interface GroupDraft extends RoundTableForm {
   languages: string; // CONFERENCE_INTERPRETING only — comma-separated
   // CONFERENCE_INTERPRETING only — per-member role + language, keyed by stationId.
   interpretingRoles: Record<string, { role: InterpretingRoleChoice; lang: string }>;
+  // Offline dictionary (SPEC-offline-dictionary.md §7). `dictionaryEnabled`
+  // tracks the checkbox's current value; `dictionaryEnabledTouched` is
+  // false until the teacher actually clicks it, so switching the activity
+  // type keeps following that type's own default (VOCABULARY_TEST off,
+  // everything else on) right up until the teacher makes an explicit
+  // choice — see defaultDictionaryEnabled and its call sites.
+  dictionaryEnabled: boolean;
+  dictionaryEnabledTouched: boolean;
+}
+
+/** Mirrors @lab/shared's resolveDictionaryEnabled default (VOCABULARY_TEST
+ * off, everything else on) for the still-untouched checkbox. */
+export function defaultDictionaryEnabled(activityType: BuilderActivityType): boolean {
+  return activityType !== 'VOCABULARY_TEST';
 }
 
 export function emptyGroup(index: number, activityType: BuilderActivityType = 'ROUND_TABLE'): GroupDraft {
@@ -43,6 +57,8 @@ export function emptyGroup(index: number, activityType: BuilderActivityType = 'R
     masterTrackAssetId: '',
     languages: '',
     interpretingRoles: {},
+    dictionaryEnabled: defaultDictionaryEnabled(activityType),
+    dictionaryEnabledTouched: false,
   };
 }
 
@@ -112,7 +128,7 @@ export interface SessionSummary {
   groups: Array<{
     id: string;
     index: number;
-    activity?: { type: string } | null;
+    activity?: { type: string; dictionaryEnabled: boolean | null } | null;
     members?: Array<{ student: { id: string; fullName: string } | null }>;
   }>;
 }

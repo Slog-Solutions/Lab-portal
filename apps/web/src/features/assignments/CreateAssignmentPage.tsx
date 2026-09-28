@@ -73,7 +73,14 @@ const EMPTY_DRAFT: Draft = {
 function buildInput(
   kind: AssignmentKind,
   d: Draft,
-  ctx: { studentIds: string[]; dueDate: string; audio: MediaAsset | null; document: MediaAsset | null; batchId?: string },
+  ctx: {
+    studentIds: string[];
+    dueDate: string;
+    audio: MediaAsset | null;
+    document: MediaAsset | null;
+    batchId?: string;
+    dictionaryEnabled: boolean | null;
+  },
 ): CreateAssessmentInput | null {
   const title = d.title.trim();
   if (!title || ctx.studentIds.length === 0) return null;
@@ -82,6 +89,7 @@ function buildInput(
     studentIds: ctx.studentIds,
     dueAt: ctx.dueDate ? new Date(`${ctx.dueDate}T23:59:59`).toISOString() : undefined,
     batchId: ctx.batchId,
+    dictionaryEnabled: ctx.dictionaryEnabled ?? undefined,
   };
   const instructions = d.instructions.trim() || undefined;
 
@@ -257,6 +265,13 @@ function CreateAssignmentForm({ kind }: { kind: AssignmentKind }) {
   const [dueDate, setDueDate] = useState('');
   const [created, setCreated] = useState<{ exerciseId: string; questionCount: number; assigned: number } | null>(null);
   const [autoSelected, setAutoSelected] = useState(false);
+  // Offline dictionary (SPEC-offline-dictionary.md §7) — null means "not
+  // touched", so the checkbox shows (and create sends) this kind's own
+  // default (VOCABULARY_TEST off, everything else on) until the teacher
+  // explicitly picks a value. Reset on a kind switch so an explicit choice
+  // for one test type doesn't silently carry over to a different one.
+  const [dictionaryEnabled, setDictionaryEnabled] = useState<boolean | null>(null);
+  useEffect(() => setDictionaryEnabled(null), [kind.type]);
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((prev) => ({ ...prev, [key]: value }));
 
@@ -279,7 +294,14 @@ function CreateAssignmentForm({ kind }: { kind: AssignmentKind }) {
       setAutoSelected(true);
     }
   }, [classId, classStudentRows.length, autoSelected]);
-  const input = buildInput(kind, draft, { studentIds: selected, dueDate, audio, document: documentAsset, batchId: classId ?? undefined });
+  const input = buildInput(kind, draft, {
+    studentIds: selected,
+    dueDate,
+    audio,
+    document: documentAsset,
+    batchId: classId ?? undefined,
+    dictionaryEnabled,
+  });
   const minWords = positiveInt(draft.minWords);
   const maxWords = positiveInt(draft.maxWords);
   const rangeInverted = kind.type === 'WRITING_TEST' && minWords !== undefined && maxWords !== undefined && minWords > maxWords;
@@ -461,6 +483,18 @@ function CreateAssignmentForm({ kind }: { kind: AssignmentKind }) {
               <Label htmlFor="as-due">Due date (optional)</Label>
               <Input id="as-due" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} className="w-44" />
             </div>
+
+            {/* Offline dictionary (spec §7) — defaults off for a vocabulary
+                test (looking up the answer defeats the test), on for every
+                other kind; a teacher can override either way. */}
+            <label className="flex items-center gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={dictionaryEnabled ?? kind.type !== 'VOCABULARY_TEST'}
+                onChange={(e) => setDictionaryEnabled(e.target.checked)}
+              />
+              Allow the dictionary during this test
+            </label>
 
             {create.isError && <p className="text-sm text-destructive">{create.error instanceof Error ? create.error.message : 'Could not create the assignment'}</p>}
             {created && (

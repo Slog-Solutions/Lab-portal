@@ -79,7 +79,7 @@ export class AssessmentsService {
     // without its assignments, is unusable and confusing to clean up by hand.
     const exercise = await this.prisma.$transaction(async (tx) => {
       const created = await tx.exercise.create({
-        data: { teacherId, type: dto.type, title: dto.title, config: {} },
+        data: { teacherId, type: dto.type, title: dto.title, config: {}, dictionaryEnabled: dto.dictionaryEnabled },
       });
       const bank = await tx.itemBank.create({ data: { exerciseId: created.id } });
       await tx.item.createMany({

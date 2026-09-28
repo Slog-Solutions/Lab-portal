@@ -2,6 +2,7 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import {
   ActivityType,
   AttemptStatus,
+  resolveDictionaryEnabled,
   type ItemResponseDto,
   type StartAttemptDto,
   type SubmitAttemptDto,
@@ -98,7 +99,16 @@ export class AttemptsService {
 
     return {
       attemptId: attempt.id,
-      exercise: { id: exercise.id, type: exercise.type, title: exercise.title, config: exercise.config },
+      exercise: {
+        id: exercise.id,
+        type: exercise.type,
+        title: exercise.title,
+        config: exercise.config,
+        // Offline dictionary (SPEC-offline-dictionary.md §7) — the client
+        // hides its dictionary panel while this is false (server-side
+        // enforcement is DictionaryPolicyService, independent of this).
+        dictionaryEnabled: resolveDictionaryEnabled(exercise.type, exercise.dictionaryEnabled),
+      },
       items, // answer keys already stripped — see prepareServe
     };
   }

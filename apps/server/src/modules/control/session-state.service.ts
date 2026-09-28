@@ -3,6 +3,7 @@ import {
   ActivityType,
   SessionRole,
   emptyDesiredState,
+  resolveDictionaryEnabled,
   seatLabel,
   type DesiredStationState,
   type RoundTableView,
@@ -113,6 +114,9 @@ export class SessionStateService {
         stationEnabled: true,
         monitoringIndicator: true,
         liveClass,
+        // No live activity for this seat -> nothing to restrict against
+        // (spec §7's per-activity toggle has no activity to read).
+        dictionaryEnabled: true,
       };
     }
 
@@ -186,6 +190,13 @@ export class SessionStateService {
       stationEnabled: true,
       monitoringIndicator: true,
       liveClass,
+      // Spec §7: null on the activity row means "use the type's own
+      // default" (VOCABULARY_TEST off, everything else on) — see
+      // resolveDictionaryEnabled's own doc comment. This is a UX
+      // courtesy only; DictionaryAccessGuard enforces the same policy
+      // server-side on every /dictionary/* call regardless of what this
+      // snapshot says.
+      dictionaryEnabled: resolveDictionaryEnabled(activityType ?? null, member.group.activity?.dictionaryEnabled),
       ...(roundTable ? { roundTable: roundTable.view } : {}),
     };
   }

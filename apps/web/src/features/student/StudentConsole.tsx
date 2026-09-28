@@ -3,7 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { Menu } from 'lucide-react';
 import { Track } from 'livekit-client';
 import type { CommandEnvelope, DesiredStationState, RoundTableFloor } from '@lab/shared';
-import { ActivityType, CommandType, seatLabel } from '@lab/shared';
+import { ActivityType, CommandType, seatLabel, shouldHandleDictionaryShortcut } from '@lab/shared';
 import {
   BROADCAST_ROOM,
   REMOTE_CONTROL_DATA_TOPIC,
@@ -20,6 +20,7 @@ import { replayInputIfDesktop } from '../../lib/lab-agent';
 import { stationApi } from '../../lib/station-api';
 import { queryKeys } from '../../lib/query-keys';
 import { useStudentSession } from '../../stores/student-session-store';
+import { useDictionaryStore } from '../../stores/dictionary-store';
 import { ActivityPlayer } from '../activities/registry';
 import { AssignmentsPanel } from './AssignmentsPanel';
 import { StudyLibraryPanel } from './StudyLibraryPanel';
@@ -29,6 +30,8 @@ import { JoinLiveClassCard } from './JoinLiveClassCard';
 import { StudentSignInScreen } from './StudentSignInScreen';
 import { StudentDrawer, SECTION_TITLES, type StudentSection } from './StudentDrawer';
 import { StudentHome } from './StudentHome';
+import { DictionaryPanel } from '../dictionary/DictionaryPanel';
+import { SelectionLookupPopover } from '../dictionary/SelectionLookupPopover';
 
 const textDecoder = new TextDecoder();
 
@@ -149,6 +152,12 @@ export function StudentConsole() {
   const seatText = identity ? `System ${seatLabel(identity.seatNo)}` : null;
   const studentId = student?.id ?? null;
   const activityInstanceId = snapshot?.activity?.instanceId ?? null;
+  // Offline dictionary (SPEC-offline-dictionary.md §7) — absent on an
+  // older server's snapshot means "not restricted" (see
+  // emptyDesiredState's own default), matching the server's own
+  // fail-open-on-the-client / fail-closed-on-the-server split: the real
+  // gate is DictionaryAccessGuard, this is only what hides the panel.
+  const dictionaryEnabled = snapshot?.dictionaryEnabled ?? true;
 
   useEffect(() => {
     const control = new StationControlClient({
@@ -220,12 +229,31 @@ export function StudentConsole() {
       queryClient.removeQueries({ queryKey: queryKeys.studentAssignments });
       queryClient.removeQueries({ queryKey: queryKeys.studentStudyLibrary });
       queryClient.removeQueries({ queryKey: queryKeys.classHistoryAll });
+      // Recent lookups are session-local (spec §6.2) — the same shared-
+      // hardware boundary as the query-cache clears above.
+      useDictionaryStore.getState().resetForNewStudent();
     }
     prevStudentIdRef.current = studentId;
     setSection(studentId && (screenShareCount > 0 || activityInstanceId) ? 'class' : 'home');
     setDrawerOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentId]);
+
+  // Ctrl+D opens the dictionary panel, focused on its search box (spec
+  // §6.1) — a plain renderer-level listener, NOT Electron's globalShortcut
+  // (which is OS-wide and would swallow the browser's own Ctrl+D in dev).
+  // shouldHandleDictionaryShortcut is what keeps this from firing while a
+  // typed-answer activity's textarea has focus (spec §6.3).
+  useEffect(() => {
+    if (!student) return;
+    function onKeyDown(event: KeyboardEvent): void {
+      if (!shouldHandleDictionaryShortcut(event, event.target as HTMLElement | null, dictionaryEnabled)) return;
+      event.preventDefault();
+      useDictionaryStore.getState().setOpen(true);
+    }
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, [student, dictionaryEnabled]);
 
   // The teacher starts sharing their screen or launches an activity while a
   // student is on another page: bring them to the class view so they see it
@@ -548,7 +576,7 @@ export function StudentConsole() {
   const classVisible = student ? section === 'class' : screenShareCount > 0 || !!snapshot?.activity;
 
   return (
-    <div className="min-h-screen bg-background text-foreground">
+    <div className="flex min-h-screen flex-col bg-background text-foreground">
       <header className="flex items-center justify-between gap-3 border-b border-border px-6 py-3">
         <div className="flex min-w-0 items-center gap-3">
           {student && (
@@ -607,6 +635,7 @@ export function StudentConsole() {
           student={student}
           seatText={seatText}
           inLiveClass={!!snapshot?.liveClass}
+          onOpenDictionary={() => useDictionaryStore.getState().setOpen(true)}
           onSignOut={() => void signOut()}
           signingOut={signingOut}
         />
@@ -618,7 +647,14 @@ export function StudentConsole() {
         </div>
       )}
 
-      <main className="flex flex-1 flex-col items-center gap-4 p-6">
+      {/* Row below the header: the main scroll area plus the docked
+          dictionary panel (spec §6.3 — a side panel, not a modal, so it
+          sits beside this content rather than over it). `min-h-0` lets
+          <main>'s own overflow-y-auto actually take effect inside a flex
+          child, which a flex item's default min-height:auto would otherwise
+          prevent. */}
+      <div className="flex flex-1 min-h-0">
+      <main className="flex flex-1 flex-col items-center gap-4 overflow-y-auto p-6">
         {/* The live/class view. ALWAYS mounted (only hidden) — LiveKit
             attaches broadcast/remote-control tracks to the containers in
             here regardless of sign-in state or which section is showing, and
@@ -739,6 +775,9 @@ export function StudentConsole() {
           </>
         )}
       </main>
+      {student && controlRef.current && <DictionaryPanel control={controlRef.current} dictionaryEnabled={dictionaryEnabled} />}
+      </div>
+      {student && <SelectionLookupPopover dictionaryEnabled={dictionaryEnabled} />}
       <div ref={audioContainerRef} className="hidden" />
     </div>
   );

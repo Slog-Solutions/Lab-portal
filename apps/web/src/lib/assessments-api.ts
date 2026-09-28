@@ -53,6 +53,9 @@ interface CommonInput {
   dueAt?: string;
   /** The class it is created from — files it in the students' class history. */
   batchId?: string;
+  /** Offline dictionary (SPEC-offline-dictionary.md §7) — omitted means "use
+   * the activity type's own default" (VOCABULARY_TEST off, else on). */
+  dictionaryEnabled?: boolean;
 }
 
 export type CreateAssessmentInput =

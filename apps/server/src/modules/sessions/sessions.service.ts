@@ -94,7 +94,7 @@ export class SessionsService {
                 studentId: studentAt.get(stationId) ?? null,
               })),
             },
-            activity: { create: { type: g.activityType, config: activityConfigs[i] as object } },
+            activity: { create: { type: g.activityType, config: activityConfigs[i] as object, dictionaryEnabled: g.dictionaryEnabled } },
           })),
         },
       },
@@ -133,7 +133,7 @@ export class SessionsService {
           select: {
             id: true,
             index: true,
-            activity: { select: { type: true } },
+            activity: { select: { type: true, dictionaryEnabled: true } },
             members: { select: { student: { select: { id: true, fullName: true } } } },
           },
         },
@@ -210,6 +210,29 @@ export class SessionsService {
     await this.pushToAllMembers(session.groups.flatMap((g) => g.members.map((m) => m.stationId)));
     await this.audit.log({ actorId: user.sub, action: 'session.pause', detail: { sessionId } });
     return updated;
+  }
+
+  /**
+   * Teacher control (spec §7): per-group dictionary on/off, live during a
+   * session. Bumps the session's `seq` and pushes a fresh snapshot to
+   * just that group's own stations (not the whole session) — the other
+   * groups' activities/dictionary state are unaffected, and a station's
+   * `DesiredStationState.dictionaryEnabled` (the client-side hide) plus
+   * DictionaryPolicyService's own cache (server-side enforcement, up to
+   * a 1s staleness) both reflect the change within the spec's 2s bound.
+   */
+  async setGroupDictionary(sessionId: string, groupId: string, enabled: boolean, user: JwtPayload) {
+    const session = await this.get(sessionId);
+    await this.batchAccess.assertCanUseBatch(user, session.batchId);
+    const group = session.groups.find((g) => g.id === groupId);
+    if (!group) throw new NotFoundException('Group not found in this session');
+    if (!group.activity) throw new BadRequestException('This group has no activity to configure');
+
+    await this.prisma.activityInstance.update({ where: { id: group.activity.id }, data: { dictionaryEnabled: enabled } });
+    await this.bumpAndPersist(sessionId, session.state);
+    await this.pushToAllMembers(group.members.map((m) => m.stationId));
+    await this.audit.log({ actorId: user.sub, action: 'session.set_group_dictionary', detail: { sessionId, groupId, enabled } });
+    return { ok: true as const, enabled };
   }
 
   async end(sessionId: string, user: JwtPayload) {

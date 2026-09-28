@@ -81,7 +81,8 @@ export function ListeningTestPlayer({
         {config.audioAssetId && <ItemAudio assetId={config.audioAssetId} token={control.getToken()} />}
         {items.map((item, i) => (
           <div key={item.id} className="space-y-1.5">
-            <p className="text-sm font-medium">
+            {/* Offline dictionary select-and-look-up (spec §6.1). */}
+            <p data-dictionary-scope className="text-sm font-medium">
               {i + 1}. {item.prompt}
             </p>
             {item.choices.length > 0 ? (

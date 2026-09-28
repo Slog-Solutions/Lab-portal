@@ -103,17 +103,25 @@ describe('ClassHistoryService.forStudent', () => {
     });
     const prisma = makePrisma({
       recording: {
-        findMany: vi.fn().mockResolvedValue([
-          rec('r-named', 'st-other', [ME]), // named — theirs even from another seat
-          rec('r-legacy', 'st-me', []), // older, unnamed, their seat
-          rec('r-legacy-other', 'st-other', []), // unnamed, someone else's seat
-        ]),
+        // forStudent now makes two different recording.findMany calls
+        // (this activity-scoped one, and classRecordings' kind-scoped
+        // one) — only answer the former, or classRecordings would map
+        // these same GROUP_DISCUSSION rows as if they were its own.
+        findMany: vi.fn().mockImplementation(({ where }: { where: { kind?: string } }) =>
+          where.kind
+            ? []
+            : [rec('r-named', 'st-other', [ME]), rec('r-legacy', 'st-me', []), rec('r-legacy-other', 'st-other', [])],
+        ),
       },
     });
     const [entry] = (await svcFor(prisma).forStudent(ME, CLASS)).activities;
 
     expect(entry!.recordings.map((r) => r.id)).toEqual(['r-named', 'r-legacy']);
-    expect(prisma.recording.findMany.mock.calls[0]![0].where).toEqual({
+    // Two different recording.findMany calls now happen (this one, and
+    // classRecordings' own) — find this one by shape rather than assuming
+    // array position, since their relative order isn't a contract.
+    const activityCall = prisma.recording.findMany.mock.calls.find((call) => 'activityInstanceId' in (call[0] as { where: Record<string, unknown> }).where);
+    expect(activityCall![0].where).toEqual({
       activityInstanceId: { in: ['inst1'] },
       OR: [{ studentIds: { has: ME } }, { studentIds: { isEmpty: true } }],
     });
@@ -137,11 +145,11 @@ describe('ClassHistoryService.forStudent', () => {
     });
   });
 
-  it('skips the recording and turn queries entirely when there are no activities', async () => {
+  it('skips the per-activity recording and turn queries when there are no activities (classRecordings still runs, independently)', async () => {
     const prisma = makePrisma({ sessionMember: { findMany: vi.fn().mockResolvedValue([]) } });
     const view = await svcFor(prisma).forStudent(ME, CLASS);
     expect(view.activities).toEqual([]);
-    expect(prisma.recording.findMany).not.toHaveBeenCalled();
+    expect(prisma.recording.findMany.mock.calls.some((call) => 'activityInstanceId' in (call[0] as { where: Record<string, unknown> }).where)).toBe(false);
     expect(prisma.roundTableTurn.findMany).not.toHaveBeenCalled();
   });
 
@@ -183,5 +191,64 @@ describe('ClassHistoryService.forStudent', () => {
     });
     expect(view.assignments[1]!.latestAttempt).toMatchObject({ percent: 100, feedback: null });
     expect(view.assignments[2]!.latestAttempt).toBeNull();
+  });
+
+  it("lists the class's own broadcast recordings, scoped by the live class's batchId", async () => {
+    const prisma = makePrisma({
+      recording: {
+        findMany: vi.fn().mockImplementation(({ where }: { where: { kind?: string } }) =>
+          where.kind
+            ? [
+                {
+                  id: 'cr1',
+                  withAudio: true,
+                  durationMs: 90_000,
+                  status: 'ready',
+                  updatedAt: new Date(),
+                  createdAt: new Date('2026-09-20T10:00:00Z'),
+                  liveClass: { title: "Laksh's class" },
+                },
+              ]
+            : [],
+        ),
+      },
+    });
+    const view = await svcFor(prisma).forStudent(ME, CLASS);
+
+    expect(prisma.recording.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { kind: 'CLASS_BROADCAST', liveClass: { batchId: CLASS } } }),
+    );
+    expect(view.classRecordings).toEqual([
+      { id: 'cr1', classTitle: "Laksh's class", withAudio: true, durationMs: 90_000, status: 'ready', createdAt: '2026-09-20T10:00:00.000Z' },
+    ]);
+  });
+
+  it('never shows a failed (nothing captured) class recording to a student', async () => {
+    const prisma = makePrisma({
+      recording: {
+        findMany: vi.fn().mockImplementation(({ where }: { where: { kind?: string } }) =>
+          where.kind
+            ? [{ id: 'cr-failed', withAudio: true, durationMs: 5000, status: 'failed', updatedAt: new Date(), createdAt: new Date(), liveClass: null }]
+            : [],
+        ),
+      },
+    });
+    const view = await svcFor(prisma).forStudent(ME, CLASS);
+    expect(view.classRecordings).toEqual([]);
+  });
+
+  it('reports a stale in-progress class recording as incomplete, the same rule as the teacher\'s own Recordings page', async () => {
+    const staleUpdatedAt = new Date(Date.now() - 5 * 60 * 1000);
+    const prisma = makePrisma({
+      recording: {
+        findMany: vi.fn().mockImplementation(({ where }: { where: { kind?: string } }) =>
+          where.kind
+            ? [{ id: 'cr-stale', withAudio: false, durationMs: null, status: 'recording', updatedAt: staleUpdatedAt, createdAt: staleUpdatedAt, liveClass: null }]
+            : [],
+        ),
+      },
+    });
+    const view = await svcFor(prisma).forStudent(ME, CLASS);
+    expect(view.classRecordings[0]).toMatchObject({ status: 'incomplete' });
   });
 });

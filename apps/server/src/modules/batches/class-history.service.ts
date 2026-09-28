@@ -1,17 +1,19 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import {
   NO_WRITTEN_FEEDBACK,
+  RecordingKind,
   SessionState,
   type ActivityType,
   type AttemptStatus,
   type ClassActivityEntry,
   type ClassAssignmentEntry,
   type ClassHistoryView,
-  type RecordingKind,
+  type ClassRecordingHistoryEntry,
   type SessionRole,
 } from '@lab/shared';
 import { getActivity, hasActivity } from '@lab/shared/activities';
 import { PrismaService } from '../../prisma/prisma.service';
+import { deriveClassRecordingStatus } from '../recordings/class-recording-status';
 
 function labelFor(type: string): string {
   return hasActivity(type as ActivityType) ? getActivity(type as ActivityType).label : type;
@@ -51,14 +53,16 @@ export class ClassHistoryService {
     });
     if (!enrollment) throw new ForbiddenException('You are not in this class');
 
-    const [activities, assignments] = await Promise.all([
+    const [activities, assignments, classRecordings] = await Promise.all([
       this.activities(studentId, batchId),
       this.assignments(studentId, batchId),
+      this.classRecordings(batchId),
     ]);
     const { batch } = enrollment;
     return {
       class: { id: batch.id, code: batch.code, name: batch.name, teacherNames: batch.teachers.map((t) => t.teacher.fullName) },
       activities,
+      classRecordings,
       assignments,
     };
   }
@@ -154,6 +158,35 @@ export class ClassHistoryService {
       });
     }
     return entries.sort((a, b) => b.date.localeCompare(a.date) || a.groupIndex - b.groupIndex);
+  }
+
+  /** The teacher's own recordings of the whole class broadcast (see
+   * BroadcastPanel's Record button) — same rows for every student in the
+   * class, unlike `activities`' per-student recordings, because there is
+   * only ever one "the class" to have recorded. Scoped through the live
+   * class's batchId, not per-session, so a recording made from an ad-hoc
+   * Lab Control class (no batchId) is simply never linked to any batch
+   * and never shows up here — consistent with such a class having no My
+   * Classes entry either. A 'failed' row (nothing ever captured) is left
+   * out; nothing to play back and not worth a student's confusion. */
+  private async classRecordings(batchId: string): Promise<ClassRecordingHistoryEntry[]> {
+    const rows = await this.prisma.recording.findMany({
+      where: { kind: RecordingKind.CLASS_BROADCAST, liveClass: { batchId } },
+      orderBy: { createdAt: 'desc' },
+      select: { id: true, withAudio: true, durationMs: true, status: true, updatedAt: true, createdAt: true, liveClass: { select: { title: true } } },
+    });
+    const now = Date.now();
+    return rows
+      .map((r) => ({ ...r, derivedStatus: deriveClassRecordingStatus(r, now) }))
+      .filter((r) => r.derivedStatus !== 'failed')
+      .map((r) => ({
+        id: r.id,
+        classTitle: r.liveClass?.title ?? null,
+        withAudio: r.withAudio ?? false,
+        durationMs: r.durationMs,
+        status: r.derivedStatus as 'recording' | 'ready' | 'incomplete',
+        createdAt: r.createdAt.toISOString(),
+      }));
   }
 
   private async assignments(studentId: string, batchId: string): Promise<ClassAssignmentEntry[]> {

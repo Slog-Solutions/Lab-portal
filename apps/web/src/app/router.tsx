@@ -13,6 +13,7 @@ import { ExerciseDetailPage } from '../features/exercises/ExerciseDetailPage';
 import { StudyLibraryPage } from '../features/courseware/StudyLibraryPage';
 import { GradebookPage } from '../features/gradebook/GradebookPage';
 import { ReportsPage } from '../features/reports/ReportsPage';
+import { ClassRecordingsPage } from '../features/recordings/ClassRecordingsPage';
 import { StudentConsole } from '../features/student/StudentConsole';
 import { PronunciationAuthoringPage } from '../features/exercises/PronunciationAuthoringPage';
 import { PronunciationReviewPage } from '../features/exercises/PronunciationReviewPage';
@@ -120,6 +121,7 @@ export const router = createHashRouter([
       { path: '/study-library', element: <StudyLibraryPage /> },
       { path: '/gradebook', element: <GradebookPage /> },
       { path: '/reports', element: <ReportsPage /> },
+      { path: '/recordings', element: <ClassRecordingsPage /> },
     ],
   },
   { path: '/student', element: <StudentConsole /> },

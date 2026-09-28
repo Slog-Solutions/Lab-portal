@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
 import { getActivity, hasActivity } from '@lab/shared/activities';
-import type { ActivityType } from '@lab/shared';
+import { resolveDictionaryEnabled, type ActivityType } from '@lab/shared';
 import { apiFetch } from '../../../lib/api-client';
 import { queryKeys } from '../../../lib/query-keys';
 import { GroupMonitorButton } from '../GroupMonitorButton';
@@ -41,17 +41,28 @@ export function SessionList({
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.sessions }),
   });
 
+  // Teacher control (spec §7) — per-group dictionary on/off, live.
+  const dictionaryToggle = useMutation({
+    mutationFn: ({ sessionId, groupId, enabled }: { sessionId: string; groupId: string; enabled: boolean }) =>
+      apiFetch(`/sessions/${sessionId}/groups/${groupId}/dictionary`, { method: 'PATCH', body: JSON.stringify({ enabled }) }),
+    onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.sessions }),
+  });
+
   return (
-    <div className="space-y-2">
+    <div className="space-y-3">
       {sessions?.map((s) => (
-        <div key={s.id} className="rounded-md border border-slate-800 bg-slate-900 px-4 py-2">
-          <div className="flex items-center gap-3">
-            <span className="font-medium">{s.title}</span>
-            <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-400">{s.state}</span>
-            <span className="text-xs text-slate-500">
-              {s.groups.length} group(s) · {new Date(s.startedAt ?? s.createdAt).toLocaleDateString()}
-            </span>
-            <div className="ml-auto flex gap-1.5">
+        <div key={s.id} className="rounded-2xl border border-[rgba(20,21,15,0.08)] bg-[#F4F4EF] p-4 text-[#14150F]">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5">
+              <span className="font-semibold text-sm text-[#14150F]">{s.title}</span>
+              <span className="rounded-full bg-[#17181A] px-2.5 py-0.5 text-[11px] font-medium text-[#F5F5F0]">
+                {s.state}
+              </span>
+              <span className="text-xs text-[#6E7066]">
+                {s.groups.length} group(s) · {new Date(s.startedAt ?? s.createdAt).toLocaleDateString()}
+              </span>
+            </div>
+            <div className="flex gap-1.5">
               {s.state === 'DRAFT' && <SessionActionButton label="Arm" onClick={() => lifecycle.mutate({ id: s.id, action: 'arm' })} />}
               {(s.state === 'ARMED' || s.state === 'PAUSED') && (
                 <SessionActionButton label="Start" onClick={() => lifecycle.mutate({ id: s.id, action: 'start' })} />
@@ -62,24 +73,35 @@ export function SessionList({
               )}
             </div>
           </div>
-          <ul className="mt-1 space-y-0.5">
+          <ul className="mt-2 space-y-1">
             {s.groups.map((g) => {
               const names = (g.members ?? []).flatMap((m) => (m.student ? [m.student.fullName] : []));
+              const dictionaryOn = g.activity
+                ? resolveDictionaryEnabled(g.activity.type as ActivityType, g.activity.dictionaryEnabled)
+                : null;
               return (
-                <li key={g.id} className="text-xs text-slate-500">
-                  Group {g.index} · <span className="text-slate-300">{activityLabel(g.activity?.type)}</span>
-                  {names.length > 0 && ` · ${names.join(', ')}`}
+                <li key={g.id} className="flex flex-wrap items-center gap-1.5 text-xs text-[#6E7066]">
+                  <span>
+                    Group {g.index} · <span className="font-medium text-[#14150F]">{activityLabel(g.activity?.type)}</span>
+                    {names.length > 0 && ` · ${names.join(', ')}`}
+                  </span>
+                  {g.activity && (
+                    <button
+                      type="button"
+                      title="Offline dictionary — click to toggle"
+                      onClick={() => dictionaryToggle.mutate({ sessionId: s.id, groupId: g.id, enabled: !dictionaryOn })}
+                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${dictionaryOn ? 'bg-[#DFE2D6] text-[#14150F]' : 'bg-[#E5E8DC] text-[#6E7066]'}`}
+                    >
+                      Dictionary: {dictionaryOn ? 'On' : 'Off'}
+                    </button>
+                  )}
                 </li>
               );
             })}
           </ul>
-          {/* Ser 3 "Teacher listens in on any group, can join" — rooms
-              only exist once a session leaves DRAFT (SessionsService.arm). */}
+          {/* Ser 3 Teacher listens in on any group */}
           {s.state !== 'DRAFT' && s.groups.length > 0 && (
-            <div className="mt-2 flex flex-wrap gap-1.5 border-t border-slate-800 pt-2">
-              {/* A Round Table group is monitored on its own page: there the teacher
-                  is visible to the group's students ("Teacher is listening"), which
-                  this generic hidden listen-in deliberately is not. */}
+            <div className="mt-3 flex flex-wrap gap-1.5 border-t border-[rgba(20,21,15,0.08)] pt-2.5">
               {s.groups
                 .filter((g) => g.activity?.type !== 'ROUND_TABLE')
                 .map((g) => (
@@ -88,7 +110,7 @@ export function SessionList({
               {s.groups.some((g) => g.activity?.type === 'ROUND_TABLE') && (
                 <Link
                   to={`/sessions/${s.id}/round-table`}
-                  className="rounded-md bg-emerald-800 px-2.5 py-1 text-xs font-medium text-white hover:bg-emerald-700"
+                  className="rounded-full bg-[#17181A] px-3 py-1 text-xs font-semibold text-[#F5F5F0] hover:bg-black"
                 >
                   {s.state === 'ENDED' ? 'Round Table review' : 'Round Table monitor'}
                 </Link>
@@ -97,10 +119,10 @@ export function SessionList({
           )}
         </div>
       ))}
-      {sessions?.length === 0 && <p className="text-sm text-slate-600">{emptyText}</p>}
-      {isError && <p className="text-sm text-red-400">Could not load sessions.</p>}
+      {sessions?.length === 0 && <p className="text-xs text-[#6E7066]">{emptyText}</p>}
+      {isError && <p className="text-xs text-[#C9503F]">Could not load sessions.</p>}
       {lifecycle.isError && (
-        <p className="text-sm text-red-400">{lifecycle.error instanceof Error ? lifecycle.error.message : 'That action failed'}</p>
+        <p className="text-xs text-[#C9503F]">{lifecycle.error instanceof Error ? lifecycle.error.message : 'That action failed'}</p>
       )}
     </div>
   );
@@ -111,7 +133,7 @@ function SessionActionButton({ label, onClick, tone }: { label: string; onClick:
     <button
       type="button"
       onClick={onClick}
-      className={`rounded-md px-2.5 py-1 text-xs font-medium text-white ${tone === 'danger' ? 'bg-red-800 hover:bg-red-700' : 'bg-sky-700 hover:bg-sky-600'}`}
+      className={`rounded-full px-3 py-1 text-xs font-semibold transition-all ${tone === 'danger' ? 'bg-[#C9503F] text-white hover:opacity-90' : 'bg-[#17181A] text-[#F5F5F0] hover:bg-black'}`}
     >
       {label}
     </button>

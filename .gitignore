@@ -57,3 +57,8 @@ infra/offline/certs/
 
 # Offline vendor installers (large binaries, fetched by a script not git)
 infra/offline/vendor/
+
+# Dictionary build inputs (large third-party release files, fetched by
+# fetch-inputs.ts, checksummed in the COMMITTED dictionary-sources.json —
+# see tools/dictionary-build/src/fetch-inputs.ts)
+tools/dictionary-build/inputs/

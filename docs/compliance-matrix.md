@@ -882,3 +882,27 @@ is untouched and still governs *media* (spotlight, group monitoring, the
 class broadcast room), which genuinely needs a LiveKit room to exist.
 Student credential sign-in itself, and what seat/class it attaches a
 student to, is unaffected by this change.
+
+## Offline dictionary (SPEC-offline-dictionary.md)
+
+Not an Annexure-I serial — a separate feature spec, tracked here the same
+way. See `docs/decisions/dictionary-licence.md` for the Phase 0 licence
+decision (OEWN-only, CC BY 4.0) and `tools/dictionary-build/README.md`
+for the build pipeline.
+
+| Requirement | Feature | Status | Phase |
+|---|---|---|---|
+| Data pipeline builds `dictionary.db` from open data, reproducibly | `tools/dictionary-build/` (parse WN-LMF → rank/clean/inflect → SQLite → manifest → quality gate) — ✅ full pipeline verified end-to-end against a hand-written WN-LMF fixture (unit + integration tests, 68 passing); ⬜ NOT yet run against the real Open English WordNet release (no internet access in this environment to download it — see `fetch-inputs.ts`'s own doc comment). The real 50,000-headword quality-gate threshold is therefore unverified against real data | ✅ (code) / ⬜ (real data) | — |
+| Server serves lookup/suggest/search/meta, degrades honestly | `DictionaryModule` (`apps/server/src/modules/dictionary/`) — read-only SQLite, in-memory LRU cache + suggest index, FTS5 prefix + edit-distance did-you-mean, boots fine with the file missing (`available:false`) — ✅ verified live via unit tests (44 passing) covering resolution order, run/running/ran/runs, missing-file/bad-schema-version boot | ✅ | — |
+| Student panel: search, type-ahead, results, recent, attribution | `DictionaryPanel`/`DictionaryAbout` (`apps/web/src/features/dictionary/`) — a docked, non-modal side panel (never a `Sheet`/modal, per spec §6.3), wired into `StudentConsole` — ✅ (code, typecheck + build verified); ⬜ not run against a live server/real dictionary.db in this pass | ✅ (code) | — |
+| In-context lookup: select-and-look-up, Ctrl+D | `useSelectionLookup`/`SelectionLookupPopover`, `shouldHandleDictionaryShortcut` (`@lab/shared`) — scoped via `data-dictionary-scope` on `ReadingTestPlayer`/`WritingTestPlayer`/`ListeningTestPlayer`'s prompts (a representative subset, not every text surface — `ContentExercisePlayer`'s cross-origin iframe is explicitly out of reach, noted in-code); Ctrl+D ignores typed-answer inputs and OS auto-repeat | ✅ (representative coverage) | — |
+| Teacher control: per-activity toggle, server-side enforcement | `dictionaryEnabled` on `ActivityInstance`/`Exercise` (nullable = type default), `resolveDictionaryEnabled` (defaults `VOCABULARY_TEST` off), `DictionaryPolicyService` + `DictionaryAccessGuard` (blocks a live-session activity AND an in-progress assignment-based test — the assignment-test path was a scope decision beyond the spec's literal wording, confirmed with the project owner 2026-09-28), `PATCH /sessions/:id/groups/:groupId/dictionary` (live toggle, pushes a fresh snapshot) — ✅ verified via unit tests (policy service, sessions service's snapshot-push assertion) | ✅ | — |
+| Lookup logging, retention, teacher report, item-bank export | `DictionaryLookup` model, `DictionaryLogService` (fire-and-forget logging, daily retention purge, admin purge-now), `DictionaryReportsController` (`top-words`, `export-to-item-bank` → a real bank-mode Vocabulary Test with the word masked out of its own dictionary definition), `ReportsPage`'s "Dictionary Lookups" card — ✅ (code + unit tests); deliberately does not scope by batch, matching `BatchAccessService`'s own documented "Attempt/Assignment stay unscoped" precedent | ✅ | — |
+| Attribution | `THIRD-PARTY-NOTICES.md` (shipped via `electron-builder.yml` extraResources), in-app About dialog reading live from `dictionary.db`'s own `meta` table, panel footer | ✅ (OEWN); ⬜ Charis SIL IPA font not yet vendored — panel currently falls back to system fonts (see `THIRD-PARTY-NOTICES.md`'s own "planned" section) | — |
+| CSP hardening (spec §6.3 "no external origin") | `applyContentSecurityPolicy` (`apps/desktop/src/main/protocol.ts`) — shipped as `Content-Security-Policy-Report-Only` deliberately, not yet enforcing; needs a real packaged-app pass (DevTools console, every renderer feature exercised) before flipping to enforcing | 🚧 (report-only) | — |
+
+**Known gaps, stated plainly (none silently hidden behind a ✅ above):**
+- The pipeline has never ingested the real OEWN release — only a small hand-written fixture. A real build, with the spec's actual quality-gate thresholds, is a required step before shipping, not a formality.
+- Dictionary lookup logs record `stationId` only, not `studentId`/`sessionId` (a per-student drill-down would need an extra DB round trip per lookup this pass chose not to pay).
+- The item-bank export always creates a brand-new Vocabulary Test; it does not offer merging picked words into an existing one.
+- None of this was exercised against a real running server + real Electron renderer in this pass — verification here is typecheck, build, and unit tests only (377+ server tests, 68 pipeline tests, clean `tsc`/`vite build` for web and desktop).

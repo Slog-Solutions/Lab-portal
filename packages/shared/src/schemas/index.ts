@@ -108,6 +108,9 @@ export const zCreateGroupDto = z.object({
   activityConfig: z.unknown(),
   memberStationIds: z.array(z.string().cuid2()).min(1).max(40),
   chairmanStationId: z.string().cuid2().optional(),
+  // Offline dictionary (SPEC-offline-dictionary.md §7) — omitted means
+  // "use the activity type's own default" (see resolveDictionaryEnabled).
+  dictionaryEnabled: z.boolean().optional(),
 });
 export type CreateGroupDto = z.infer<typeof zCreateGroupDto>;
 
@@ -316,6 +319,11 @@ const zAssessmentCommon = z.object({
    * student must be enrolled in it; stored on each Assignment so the
    * student sees it in that class's history. */
   batchId: z.string().cuid2().optional(),
+  // Offline dictionary (SPEC-offline-dictionary.md §7) — omitted means "use
+  // the activity type's own default" (VOCABULARY_TEST off, everything
+  // else on). Looking up the answer during a vocabulary test defeats the
+  // test; a teacher can override it per test either way.
+  dictionaryEnabled: z.boolean().optional(),
 });
 
 /** One call authors a whole test and assigns it (see AssessmentsService).
@@ -411,6 +419,19 @@ export const zUpdateMediaAssetDto = z.object({
 });
 export type UpdateMediaAssetDto = z.infer<typeof zUpdateMediaAssetDto>;
 
+/** POST /class-recordings — a teacher starting a recording of their own
+ * class broadcast. See ClassRecordingsController. */
+export const zStartClassRecordingDto = z.object({
+  withAudio: z.boolean(),
+});
+export type StartClassRecordingDto = z.infer<typeof zStartClassRecordingDto>;
+
+/** POST /class-recordings/:id/finish */
+export const zFinishClassRecordingDto = z.object({
+  durationMs: z.coerce.number().int().min(0),
+});
+export type FinishClassRecordingDto = z.infer<typeof zFinishClassRecordingDto>;
+
 // ---- Content package import (SCORM/xAPI/HTML — build plan "engine + import") ---
 
 export const zContentPackageFormat = z.enum([
@@ -434,12 +455,17 @@ export const zCreateExerciseDto = z.object({
   title: z.string().min(1).max(200),
   lessonId: z.string().cuid2().optional(),
   config: z.unknown(), // validated against that type's configSchema server-side (Activity Type Registry)
+  // Offline dictionary (SPEC-offline-dictionary.md §7) — omitted/undefined
+  // means "use the activity type's own default" (VOCABULARY_TEST off,
+  // everything else on); an explicit true/false overrides it.
+  dictionaryEnabled: z.boolean().optional(),
 });
 export type CreateExerciseDto = z.infer<typeof zCreateExerciseDto>;
 
 export const zUpdateExerciseDto = z.object({
   title: z.string().min(1).max(200).optional(),
   config: z.unknown().optional(),
+  dictionaryEnabled: z.boolean().optional(),
 });
 export type UpdateExerciseDto = z.infer<typeof zUpdateExerciseDto>;
 
@@ -635,3 +661,44 @@ export type UpdateUserDto = z.infer<typeof zUpdateUserDto>;
 
 export const zResetPasswordDto = z.object({ password: z.string().min(8).max(128) });
 export type ResetPasswordDto = z.infer<typeof zResetPasswordDto>;
+
+// ---- Offline dictionary (SPEC-offline-dictionary.md §5) -----------------------
+
+export const zDictionaryLookupQuery = z.object({ q: z.string().trim().min(1).max(64) });
+export type DictionaryLookupQuery = z.infer<typeof zDictionaryLookupQuery>;
+
+export const zDictionarySuggestQuery = z.object({
+  q: z.string().trim().min(1).max(64),
+  limit: z.coerce.number().int().positive().max(8).default(8),
+});
+export type DictionarySuggestQuery = z.infer<typeof zDictionarySuggestQuery>;
+
+export const zDictionarySearchQuery = z.object({
+  q: z.string().trim().min(1).max(200),
+  limit: z.coerce.number().int().positive().max(20).default(20),
+});
+export type DictionarySearchQuery = z.infer<typeof zDictionarySearchQuery>;
+
+export const zSetGroupDictionaryDto = z.object({ enabled: z.boolean() });
+export type SetGroupDictionaryDto = z.infer<typeof zSetGroupDictionaryDto>;
+
+// No batchId here on purpose — BatchAccessService's own doc comment
+// documents that Gradebook/Reports-style aggregate queries (Attempt,
+// Assignment; DictionaryLookup is the same shape) stay batch-unscoped,
+// since a student can belong to more than one batch and scoping through
+// Enrollment is ambiguous. This mirrors that precedent rather than
+// inventing a new one.
+//
+// Always creates a NEW VOCABULARY_TEST exercise (bank mode, matching
+// AssessmentsService.create's own item-bank wiring) rather than offering
+// an "append to an existing exercise" option — an existing exercise may be
+// in inline-config mode (Activity Type Registry's other VOCABULARY_TEST
+// shape), and appending items to its ItemBank without also wiring
+// config.itemBankId would silently do nothing at serve time. A "merge
+// into an existing bank-mode test" option is a real follow-up, not
+// implemented here.
+export const zExportDictionaryWordsDto = z.object({
+  title: z.string().trim().min(1).max(120),
+  words: z.array(z.string().trim().min(1).max(64)).min(1).max(200),
+});
+export type ExportDictionaryWordsDto = z.infer<typeof zExportDictionaryWordsDto>;

@@ -38,4 +38,6 @@ export const queryKeys = {
   /** A student's record of one class (My Classes -> open a class). */
   classHistory: (batchId: string) => ['class-history', batchId] as const,
   classHistoryAll: ['class-history'] as const,
+  dictionaryTopWords: (days: number) => ['dictionary', 'top-words', days] as const,
+  classRecordings: ['class-recordings'] as const,
 };

@@ -153,7 +153,14 @@ export function ReadingTestPlayer({
       </CardHeader>
       <CardContent className="space-y-4">
         {config.instructions && <p className="text-sm text-muted-foreground">{config.instructions}</p>}
-        {item.prompt && <p className="rounded-md bg-muted/50 p-3 text-lg leading-relaxed">{item.prompt}</p>}
+        {item.prompt && (
+          // Offline dictionary select-and-look-up (spec §6.1) — this scope
+          // marker is what use-selection-lookup.ts requires before it will
+          // show the "Look up" popover for a selection.
+          <p data-dictionary-scope className="rounded-md bg-muted/50 p-3 text-lg leading-relaxed">
+            {item.prompt}
+          </p>
+        )}
 
         {item.mediaAssetId && (
           <div className="space-y-2">

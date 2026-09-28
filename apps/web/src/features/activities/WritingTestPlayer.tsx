@@ -84,7 +84,10 @@ export function WritingTestPlayer({
       <CardContent className="space-y-4">
         {config.instructions && <p className="text-sm text-muted-foreground">{config.instructions}</p>}
         <div className="rounded-md bg-muted/50 p-3">
-          <p className="whitespace-pre-wrap text-sm font-medium">{item.prompt}</p>
+          {/* Offline dictionary select-and-look-up (spec §6.1). */}
+          <p data-dictionary-scope className="whitespace-pre-wrap text-sm font-medium">
+            {item.prompt}
+          </p>
         </div>
         <div className="space-y-1.5">
           <Textarea

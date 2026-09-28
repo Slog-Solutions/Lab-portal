@@ -1,3 +1,4 @@
+import type { DictionaryLookupResult, DictionaryMeta } from '@lab/shared';
 import { ApiError } from './api-client';
 import { getRuntimeConfig } from './runtime-config';
 import type { PronunciationVoice, SpeakResult } from './pronunciation-api';
@@ -30,7 +31,7 @@ async function stationFetch<T>(path: string, token: string | null, init?: Reques
 
 export interface StartedAttempt {
   attemptId: string;
-  exercise: { id: string; type: string; title: string; config: unknown };
+  exercise: { id: string; type: string; title: string; config: unknown; dictionaryEnabled: boolean };
   items?: Array<{ id: string; prompt: string; choices: string[]; mediaAssetId?: string }>;
 }
 
@@ -147,4 +148,21 @@ export const stationApi = {
     attemptId: string,
     body: { response: unknown; itemResponses?: Array<{ itemId: string; given: string }> },
   ) => stationFetch(`/attempts/${attemptId}/submit`, token, { method: 'POST', body: JSON.stringify(body) }),
+
+  /** Offline dictionary (SPEC-offline-dictionary.md §5/§6) — `dictionaryMeta`
+   * always returns 200 (the About screen renders even when unavailable);
+   * the other three surface a 403 `DICTIONARY_DISABLED` (teacher turned it
+   * off for this activity) or a 503 `DICTIONARY_UNAVAILABLE` as an
+   * ApiError with `.code` set, which DictionaryPanel reads to pick its
+   * error state rather than showing a raw network error (spec §6.3). */
+  dictionaryMeta: (token: string | null) => stationFetch<DictionaryMeta>('/dictionary/meta', token),
+
+  dictionaryLookup: (token: string | null, q: string) =>
+    stationFetch<DictionaryLookupResult>(`/dictionary/lookup?q=${encodeURIComponent(q)}`, token),
+
+  dictionarySuggest: (token: string | null, q: string, limit = 8) =>
+    stationFetch<string[]>(`/dictionary/suggest?q=${encodeURIComponent(q)}&limit=${limit}`, token),
+
+  dictionarySearch: (token: string | null, q: string, limit = 20) =>
+    stationFetch<string[]>(`/dictionary/search?q=${encodeURIComponent(q)}&limit=${limit}`, token),
 };

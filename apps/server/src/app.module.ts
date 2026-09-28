@@ -24,6 +24,7 @@ import { AdminModule } from './modules/admin/admin.module';
 import { BatchesModule } from './modules/batches/batches.module';
 import { ClassroomModule } from './modules/classroom/classroom.module';
 import { RoundTableModule } from './modules/round-table/round-table.module';
+import { DictionaryModule } from './modules/dictionary/dictionary.module';
 
 /**
  * Phase 0-5 wiring.
@@ -54,6 +55,7 @@ import { RoundTableModule } from './modules/round-table/round-table.module';
     AssessmentsModule,
     StudyModulesModule,
     AdminModule,
+    DictionaryModule,
   ],
 })
 export class AppModule {}
