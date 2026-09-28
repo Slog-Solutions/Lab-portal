@@ -29,11 +29,28 @@ export interface AttemptRow {
   scoreOverride: { id: string; oldScore: number | null; newScore: number; reason: string } | null;
 }
 
+export interface GradebookAssignmentRow {
+  id: string;
+  exerciseId: string;
+  studentId: string;
+  dueAt: string | null;
+  batchId: string | null;
+  createdAt: string;
+  student: { id: string; fullName: string; serviceNumber: string };
+  attempts: Array<{ id: string; status: string }>;
+}
+
 export const gradebookApi = {
-  createAssignments: (dto: { studentIds: string[]; exerciseIds: string[]; targetScore?: number; allocatedHours?: number; dueAt?: string }) =>
-    apiFetch<{ created: number }>('/gradebook/assignments', { method: 'POST', body: JSON.stringify(dto) }),
+  createAssignments: (dto: {
+    studentIds: string[];
+    exerciseIds: string[];
+    targetScore?: number;
+    allocatedHours?: number;
+    dueAt?: string;
+    batchId?: string;
+  }) => apiFetch<{ created: number; skipped: number }>('/gradebook/assignments', { method: 'POST', body: JSON.stringify(dto) }),
   listAssignments: (filter: { studentId?: string; exerciseId?: string } = {}) =>
-    apiFetch(`/gradebook/assignments?${toQueryString(filter)}`),
+    apiFetch<GradebookAssignmentRow[]>(`/gradebook/assignments?${toQueryString(filter)}`),
   listAttempts: (filter: { studentId?: string; exerciseId?: string; status?: string } = {}) =>
     apiFetch<AttemptRow[]>(`/gradebook/attempts?${toQueryString(filter)}`),
   getAttempt: (id: string) => apiFetch(`/gradebook/attempts/${id}`),

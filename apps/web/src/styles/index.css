@@ -1,47 +1,141 @@
 @import 'tailwindcss';
 
 /*
- * shadcn/ui token set (Phase 3 — see build plan "Tailwind + shadcn/ui").
- * The console has been dark-slate-only since Phase 0 with no light/dark
- * toggle anywhere in the app, so these tokens commit to one palette
- * rather than defining a light variant nothing would ever switch to.
- * `packages/ui`'s own `cn()` helper is the canonical merge utility this
- * project already standardized on; these components use the same one.
+ * Design System — Lime Bento Dashboard
+ * Follows DESIGN_SYSTEM_LIME_BENTO.md exact color tokens, typography,
+ * radiuses, and bento grid foundations.
  */
 @theme {
-  --color-background: oklch(0.129 0.042 264.695);
-  --color-foreground: oklch(0.984 0.003 247.858);
-  --color-card: oklch(0.208 0.042 265.755);
-  --color-card-foreground: oklch(0.984 0.003 247.858);
-  --color-popover: oklch(0.208 0.042 265.755);
-  --color-popover-foreground: oklch(0.984 0.003 247.858);
-  --color-primary: oklch(0.623 0.214 259.815);
-  --color-primary-foreground: oklch(0.984 0.003 247.858);
-  --color-secondary: oklch(0.279 0.041 260.031);
-  --color-secondary-foreground: oklch(0.984 0.003 247.858);
-  --color-muted: oklch(0.279 0.041 260.031);
-  --color-muted-foreground: oklch(0.704 0.04 256.788);
-  --color-accent: oklch(0.279 0.041 260.031);
-  --color-accent-foreground: oklch(0.984 0.003 247.858);
-  --color-destructive: oklch(0.577 0.245 27.325);
-  --color-destructive-foreground: oklch(0.984 0.003 247.858);
-  --color-border: oklch(1 0 0 / 12%);
-  --color-input: oklch(1 0 0 / 18%);
-  --color-ring: oklch(0.551 0.027 264.364);
-  --radius: 0.5rem;
+  /* Canvas */
+  --color-canvas: #A9AF98;
+
+  /* Accent (use sparingly — active states, primary CTAs, key metrics only) */
+  --color-accent: #D7F83C;
+  --color-accent-ink: #14150F;
+
+  /* Dark surface (stat cards, high-emphasis panels) */
+  --color-surface-dark: #17181A;
+  --color-surface-dark-ink: #F5F5F0;
+  --color-surface-dark-ink-muted: #9A9C97;
+
+  /* Light surface (default cards) */
+  --color-surface-light: #F4F4EF;
+  --color-surface-light-ink: #14150F;
+  --color-surface-light-ink-muted: #6E7066;
+
+  /* Borders / dividers — used sparingly, most separation is spacing not lines */
+  --color-hairline: rgba(20, 21, 15, 0.08);
+  --color-hairline-on-dark: rgba(245, 245, 240, 0.12);
+
+  /* Status */
+  --color-status-online: #6FCF6F;
+  --color-status-offline: #C9503F;
+  --color-status-pending: #E0B84A;
+
+  /* Radii */
+  --radius-card: 28px;
+  --radius-pill: 999px;
+  --radius-control: 16px;
+
+  /* Typography */
+  --font-sans: 'General Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+
+  /* Semantic theme tokens */
+  --color-background: #A9AF98;
+  --color-foreground: #14150F;
+  --color-card: #F4F4EF;
+  --color-card-foreground: #14150F;
+  --color-popover: #F4F4EF;
+  --color-popover-foreground: #14150F;
+  --color-primary: #17181A;
+  --color-primary-foreground: #F5F5F0;
+  --color-secondary: #E5E8DC;
+  --color-secondary-foreground: #14150F;
+  --color-muted: #DFE2D6;
+  --color-muted-foreground: #6E7066;
+  --color-destructive: #C9503F;
+  --color-destructive-foreground: #F5F5F0;
+  --color-border: rgba(20, 21, 15, 0.08);
+  --color-input: rgba(20, 21, 15, 0.14);
+  --color-ring: #17181A;
 }
 
 :root {
-  color-scheme: dark;
+  --color-canvas: #A9AF98;
+  --color-accent: #D7F83C;
+  --color-accent-ink: #14150F;
+  --color-surface-dark: #17181A;
+  --color-surface-dark-ink: #F5F5F0;
+  --color-surface-dark-ink-muted: #9A9C97;
+  --color-surface-light: #F4F4EF;
+  --color-surface-light-ink: #14150F;
+  --color-surface-light-ink-muted: #6E7066;
+  --color-hairline: rgba(20, 21, 15, 0.08);
+  --color-hairline-on-dark: rgba(245, 245, 240, 0.12);
+  --color-status-online: #6FCF6F;
+  --color-status-offline: #C9503F;
+  --color-status-pending: #E0B84A;
+
+  --radius-card: 28px;
+  --radius-pill: 999px;
+  --radius-control: 16px;
+  --space-card-padding: 24px;
+  --space-grid-gap: 16px;
+
+  color-scheme: light;
+}
+
+@font-face {
+  font-family: 'General Sans';
+  src: url('/assets/fonts/GeneralSans-Variable.woff2') format('woff2-variations');
+  font-weight: 200 700;
+  font-display: swap;
 }
 
 body {
   margin: 0;
-  background: var(--color-background);
-  color: var(--color-foreground);
-  font-family:
-    system-ui,
-    -apple-system,
-    'Segoe UI',
-    sans-serif;
+  background-color: var(--color-canvas);
+  color: var(--color-surface-light-ink);
+  font-family: 'General Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Hero number & typography helpers per DESIGN_SYSTEM_LIME_BENTO.md §3 */
+.text-hero-num {
+  font-size: clamp(2.25rem, 3.2vw, 3rem);
+  line-height: 1.05;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.text-card-title {
+  font-size: 1.25rem;
+  line-height: 1.2;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.text-section-label {
+  font-size: 0.875rem;
+  line-height: 1.4;
+  font-weight: 500;
+}
+
+/* Slide-in for ui/sheet.tsx (no tw-animate plugin in this project). */
+@keyframes sheet-in-left {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(0);
+  }
+}
+
+.sheet-content[data-state='open'] {
+  animation: sheet-in-left 180ms ease-out;
+}
+
+/* Offline dictionary IPA text */
+.font-ipa {
+  font-family: 'Charis SIL', 'Doulos SIL', 'Segoe UI', 'Noto Sans', sans-serif;
 }

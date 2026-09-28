@@ -15,8 +15,13 @@ export default defineConfig({
   server: {
     port: 5173,
     proxy: {
-      '/api': { target: 'http://127.0.0.1:3000', changeOrigin: true },
-      '/socket.io': { target: 'http://127.0.0.1:3000', ws: true, changeOrigin: true },
+      // Port 3000 collides with another local Docker project on this
+      // machine (a container also publishes host:3000) — moved to 3010
+      // to stop the lab server's dev traffic from being intercepted.
+      // Keep this in sync with apps/server/.env's PORT.
+      // 127.0.0.1 (not localhost) avoids Node resolving to IPv6 ::1.
+      '/api': { target: 'http://127.0.0.1:3010', changeOrigin: true },
+      '/socket.io': { target: 'http://127.0.0.1:3010', ws: true, changeOrigin: true },
     },
   },
   build: {

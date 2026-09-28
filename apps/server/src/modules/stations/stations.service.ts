@@ -23,13 +23,25 @@ const STATUS_ROW_INCLUDE = {
 
 type StationWithStatusIncludes = Prisma.StationGetPayload<{ include: typeof STATUS_ROW_INCLUDE }>;
 
+export interface LiveClassSummary {
+  id: string;
+  title: string;
+  teacherId: string;
+  teacherName: string;
+}
+
+const BAD_CLASS_CODE_MESSAGE = 'Classroom code is invalid or the class has ended';
+
 export interface ClaimResult {
   userId: string;
   fullName: string;
   serviceNumber: string;
   studentToken: string;
   seatNo: number;
-  liveClass: { id: string; title: string; teacherId: string; teacherName: string };
+  /** Null when the student signed in without a class code — signing in
+   * never needs a class; they can attach the seat later with
+   * StationsService.attachToLiveClass. */
+  liveClass: LiveClassSummary | null;
   /** Set when this claim bumped an *offline* station off the same system
    * number (StationsService.claim step 3) — callers push a fresh status
    * row for that station too, since its seatNo just changed under it. */
@@ -157,8 +169,9 @@ export class StationsService {
    * seatNoFromSystemNumber — no admin step. The station token proves "this
    * HTTP caller is a genuine seat"; the student's own password proves who
    * they are (AuthService.authenticate, same check a dashboard login
-   * uses); `classCode` must match an ACTIVE LiveClass. All three failure
-   * modes short-circuit to a message that reveals nothing more than
+   * uses); `classCode` is OPTIONAL — when given it must match an ACTIVE
+   * LiveClass, when omitted the student just signs in with no class. Each
+   * failure mode short-circuits to a message that reveals nothing more than
    * necessary — see each branch's own audit reason.
    *
    * `opts.isStationOnline` is injected rather than imported directly
@@ -195,18 +208,25 @@ export class StationsService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
-    const code = dto.classCode.trim().toUpperCase();
-    const liveClass = await this.prisma.liveClass.findFirst({
-      where: { code, state: 'ACTIVE' },
-      include: { teacher: { select: { fullName: true } } },
-    });
-    if (!liveClass) {
-      await this.audit.log({
-        stationId,
-        action: 'station.claim_failed',
-        detail: { serviceNumber: dto.serviceNumber, reason: 'bad_class_code', code },
-      });
-      throw new BadRequestException('Classroom code is invalid or the class has ended');
+    let liveClass: LiveClassSummary | null = null;
+    if (dto.classCode) {
+      liveClass = await this.findActiveLiveClass(dto.classCode);
+      if (!liveClass) {
+        await this.audit.log({
+          stationId,
+          action: 'station.claim_failed',
+          detail: { serviceNumber: dto.serviceNumber, reason: 'bad_class_code', code: dto.classCode.trim().toUpperCase() },
+        });
+        throw new BadRequestException(BAD_CLASS_CODE_MESSAGE);
+      }
+    } else {
+      // No code typed — still auto-join if a teacher has started a live
+      // class scoped to one of this student's enrolled classes ("Start
+      // Live Class" on ClassDetailPage; see ClassroomService.start's
+      // batchId branch). An enrolled-but-not-live student is simply not
+      // attached, never an error — this is a courtesy match, not a
+      // requirement to be enrolled anywhere.
+      liveClass = await this.findActiveLiveClassForStudent(user.id);
     }
 
     const seatNo = dto.systemNumber + 1; // seatNoFromSystemNumber — inlined to avoid a runtime dep on @lab/shared here
@@ -230,7 +250,7 @@ export class StationsService {
         }
         await tx.station.update({
           where: { id: stationId },
-          data: { seatNo, currentUserId: user.id, liveClassId: liveClass.id, lifecycle: StationLifecycle.READY },
+          data: { seatNo, currentUserId: user.id, liveClassId: liveClass?.id ?? null, lifecycle: StationLifecycle.READY },
         });
       });
     } catch (err) {
@@ -283,7 +303,7 @@ export class StationsService {
     await this.audit.log({
       stationId,
       action: 'station.claim',
-      detail: { userId: user.id, serviceNumber: user.serviceNumber, seatNo, liveClassId: liveClass.id },
+      detail: { userId: user.id, serviceNumber: user.serviceNumber, seatNo, liveClassId: liveClass?.id ?? null },
     });
     return {
       userId: user.id,
@@ -291,9 +311,114 @@ export class StationsService {
       serviceNumber: user.serviceNumber,
       studentToken,
       seatNo,
-      liveClass: { id: liveClass.id, title: liveClass.title, teacherId: liveClass.teacherId, teacherName: liveClass.teacher.fullName },
+      liveClass,
       movedFromStationId,
     };
+  }
+
+  /**
+   * A signed-in student attaching their seat to a teacher's live class after
+   * the fact (POST /classroom/join) — the counterpart to sign-in no longer
+   * needing a class. Which student is seated comes from
+   * Station.currentUserId, exactly like attempts do, so a station with
+   * nobody signed in cannot join anything. Re-joining a different class
+   * simply moves the seat; `previousTeacherId` lets the caller refresh the
+   * teacher who just lost it.
+   */
+  async attachToLiveClass(
+    stationId: string,
+    classCode: string,
+  ): Promise<{ seatNo: number | null; liveClass: LiveClassSummary; previousTeacherId: string | null }> {
+    const station = await this.prisma.station.findUnique({
+      where: { id: stationId },
+      select: { currentUserId: true, seatNo: true, liveClass: { select: { teacherId: true } } },
+    });
+    if (!station) throw new NotFoundException('Station not found');
+    if (!station.currentUserId) throw new BadRequestException('Sign in before joining a class');
+
+    const liveClass = await this.findActiveLiveClass(classCode);
+    if (!liveClass) {
+      await this.audit.log({
+        stationId,
+        action: 'station.join_class_failed',
+        detail: { userId: station.currentUserId, reason: 'bad_class_code', code: classCode.trim().toUpperCase() },
+      });
+      throw new BadRequestException(BAD_CLASS_CODE_MESSAGE);
+    }
+
+    await this.prisma.station.update({ where: { id: stationId }, data: { liveClassId: liveClass.id } });
+    await this.audit.log({
+      stationId,
+      action: 'station.join_class',
+      detail: { userId: station.currentUserId, liveClassId: liveClass.id },
+    });
+    return { seatNo: station.seatNo, liveClass, previousTeacherId: station.liveClass?.teacherId ?? null };
+  }
+
+  /** Case-insensitive lookup of an ACTIVE LiveClass by its code; null when
+   * there is none (unknown code and ended class are deliberately the same). */
+  private async findActiveLiveClass(classCode: string): Promise<LiveClassSummary | null> {
+    const found = await this.prisma.liveClass.findFirst({
+      where: { code: classCode.trim().toUpperCase(), state: 'ACTIVE' },
+      include: { teacher: { select: { fullName: true } } },
+    });
+    return found ? { id: found.id, title: found.title, teacherId: found.teacherId, teacherName: found.teacher.fullName } : null;
+  }
+
+  /** The no-code counterpart to findActiveLiveClass, keyed by roster
+   * membership instead of a typed code — see claim()'s else branch. A
+   * student can be enrolled in several classes; if more than one happens
+   * to have an active batch-scoped live class right now, the most
+   * recently started one wins (the one most likely to be happening now). */
+  private async findActiveLiveClassForStudent(studentId: string): Promise<LiveClassSummary | null> {
+    const enrollments = await this.prisma.enrollment.findMany({ where: { userId: studentId }, select: { batchId: true } });
+    if (enrollments.length === 0) return null;
+    const found = await this.prisma.liveClass.findFirst({
+      where: { batchId: { in: enrollments.map((e) => e.batchId) }, state: 'ACTIVE' },
+      orderBy: { startedAt: 'desc' },
+      include: { teacher: { select: { fullName: true } } },
+    });
+    return found ? { id: found.id, title: found.title, teacherId: found.teacherId, teacherName: found.teacher.fullName } : null;
+  }
+
+  /** Bulk counterpart to attachToLiveClass, driven by roster membership
+   * instead of a station typing a code (ClassroomService.start's batchId
+   * branch — "Start Live Class" attaches every already-signed-in enrolled
+   * student in one step). Returns just enough per station for the caller
+   * to replay attachToLiveClass's own side effects (presence, a fresh
+   * snapshot, the dashboard status row) for each one. A station already in
+   * this exact class is left alone — not an error, just nothing to do. */
+  async attachEnrolledStudents(
+    liveClassId: string,
+    studentIds: string[],
+  ): Promise<Array<{ stationId: string; seatNo: number | null; previousTeacherId: string | null }>> {
+    if (studentIds.length === 0) return [];
+    const stations = await this.prisma.station.findMany({
+      // Prisma's `not` on a nullable column excludes NULL rows outright
+      // (three-valued SQL logic: `liveClassId != x` is unknown, not true,
+      // when liveClassId IS NULL) — verified live against this dev DB. Most
+      // signed-in students have no class at all, so `{ not: liveClassId }`
+      // alone would silently skip almost everyone; the explicit null arm is
+      // what actually catches them.
+      where: { currentUserId: { in: studentIds }, OR: [{ liveClassId: null }, { liveClassId: { not: liveClassId } }] },
+      select: { id: true, seatNo: true, currentUserId: true, liveClass: { select: { teacherId: true } } },
+    });
+    if (stations.length === 0) return [];
+
+    await this.prisma.station.updateMany({
+      where: { id: { in: stations.map((s) => s.id) } },
+      data: { liveClassId },
+    });
+    await Promise.all(
+      stations.map((s) =>
+        this.audit.log({
+          stationId: s.id,
+          action: 'station.join_class',
+          detail: { userId: s.currentUserId, liveClassId, auto: true },
+        }),
+      ),
+    );
+    return stations.map((s) => ({ stationId: s.id, seatNo: s.seatNo, previousTeacherId: s.liveClass?.teacherId ?? null }));
   }
 
   /** `actorId` set means this was an admin/teacher force-release from the

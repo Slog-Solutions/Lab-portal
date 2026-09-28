@@ -58,6 +58,10 @@ export const ActivityType = {
   VOCABULARY_TEST: 'VOCABULARY_TEST',
   TELEPHONE: 'TELEPHONE',
   PRONUNCIATION: 'PRONUNCIATION',
+  PRONUNCIATION_TEST: 'PRONUNCIATION_TEST',
+  WRITING_TEST: 'WRITING_TEST',
+  LISTENING_TEST: 'LISTENING_TEST',
+  READING_TEST: 'READING_TEST',
   CONFERENCE_INTERPRETING: 'CONFERENCE_INTERPRETING',
   PRESENTATION_RECORDING: 'PRESENTATION_RECORDING',
   SELF_STUDY: 'SELF_STUDY',
@@ -77,6 +81,8 @@ export const RecordingKind = {
   PRESENTATION: 'PRESENTATION',
   INTERPRETATION: 'INTERPRETATION',
   PRONUNCIATION: 'PRONUNCIATION',
+  /** A teacher's own recording of their class broadcast — see ClassRecordingView. */
+  CLASS_BROADCAST: 'CLASS_BROADCAST',
 } as const;
 export type RecordingKind = (typeof RecordingKind)[keyof typeof RecordingKind];
 
@@ -153,3 +159,13 @@ export const EnrollmentSource = {
   SELF_JOIN: 'SELF_JOIN',
 } as const;
 export type EnrollmentSource = (typeof EnrollmentSource)[keyof typeof EnrollmentSource];
+
+/** Machine-readable `code` carried in the body of a batch-join failure, so a
+ * client can pick its own wording instead of parsing prose. The unknown-code
+ * and wrong-key cases deliberately share JOIN_INVALID — see
+ * BatchesService.joinByCode. */
+export const BatchErrorCode = {
+  JOIN_INVALID: 'BATCH_JOIN_INVALID',
+  JOIN_CLOSED: 'BATCH_JOIN_CLOSED',
+} as const;
+export type BatchErrorCode = (typeof BatchErrorCode)[keyof typeof BatchErrorCode];

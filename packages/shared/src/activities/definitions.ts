@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import { ActivityType } from '../types/enums.js';
 import { registerActivity } from './registry.js';
-import { zVocabularyTestConfig } from '../schemas/index.js';
+import { zListeningTestConfig, zReadingTestConfig, zVocabularyTestConfig, zWritingTestConfig } from '../schemas/index.js';
 
 /**
  * Concrete descriptors for every activity named in Annexure-I. Config
@@ -39,16 +39,60 @@ registerActivity({
 
 // ---- Ser 3: Round Table Discussion ------------------------------------------------
 
-const zRoundTableConfig = z.object({
+/**
+ * All fields added after the first version are optional or defaulted, so
+ * exercises/sessions saved earlier still validate. `participantAssignment`
+ * covers the "participants defined manually or with automatic options" half
+ * of Ser 3 — the server splits the pool into groups at arm time (see
+ * apps/server round-table-assignment.ts), so every client sees one result.
+ */
+export const zRoundTableConfig = z.object({
   topic: z.string().min(1),
   /** Manual or automatic chairman assignment per Annexure-I Ser 3. */
   chairmanAssignment: z.enum(['manual', 'automatic']).default('manual'),
+  /** How participants are split into groups. */
+  participantAssignment: z.enum(['manual', 'automatic']).default('manual'),
+  /** Used when participantAssignment === 'automatic'. */
+  targetGroupSize: z.number().int().min(2).max(10).optional(),
+  /** Used when chairmanAssignment === 'automatic'. */
+  chairmanStrategy: z.enum(['random', 'rotate']).default('random'),
+  /** 'rotate' only: hand the chair to the next member every N seconds. */
+  rotateEverySec: z.number().int().min(60).optional(),
   micRequestQueueEnabled: z.boolean().default(true),
+  /** Optional cap per speaking turn; the chairman gets a warning, not a cutoff. */
+  maxTurnSec: z.number().int().positive().optional(),
 });
+export type RoundTableConfig = z.infer<typeof zRoundTableConfig>;
+
+/**
+ * One stretch of speech. Keyed by `stationId` like every other Round Table
+ * role assignment (chairmanStationId, SessionMember.role): a seat may be
+ * unclaimed at runtime, so `studentId` is nullable and only attached when
+ * a student had claimed the seat. The original shape keyed turns by
+ * `studentId`, the same class of bug the Phase 2/5 notes below describe.
+ * A TEACHER turn has no station, so `stationId` is null only for that role.
+ * Times come from the server clock, relative to the activity start.
+ */
+export const zSpeakingTurn = z
+  .object({
+    stationId: z.string().cuid2().nullable(),
+    studentId: z.string().cuid2().nullable(),
+    teacherUserId: z.string().cuid2().nullable().default(null),
+    role: z.enum(['CHAIRMAN', 'MEMBER', 'TEACHER']),
+    startMs: z.number().nonnegative(),
+    endMs: z.number().nonnegative(),
+  })
+  .refine((t) => t.stationId !== null || t.role === 'TEACHER', {
+    message: 'stationId may only be null for a TEACHER turn',
+    path: ['stationId'],
+  });
+export type SpeakingTurn = z.infer<typeof zSpeakingTurn>;
+
 const zRoundTableResponse = z.object({
   recordingAssetId: z.string().cuid2().optional(),
-  speakingTurns: z.array(z.object({ studentId: z.string().cuid2(), startMs: z.number(), endMs: z.number() })),
+  speakingTurns: z.array(zSpeakingTurn),
 });
+
 registerActivity({
   id: ActivityType.ROUND_TABLE,
   label: 'Round Table Discussion',
@@ -136,6 +180,70 @@ registerActivity({
   responseSchema: zPronunciationResponse,
   playerComponent: 'PronunciationPlayer',
   authoringComponent: 'PronunciationAuthoring',
+  realtimeRequirements: { mediaRoom: 'none', needsRecording: true, needsChairman: false },
+});
+
+// ---- Ser 7: Pronunciation Test (teacher gives words, student records each) --------
+// The words themselves live in the exercise's ItemBank (prompt = the word),
+// not in this config — the same "config never carries what the student
+// shouldn't hold in bulk" split VOCABULARY_TEST's bank mode uses. Each
+// recorded word travels in SubmitAttemptDto.itemResponses (given = the
+// Recording id), so the response schema itself carries nothing.
+
+const zPronunciationTestConfig = z.object({
+  instructions: z.string().max(500).optional(),
+  playModelAudio: z.boolean().default(false),
+  voice: z.enum(['en_US', 'en_GB']).default('en_GB'),
+});
+registerActivity({
+  id: ActivityType.PRONUNCIATION_TEST,
+  label: 'Pronunciation Test',
+  configSchema: zPronunciationTestConfig,
+  responseSchema: z.object({}),
+  playerComponent: 'PronunciationTestPlayer',
+  authoringComponent: 'PronunciationTestAuthoring',
+  realtimeRequirements: { mediaRoom: 'none', needsRecording: true, needsChairman: false },
+});
+
+// ---- Writing Test (teacher sets a prompt, student writes, teacher grades) ---------
+// The prompt lives in the exercise's ItemBank; the essay travels in
+// SubmitAttemptDto.itemResponses (given = the text), so the response
+// schema itself carries nothing — same shape as PRONUNCIATION_TEST.
+
+registerActivity({
+  id: ActivityType.WRITING_TEST,
+  label: 'Writing Test',
+  configSchema: zWritingTestConfig,
+  responseSchema: z.object({}),
+  playerComponent: 'WritingTestPlayer',
+  authoringComponent: 'WritingTestAuthoring',
+  realtimeRequirements: { mediaRoom: 'none', needsRecording: false, needsChairman: false },
+});
+
+// ---- Listening Test (one audio clip + auto-graded questions) ----------------------
+
+registerActivity({
+  id: ActivityType.LISTENING_TEST,
+  label: 'Listening Test',
+  configSchema: zListeningTestConfig,
+  responseSchema: z.object({}),
+  playerComponent: 'ListeningTestPlayer',
+  authoringComponent: 'ListeningTestAuthoring',
+  realtimeRequirements: { mediaRoom: 'none', needsRecording: false, needsChairman: false },
+});
+
+// ---- Reading Test (teacher gives a passage, student reads it aloud) --------------
+// The passage lives in the exercise's ItemBank; the student's take travels
+// in the response as a Recording id (the server re-checks it really
+// uploaded — see AttemptsService.submitReadingTest) and is persisted as
+// that item's ItemResponse.given so the teacher's results page finds it.
+registerActivity({
+  id: ActivityType.READING_TEST,
+  label: 'Reading Test',
+  configSchema: zReadingTestConfig,
+  responseSchema: z.object({ studentAudioAssetId: z.string().cuid2() }),
+  playerComponent: 'ReadingTestPlayer',
+  authoringComponent: 'ReadingTestAuthoring',
   realtimeRequirements: { mediaRoom: 'none', needsRecording: true, needsChairman: false },
 });
 

@@ -19,7 +19,8 @@ rtc:
   # Set to this machine's WiFi adapter IP (DHCP — reverify with `ipconfig`
   # if LAN testing stops working after a reboot/lease renewal) for the
   # 4-PC LAN test. Revert to 127.0.0.1 for single-machine dev.
-  node_ip: 127.0.0.1
+  # 2026-09-18: set for a 2-PC LAN test (screen-spotlight feature).
+  node_ip: 192.168.1.22
 
 room:
   # Only the Nest server creates rooms (via roomService), never a client.

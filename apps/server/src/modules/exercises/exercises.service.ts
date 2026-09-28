@@ -31,7 +31,14 @@ export class ExercisesService {
   async create(teacherId: string, dto: CreateExerciseDto) {
     const config = this.validateConfig(dto.type, dto.config);
     const exercise = await this.prisma.exercise.create({
-      data: { teacherId, type: dto.type, title: dto.title, lessonId: dto.lessonId, config: config as Prisma.InputJsonValue },
+      data: {
+        teacherId,
+        type: dto.type,
+        title: dto.title,
+        lessonId: dto.lessonId,
+        config: config as Prisma.InputJsonValue,
+        dictionaryEnabled: dto.dictionaryEnabled,
+      },
     });
     await this.audit.log({ actorId: teacherId, action: 'exercise.create', detail: { exerciseId: exercise.id, type: dto.type } });
     return exercise;
@@ -55,13 +62,17 @@ export class ExercisesService {
     return exercise;
   }
 
-  async update(id: string, patch: { title?: string; config?: unknown }, requester: { id: string; role: string }) {
+  async update(
+    id: string,
+    patch: { title?: string; config?: unknown; dictionaryEnabled?: boolean },
+    requester: { id: string; role: string },
+  ) {
     const exercise = await this.get(id);
     this.assertOwnerOrAdmin(exercise, requester);
     const config = patch.config !== undefined ? this.validateConfig(exercise.type, patch.config) : undefined;
     const updated = await this.prisma.exercise.update({
       where: { id },
-      data: { title: patch.title, config: config as Prisma.InputJsonValue | undefined },
+      data: { title: patch.title, config: config as Prisma.InputJsonValue | undefined, dictionaryEnabled: patch.dictionaryEnabled },
     });
     await this.audit.log({ actorId: requester.id, action: 'exercise.update', detail: { exerciseId: id } });
     return updated;

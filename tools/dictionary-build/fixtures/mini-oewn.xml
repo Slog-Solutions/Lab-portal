@@ -1,0 +1,116 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<LexicalResource>
+  <Lexicon id="oewn" label="Open English WordNet (test fixture)" language="en" version="test-fixture-1">
+
+    <LexicalEntry id="oewn-run-v">
+      <Lemma writtenForm="run" partOfSpeech="v"/>
+      <Form writtenForm="ran"/>
+      <Form writtenForm="running"/>
+      <Pronunciation variety="GB">rʌn</Pronunciation>
+      <Sense id="oewn-run__1" synset="oewn-syn-run-1" n="0"/>
+      <Sense id="oewn-run__2" synset="oewn-syn-run-2" n="1"/>
+      <Sense id="oewn-run__3" synset="oewn-syn-run-archaic" n="2"/>
+    </LexicalEntry>
+
+    <LexicalEntry id="oewn-scurry-v">
+      <Lemma writtenForm="scurry" partOfSpeech="v"/>
+      <Sense id="oewn-scurry__1" synset="oewn-syn-run-1" n="0"/>
+    </LexicalEntry>
+
+    <LexicalEntry id="oewn-mouse-n">
+      <Lemma writtenForm="mouse" partOfSpeech="n"/>
+      <Form writtenForm="mice"/>
+      <Sense id="oewn-mouse__1" synset="oewn-syn-mouse-1" n="0"/>
+      <Sense id="oewn-mouse__2" synset="oewn-syn-mouse-2" n="1"/>
+    </LexicalEntry>
+
+    <LexicalEntry id="oewn-resolve-v">
+      <Lemma writtenForm="resolve" partOfSpeech="v"/>
+      <Sense id="oewn-resolve__1" synset="oewn-syn-resolve-1" n="0"/>
+    </LexicalEntry>
+
+    <LexicalEntry id="oewn-settle-v">
+      <Lemma writtenForm="settle" partOfSpeech="v"/>
+      <Sense id="oewn-settle__1" synset="oewn-syn-resolve-1" n="0"/>
+    </LexicalEntry>
+
+    <LexicalEntry id="oewn-quick-a">
+      <Lemma writtenForm="quick" partOfSpeech="a"/>
+      <Sense id="oewn-quick__1" synset="oewn-syn-quick-1" n="0"/>
+    </LexicalEntry>
+
+    <LexicalEntry id="oewn-markuptest-v">
+      <Lemma writtenForm="markuptest" partOfSpeech="v"/>
+      <Sense id="oewn-markuptest__1" synset="oewn-syn-markuptest-1" n="0"/>
+    </LexicalEntry>
+
+    <LexicalEntry id="oewn-manyverb-v">
+      <Lemma writtenForm="manyverb" partOfSpeech="v"/>
+      <Sense id="oewn-manyverb__1" synset="oewn-syn-mv-1" n="0"/>
+      <Sense id="oewn-manyverb__2" synset="oewn-syn-mv-2" n="1"/>
+      <Sense id="oewn-manyverb__3" synset="oewn-syn-mv-3" n="2"/>
+      <Sense id="oewn-manyverb__4" synset="oewn-syn-mv-4" n="3"/>
+      <Sense id="oewn-manyverb__5" synset="oewn-syn-mv-5" n="4"/>
+      <Sense id="oewn-manyverb__6" synset="oewn-syn-mv-6" n="5"/>
+    </LexicalEntry>
+
+    <LexicalEntry id="oewn-allarchaic-n">
+      <Lemma writtenForm="allarchaic" partOfSpeech="n"/>
+      <Sense id="oewn-allarchaic__1" synset="oewn-syn-allarchaic-1" n="0"/>
+    </LexicalEntry>
+
+    <LexicalEntry id="oewn-unknownpos-x">
+      <Lemma writtenForm="unknownpos" partOfSpeech="u"/>
+      <Sense id="oewn-unknownpos__1" synset="oewn-syn-unknownpos-1" n="0"/>
+    </LexicalEntry>
+
+    <Synset id="oewn-syn-run-1" partOfSpeech="v" members="oewn-run-v oewn-scurry-v">
+      <Definition>move fast by using one's feet, with one foot off the ground at any given time</Definition>
+      <Example>She ran to the store.</Example>
+    </Synset>
+    <Synset id="oewn-syn-run-2" partOfSpeech="v" members="oewn-run-v">
+      <Definition>direct or control; projects, businesses, etc.</Definition>
+      <Example>She runs a small business.</Example>
+    </Synset>
+    <Synset id="oewn-syn-run-archaic" partOfSpeech="v" members="oewn-run-v">
+      <Definition>(archaic) to flow or discharge</Definition>
+    </Synset>
+
+    <Synset id="oewn-syn-mouse-1" partOfSpeech="n" members="oewn-mouse-n">
+      <Definition>any of numerous small rodents with pointed snouts and small ears on elongated bodies with slender usually hairless tails</Definition>
+    </Synset>
+    <Synset id="oewn-syn-mouse-2" partOfSpeech="n" members="oewn-mouse-n">
+      <Definition>a hand-operated electronic device that controls the coordinates of a cursor on a computer screen</Definition>
+      <Example>a mouse takes much more room than a trackball</Example>
+    </Synset>
+
+    <Synset id="oewn-syn-resolve-1" partOfSpeech="v" members="oewn-resolve-v oewn-settle-v">
+      <Definition>find a solution to a problem or dispute</Definition>
+      <Example>The two sides resolved the dispute peacefully.</Example>
+    </Synset>
+
+    <Synset id="oewn-syn-quick-1" partOfSpeech="a" members="oewn-quick-a">
+      <Definition>moving with great speed</Definition>
+    </Synset>
+
+    <Synset id="oewn-syn-markuptest-1" partOfSpeech="v" members="oewn-markuptest-v">
+      <Definition>{{template|arg}}a definition with [[wiki link|link text]] and &lt;ref&gt;a reference&lt;/ref&gt; markup embedded &lt;b&gt;bold&lt;/b&gt;</Definition>
+    </Synset>
+
+    <Synset id="oewn-syn-mv-1" partOfSpeech="v" members="oewn-manyverb-v"><Definition>sense one of many</Definition></Synset>
+    <Synset id="oewn-syn-mv-2" partOfSpeech="v" members="oewn-manyverb-v"><Definition>sense two of many</Definition></Synset>
+    <Synset id="oewn-syn-mv-3" partOfSpeech="v" members="oewn-manyverb-v"><Definition>sense three of many</Definition></Synset>
+    <Synset id="oewn-syn-mv-4" partOfSpeech="v" members="oewn-manyverb-v"><Definition>sense four of many</Definition></Synset>
+    <Synset id="oewn-syn-mv-5" partOfSpeech="v" members="oewn-manyverb-v"><Definition>sense five of many</Definition></Synset>
+    <Synset id="oewn-syn-mv-6" partOfSpeech="v" members="oewn-manyverb-v"><Definition>sense six of many</Definition></Synset>
+
+    <Synset id="oewn-syn-allarchaic-1" partOfSpeech="n" members="oewn-allarchaic-n">
+      <Definition>(obsolete) an old meaning nobody uses</Definition>
+    </Synset>
+
+    <Synset id="oewn-syn-unknownpos-1" partOfSpeech="u" members="oewn-unknownpos-x">
+      <Definition>should never appear because its POS is unrecognized</Definition>
+    </Synset>
+
+  </Lexicon>
+</LexicalResource>

@@ -5,11 +5,13 @@ import { diskStorage } from 'multer';
 import { mkdirSync } from 'node:fs';
 import type { EnvConfig } from '../../config/env.validation';
 import { StorageService } from '../../common/storage/storage.service';
+import { BatchesModule } from '../batches/batches.module';
 import { MediaAssetsController } from './media-assets.controller';
 import { MediaAssetsService } from './media-assets.service';
 
 @Module({
   imports: [
+    BatchesModule,
     MulterModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService, StorageService],

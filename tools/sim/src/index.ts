@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { io, type Socket } from 'socket.io-client';
 import { CONTROL_NAMESPACE } from '@lab/shared/events';
-import type { StationHelloAck } from '@lab/shared';
+import type { RoundTableFloor, StationHelloAck } from '@lab/shared';
 
 /**
  * Headless N-station load harness (build plan "Verification" — doubles
@@ -20,12 +20,16 @@ import type { StationHelloAck } from '@lab/shared';
  *   — this pass's actual load-test gap: prior runs only ever proved
  *   connection/presence/heartbeat at 41 seats (see Phase 0 close-out),
  *   never a real session touching every seat at once.
+ * Ser 3: npm run sim -- --count 12 --with-session --round-table
+ *   also starts the session and drives a request -> grant -> yield round
+ *   trip through the server-owned Round Table floor.
  */
 
 interface SimArgs {
   count: number;
   server: string;
   withSession: boolean;
+  roundTable: boolean;
 }
 
 function parseArgs(): SimArgs {
@@ -38,6 +42,7 @@ function parseArgs(): SimArgs {
     count: parseInt(get('--count', '40'), 10),
     server: get('--server', 'http://localhost:3000'),
     withSession: args.includes('--with-session'),
+    roundTable: args.includes('--round-table'),
   };
 }
 
@@ -64,7 +69,7 @@ async function api<T>(server: string, path: string, token: string | null, init?:
 /** Arms one real 6-group session across every connected station (Ser 1
  * at full scale), with a real mix of activity types, and reports how
  * long the full snapshot fan-out actually took. */
-async function armLoadTestSession(server: string, stations: VirtualStation[]): Promise<void> {
+async function armLoadTestSession(server: string, stations: VirtualStation[], roundTable: boolean): Promise<void> {
   const ready = stations.filter((s) => s.stationId);
   if (ready.length < 2) {
     console.warn('[sim] --with-session needs at least 2 acked stations, skipping');
@@ -109,7 +114,16 @@ async function armLoadTestSession(server: string, stations: VirtualStation[]): P
         case 'VOCABULARY_TEST':
           return { ...base, activityType: g.kind, activityConfig: { items: [{ prompt: 'load', answer: 'test' }], shuffleItems: false } };
         default:
-          return { ...base, activityType: g.kind, activityConfig: { topic: 'Load-test discussion', chairmanAssignment: 'manual', micRequestQueueEnabled: true } };
+          // A Round Table needs >= 2 members and a chairman among them (the
+          // server refuses to create one otherwise); a stray 1-seat group
+          // at small --count just runs a Telephone activity instead.
+          if (g.id.length < 2) return { ...base, activityType: 'TELEPHONE', activityConfig: { scenario: 'Load-test call', maxDurationSec: 300 } };
+          return {
+            ...base,
+            activityType: g.kind,
+            chairmanStationId: g.id[0],
+            activityConfig: { topic: 'Load-test discussion', chairmanAssignment: 'manual', micRequestQueueEnabled: true },
+          };
       }
     });
 
@@ -121,7 +135,7 @@ async function armLoadTestSession(server: string, stations: VirtualStation[]): P
       }),
   );
 
-  const session = await api<{ id: string }>(server, '/sessions', teacherToken, {
+  const session = await api<{ id: string; groups: Array<{ id: string; index: number }> }>(server, '/sessions', teacherToken, {
     method: 'POST',
     body: JSON.stringify({ title: `Load test ${new Date().toISOString()}`, batchId: batches[0].id, groups: groupPayload }),
   });
@@ -131,12 +145,56 @@ async function armLoadTestSession(server: string, stations: VirtualStation[]): P
   await Promise.all(snapshotPromises);
   console.log(`[sim] all ${ready.length} stations received a post-arm snapshot in ${Date.now() - armStarted}ms`);
 
+  if (roundTable) {
+    const rt = groupPayload.find((g) => g.activityType === 'ROUND_TABLE' && g.memberStationIds.length >= 2);
+    const created = rt && session.groups.find((g) => g.index === rt.index);
+    const chairman = rt && ready.find((s) => s.stationId === (rt as { chairmanStationId?: string }).chairmanStationId);
+    const member = rt && ready.find((s) => s.stationId === rt.memberStationIds[1]);
+    if (created && chairman && member) await driveRoundTable(server, teacherToken, session.id, created.id, chairman, member);
+    else console.warn('[sim] --round-table needs a ROUND_TABLE group with 2+ seats (use --count 6 or more), skipping');
+  }
+
   await api(server, `/sessions/${session.id}/end`, teacherToken, { method: 'POST' });
   console.log('[sim] session ended, LiveKit rooms torn down');
 }
 
+/** Ser 3: drives a real request -> grant -> yield round trip through the
+ * server-owned floor and asserts every station-visible `rt:floor` step. */
+async function driveRoundTable(
+  server: string,
+  teacherToken: string,
+  sessionId: string,
+  groupId: string,
+  chairman: VirtualStation,
+  member: VirtualStation,
+): Promise<void> {
+  await api(server, `/sessions/${sessionId}/start`, teacherToken, { method: 'POST' });
+  const floors: RoundTableFloor[] = [];
+  const errors: string[] = [];
+  chairman.socket.on('rt:floor', (f: RoundTableFloor) => floors.push(f));
+  member.socket.on('rt:error', (e: { message: string }) => errors.push(e.message));
+  const ref = { sessionId, groupId };
+  const waitFor = async (what: string, pred: (f: RoundTableFloor) => boolean): Promise<number> => {
+    const started = Date.now();
+    while (Date.now() - started < 5_000) {
+      const last = floors[floors.length - 1];
+      if (last && pred(last)) return Date.now() - started;
+      await sleep(25);
+    }
+    throw new Error(`[sim] round table: timed out waiting for ${what} (errors: ${errors.join('; ') || 'none'})`);
+  };
+
+  member.socket.emit('rt:requestMic', ref);
+  const tQueue = await waitFor('the request to reach the chairman', (f) => f.queue.includes(member.stationId!));
+  chairman.socket.emit('rt:grantFloor', { ...ref, stationId: member.stationId });
+  const tGrant = await waitFor('the grant', (f) => f.speakerStationId === member.stationId && f.queue.length === 0);
+  member.socket.emit('rt:yieldFloor', ref);
+  const tYield = await waitFor('the yield', (f) => f.speakerStationId === null);
+  console.log(`[sim] round table OK: request ${tQueue}ms, grant ${tGrant}ms, yield ${tYield}ms (seq ${floors[0]?.seq}..${floors[floors.length - 1]?.seq})`);
+}
+
 async function main(): Promise<void> {
-  const { count, server, withSession } = parseArgs();
+  const { count, server, withSession, roundTable } = parseArgs();
   const wsUrl = server.replace(/^http/, 'ws');
   console.log(`[sim] spinning up ${count} virtual stations against ${wsUrl}${CONTROL_NAMESPACE}`);
 
@@ -170,7 +228,7 @@ async function main(): Promise<void> {
           station.seatNo = ack.seatNo;
           if (helloAcked === count) {
             console.log(`[sim] all ${count} stations registered and acked`);
-            if (withSession) void armLoadTestSession(server, stations).catch((err) => console.error('[sim] --with-session failed:', err));
+            if (withSession) void armLoadTestSession(server, stations, roundTable).catch((err) => console.error('[sim] --with-session failed:', err));
           }
         },
       );

@@ -1,5 +1,5 @@
-import { Body, Controller, Get, Param, Post } from '@nestjs/common';
-import { UserRole, zCreateSessionDto, type CreateSessionDto } from '@lab/shared';
+import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { UserRole, zCreateSessionDto, zSetGroupDictionaryDto, type CreateSessionDto, type SetGroupDictionaryDto } from '@lab/shared';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -16,9 +16,10 @@ export class SessionsController {
     return this.sessions.create(dto, user);
   }
 
+  /** `?batchId=` lists one class's sessions (its own activity screen). */
   @Get()
-  async list(@CurrentUser() user: JwtPayload) {
-    return this.sessions.list(user);
+  async list(@CurrentUser() user: JwtPayload, @Query('batchId') batchId?: string) {
+    return this.sessions.list(user, batchId || undefined);
   }
 
   // MUST be declared before ':id' — Nest/Express matches routes in
@@ -55,5 +56,16 @@ export class SessionsController {
   @Post(':id/end')
   async end(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.sessions.end(id, user);
+  }
+
+  /** Teacher control (spec §7) — per-group dictionary on/off, live. */
+  @Patch(':id/groups/:groupId/dictionary')
+  async setGroupDictionary(
+    @Param('id') id: string,
+    @Param('groupId') groupId: string,
+    @Body(new ZodValidationPipe(zSetGroupDictionaryDto)) dto: SetGroupDictionaryDto,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.sessions.setGroupDictionary(id, groupId, dto.enabled, user);
   }
 }

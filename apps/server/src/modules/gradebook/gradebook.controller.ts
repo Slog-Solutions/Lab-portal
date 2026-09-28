@@ -16,7 +16,7 @@ export class GradebookController {
     @Body(new ZodValidationPipe(zAssignmentDto)) dto: AssignmentDto,
     @CurrentUser() user: JwtPayload,
   ) {
-    return this.gradebook.createAssignments(user.sub, dto);
+    return this.gradebook.createAssignments(user, dto);
   }
 
   @Get('assignments')

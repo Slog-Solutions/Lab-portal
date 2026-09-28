@@ -5,7 +5,10 @@ import { apiFetch } from './api-client';
  * ControlController) — one function per classroom-control action so pages
  * never hand-build the request shape. */
 export const controlApi = {
-  lock: (target: CommandTarget, opts: { screen: boolean; input: boolean; message?: string }) =>
+  /** `mode` defaults server-side to 'soft' (overlay + OS input suppression,
+   * releasable from the browser) when omitted — pass 'windows' for the
+   * real Win+L, which only the student's own Windows password releases. */
+  lock: (target: CommandTarget, opts: { mode?: 'soft' | 'windows'; screen: boolean; input: boolean; message?: string }) =>
     apiFetch('/control/lock', { method: 'POST', body: JSON.stringify({ target, ...opts }) }),
   unlock: (target: CommandTarget) => apiFetch('/control/unlock', { method: 'POST', body: JSON.stringify({ target }) }),
   shutdown: (target: CommandTarget) => apiFetch('/control/shutdown', { method: 'POST', body: JSON.stringify({ target }) }),
@@ -18,4 +21,14 @@ export const controlApi = {
   openUrl: (target: CommandTarget, url: string) => apiFetch('/control/open-url', { method: 'POST', body: JSON.stringify({ target, url }) }),
   pushFile: (target: CommandTarget, assetId: string, destinationHint: 'desktop' | 'downloads' = 'downloads') =>
     apiFetch('/control/push-file', { method: 'POST', body: JSON.stringify({ target, assetId, destinationHint }) }),
+  /** Ser 1 "broadcast any student's screen to others" — spotlights one
+   * student's screen to the whole class. `mic` is a separate toggle (a
+   * second promoteScreen call with a different `mic` value re-applies it
+   * without touching who's presenting). */
+  promoteScreen: (stationId: string, mic = false) =>
+    apiFetch<{ room: string; viewerToken: string }>('/control/promote-screen', {
+      method: 'POST',
+      body: JSON.stringify({ stationId, mic }),
+    }),
+  revokeScreen: (stationId: string) => apiFetch('/control/revoke-screen', { method: 'POST', body: JSON.stringify({ stationId }) }),
 };

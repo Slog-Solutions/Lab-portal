@@ -1,6 +1,7 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { ActivityType, SessionRole, SessionState, UserRole, type CreateSessionDto } from '@lab/shared';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { ActivityType, SessionRole, SessionState, UserRole, seatLabel, type CreateSessionDto } from '@lab/shared';
 import { mediaRoomForActivity } from '@lab/shared/events';
+import { validateRoundTableSetup } from '@lab/shared/activities';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MediaService } from '../media/media.service';
 import { SessionStateService } from '../control/session-state.service';
@@ -10,6 +11,7 @@ import type { JwtPayload } from '../auth/auth.service';
 import { BatchAccessService } from '../batches/batch-access.service';
 import { BatchesService } from '../batches/batches.service';
 import { ClassAccessService } from '../classroom/class-access.service';
+import { RoundTableService } from '../round-table/round-table.service';
 
 /**
  * Session/group CRUD + the server-authoritative state machine (design
@@ -19,6 +21,8 @@ import { ClassAccessService } from '../classroom/class-access.service';
  */
 @Injectable()
 export class SessionsService {
+  private readonly logger = new Logger(SessionsService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly media: MediaService,
@@ -28,6 +32,7 @@ export class SessionsService {
     private readonly batchAccess: BatchAccessService,
     private readonly batches: BatchesService,
     private readonly classAccess: ClassAccessService,
+    private readonly roundTable: RoundTableService,
   ) {}
 
   async create(dto: CreateSessionDto, user: JwtPayload) {
@@ -37,18 +42,31 @@ export class SessionsService {
     if (indices.size !== dto.groups.length) {
       throw new BadRequestException('Group indices must be unique within a session (max 6)');
     }
+    // Round Table groups are validated here (config defaults materialised) so
+    // a session can never arm with a config the floor service cannot run.
+    const activityConfigs = dto.groups.map((g) => this.normalizeActivityConfig(g));
+    const allStationIds = dto.groups.flatMap((g) => g.memberStationIds);
     if (user.role === UserRole.TEACHER) {
       // Same "only my class" boundary ControlController/CommandsService
       // enforce for live control (design decision: "a teacher sees and
       // controls only the PCs in their active class") — a session built
       // from a station outside the teacher's class would otherwise let
       // them arm/start/monitor a group they have no other control over.
-      const allStationIds = dto.groups.flatMap((g) => g.memberStationIds);
       const controllable = await this.classAccess.filterControllable(user, allStationIds);
       if (controllable.length !== allStationIds.length) {
         throw new ForbiddenException('Some selected computers are not in your class');
       }
     }
+
+    // Who is signed in at each seat right now. Stored on the member so a
+    // student's class history knows they took part — the engine itself is
+    // seat-based and never reads it.
+    const seated = await this.prisma.station.findMany({
+      where: { id: { in: [...new Set(allStationIds)] } },
+      select: { id: true, seatNo: true, currentUserId: true },
+    });
+    const studentAt = new Map(seated.map((s) => [s.id, s.currentUserId]));
+    if (dto.expectedStudents) await this.assertExpectedStudents(dto.batchId, dto.expectedStudents, seated, allStationIds);
 
     return this.prisma.classSession.create({
       data: {
@@ -57,7 +75,7 @@ export class SessionsService {
         teacherId,
         state: SessionState.DRAFT,
         groups: {
-          create: dto.groups.map((g) => ({
+          create: dto.groups.map((g, i) => ({
             index: g.index,
             members: {
               // chairmanStationId was previously ignored here — every
@@ -73,9 +91,10 @@ export class SessionsService {
               create: g.memberStationIds.map((stationId) => ({
                 stationId,
                 role: this.resolveMemberRole(g, stationId),
+                studentId: studentAt.get(stationId) ?? null,
               })),
             },
-            activity: { create: { type: g.activityType, config: g.activityConfig as object } },
+            activity: { create: { type: g.activityType, config: activityConfigs[i] as object, dictionaryEnabled: g.dictionaryEnabled } },
           })),
         },
       },
@@ -93,14 +112,32 @@ export class SessionsService {
   }
 
   /** ADMIN sees every session; TEACHER only sessions in a batch they're
-   * assigned to (enforcement — see BatchAccessService). */
-  async list(user: JwtPayload) {
-    const where =
-      user.role === UserRole.ADMIN ? {} : { batchId: { in: await this.batchAccess.batchIdsForTeacher(user.sub) } };
+   * assigned to (enforcement — see BatchAccessService). `batchId` narrows
+   * it to one class (a class's own activity list), checked the same way. */
+  async list(user: JwtPayload, batchId?: string) {
+    if (batchId) await this.batchAccess.assertCanUseBatch(user, batchId);
+    const where = batchId
+      ? { batchId }
+      : user.role === UserRole.ADMIN
+        ? {}
+        : { batchId: { in: await this.batchAccess.batchIdsForTeacher(user.sub) } };
     return this.prisma.classSession.findMany({
       where,
       orderBy: { createdAt: 'desc' },
-      include: { groups: { select: { id: true, index: true } } },
+      // activity.type lets the session list route a Round Table group to its own
+      // monitor instead of the generic (hidden) listen button; the member
+      // students let a class's list say who was in each group.
+      include: {
+        groups: {
+          orderBy: { index: 'asc' },
+          select: {
+            id: true,
+            index: true,
+            activity: { select: { type: true, dictionaryEnabled: true } },
+            members: { select: { student: { select: { id: true, fullName: true } } } },
+          },
+        },
+      },
     });
   }
 
@@ -117,11 +154,19 @@ export class SessionsService {
    * Idempotent room creation (MediaService.ensureRoom).
    */
   async arm(sessionId: string, user: JwtPayload) {
-    const session = await this.get(sessionId);
-    await this.batchAccess.assertCanUseBatch(user, session.batchId);
-    if (session.state !== SessionState.DRAFT) {
-      throw new BadRequestException(`Cannot arm a session in state ${session.state}`);
+    const draft = await this.get(sessionId);
+    await this.batchAccess.assertCanUseBatch(user, draft.batchId);
+    if (draft.state !== SessionState.DRAFT) {
+      throw new BadRequestException(`Cannot arm a session in state ${draft.state}`);
     }
+
+    // Ser 3: automatic grouping / chairman picks must land before any room
+    // exists or snapshot is pushed. May add groups, so re-read afterwards.
+    await this.roundTable.prepareOnArm(sessionId, user.sub);
+    // Arm is when the activity lands on each seat, so whoever sits there now
+    // is who does it (automatic grouping may also have re-created members).
+    await this.stampMemberStudents(sessionId, { overwrite: true });
+    const session = await this.get(sessionId);
 
     await this.media.ensureBroadcastRoom();
     for (const group of session.groups) {
@@ -147,6 +192,8 @@ export class SessionsService {
       });
     }
     const updated = await this.bumpAndPersist(sessionId, SessionState.RUNNING, { startedAt: new Date() });
+    await this.stampMemberStudents(sessionId, { overwrite: false });
+    await this.roundTableHook(sessionId, SessionState.RUNNING);
     await this.pushToAllMembers(session.groups.flatMap((g) => g.members.map((m) => m.stationId)));
     await this.audit.log({ actorId: user.sub, action: 'session.start', detail: { sessionId } });
     return updated;
@@ -159,9 +206,33 @@ export class SessionsService {
       throw new BadRequestException(`Cannot pause a session in state ${session.state}`);
     }
     const updated = await this.bumpAndPersist(sessionId, SessionState.PAUSED);
+    await this.roundTableHook(sessionId, SessionState.PAUSED);
     await this.pushToAllMembers(session.groups.flatMap((g) => g.members.map((m) => m.stationId)));
     await this.audit.log({ actorId: user.sub, action: 'session.pause', detail: { sessionId } });
     return updated;
+  }
+
+  /**
+   * Teacher control (spec §7): per-group dictionary on/off, live during a
+   * session. Bumps the session's `seq` and pushes a fresh snapshot to
+   * just that group's own stations (not the whole session) — the other
+   * groups' activities/dictionary state are unaffected, and a station's
+   * `DesiredStationState.dictionaryEnabled` (the client-side hide) plus
+   * DictionaryPolicyService's own cache (server-side enforcement, up to
+   * a 1s staleness) both reflect the change within the spec's 2s bound.
+   */
+  async setGroupDictionary(sessionId: string, groupId: string, enabled: boolean, user: JwtPayload) {
+    const session = await this.get(sessionId);
+    await this.batchAccess.assertCanUseBatch(user, session.batchId);
+    const group = session.groups.find((g) => g.id === groupId);
+    if (!group) throw new NotFoundException('Group not found in this session');
+    if (!group.activity) throw new BadRequestException('This group has no activity to configure');
+
+    await this.prisma.activityInstance.update({ where: { id: group.activity.id }, data: { dictionaryEnabled: enabled } });
+    await this.bumpAndPersist(sessionId, session.state);
+    await this.pushToAllMembers(group.members.map((m) => m.stationId));
+    await this.audit.log({ actorId: user.sub, action: 'session.set_group_dictionary', detail: { sessionId, groupId, enabled } });
+    return { ok: true as const, enabled };
   }
 
   async end(sessionId: string, user: JwtPayload) {
@@ -169,6 +240,8 @@ export class SessionsService {
     await this.batchAccess.assertCanUseBatch(user, session.batchId);
     if (session.state === SessionState.ENDED) return session;
 
+    // Close open Round Table turns (and drop the floors) before their rooms go.
+    await this.roundTableHook(sessionId, SessionState.ENDED);
     for (const group of session.groups) {
       await this.media.deleteRoom(mediaRoomForActivity(sessionId, group.id, group.activity?.type ?? ''));
     }
@@ -179,6 +252,79 @@ export class SessionsService {
     await this.pushToAllMembers(session.groups.flatMap((g) => g.members.map((m) => m.stationId)));
     await this.audit.log({ actorId: user.sub, action: 'session.end', detail: { sessionId } });
     return updated;
+  }
+
+  /**
+   * A class's activity screen picks STUDENTS; the engine delivers to SEATS.
+   * Refuses the session if a picked seat now has someone else (or nobody)
+   * signed in, or a picked student is not in this class — so a stale pick
+   * can never send an activity to the wrong person.
+   */
+  private async assertExpectedStudents(
+    batchId: string,
+    expected: Record<string, string>,
+    seated: Array<{ id: string; seatNo: number | null; currentUserId: string | null }>,
+    memberStationIds: string[],
+  ): Promise<void> {
+    for (const [stationId, studentId] of Object.entries(expected)) {
+      if (!memberStationIds.includes(stationId)) {
+        throw new BadRequestException('A picked student is not in any group');
+      }
+      const station = seated.find((s) => s.id === stationId);
+      if (!station || station.currentUserId !== studentId) {
+        const seat = station ? `System ${seatLabel(station.seatNo)}` : 'their computer';
+        throw new ConflictException(`A picked student is no longer signed in at ${seat}. Refresh and pick again.`);
+      }
+    }
+    const studentIds = [...new Set(Object.values(expected))];
+    const enrolled = await this.prisma.enrollment.count({ where: { batchId, userId: { in: studentIds } } });
+    if (enrolled !== studentIds.length) {
+      throw new BadRequestException('Some picked students are not in this class');
+    }
+  }
+
+  /**
+   * Records who is signed in at each member seat (SessionMember.studentId).
+   * `overwrite` re-stamps every seat that has someone signed in — used at arm,
+   * when the activity actually lands on the seats; otherwise only seats still
+   * unattributed are filled. A seat with nobody signed in keeps what it had.
+   */
+  private async stampMemberStudents(sessionId: string, { overwrite }: { overwrite: boolean }): Promise<void> {
+    const members = await this.prisma.sessionMember.findMany({
+      where: { group: { sessionId }, ...(overwrite ? {} : { studentId: null }) },
+      select: { id: true, studentId: true, station: { select: { currentUserId: true } } },
+    });
+    for (const m of members) {
+      const current = m.station.currentUserId;
+      if (!current || current === m.studentId) continue;
+      await this.prisma.sessionMember.update({ where: { id: m.id }, data: { studentId: current } });
+    }
+  }
+
+  /** Round Table's floor/turn bookkeeping must never fail a state change. */
+  private async roundTableHook(sessionId: string, state: string): Promise<void> {
+    try {
+      await this.roundTable.onSessionState(sessionId, state);
+    } catch (err) {
+      this.logger.error(`Round Table hook for ${state} failed on session ${sessionId}`, err as Error);
+    }
+  }
+
+  /**
+   * Validates a group's activity config and returns what to store. Only
+   * ROUND_TABLE has server-side rules today (spec section 7.1): every manual
+   * group needs >= 2 members and a chairman among them; automatic
+   * participant splitting needs a target size and an automatic chairman.
+   */
+  private normalizeActivityConfig(g: CreateSessionDto['groups'][number]): unknown {
+    if (g.activityType !== ActivityType.ROUND_TABLE) return g.activityConfig;
+    const setup = validateRoundTableSetup({
+      config: g.activityConfig,
+      memberStationIds: g.memberStationIds,
+      chairmanStationId: g.chairmanStationId,
+    });
+    if (!setup.ok) throw new BadRequestException(`Group ${g.index}: ${setup.errors.join('; ')}`);
+    return setup.config;
   }
 
   private async bumpAndPersist(

@@ -1,6 +1,6 @@
 import { io, type Socket } from 'socket.io-client';
-import { CONTROL_NAMESPACE, type ActivityEventPayload } from '@lab/shared/events';
-import type { CommandAck, CommandEnvelope, DesiredStationState, StationHelloAck } from '@lab/shared';
+import { CONTROL_NAMESPACE, type ActivityEventPayload, type RtGroupRef } from '@lab/shared/events';
+import type { CommandAck, CommandEnvelope, DesiredStationState, RoundTableFloor, StationHelloAck } from '@lab/shared';
 import { getOrCreateBrowserMachineGuid, getRuntimeConfig } from './runtime-config';
 
 const HEARTBEAT_INTERVAL_MS = 5_000;
@@ -13,6 +13,10 @@ export interface StationControlEvents {
   onLockHeartbeat: (payload: { expiresAt: number }) => void;
   onRemoteControlStart?: (payload: { room: string; token: string }) => void;
   onRemoteControlStop?: (payload: { room: string }) => void;
+  /** Teacher spotlight (Ser 1) — start/stop publishing this station's
+   * screen (and optionally mic) into `room`, which the station is already
+   * connected to. See ControlGateway.setScreenShare's doc comment. */
+  onScreenShareSet?: (payload: { room: string; screen: boolean; mic: boolean }) => void;
   onActivityEvent?: (payload: ActivityEventPayload & { fromStationId: string }) => void;
   /** Fired once the station token first exists (and again on every
    * reconnect re-hello). Lets callers react to "the station is ready to
@@ -20,11 +24,20 @@ export interface StationControlEvents {
    * on an interval (the pattern AssignmentsPanel/StudyLibraryPanel used
    * before the student sign-in gate existed). */
   onToken?: (token: string) => void;
-  /** The server ended this station's classroom membership — either the
-   * teacher ended the whole class, or an admin/teacher force-released
-   * this seat (see ClassroomService). StudentConsole reacts by clearing
-   * the local student session, which brings back the sign-in screen. */
-  onSignedOut?: (payload: { reason: 'class_ended' | 'released' }) => void;
+  /** An admin/teacher force-released this seat, or the station released
+   * itself (see ClassroomService). StudentConsole reacts by clearing the
+   * local student session, which brings back the sign-in screen. A class
+   * simply ENDING does not fire this — the station stays signed in and
+   * just drops back to "no live class" (see onSnapshot). */
+  onSignedOut?: (payload: { reason: 'released' }) => void;
+  /** Fires on every socket (re)connect, BEFORE the hello snapshot arrives —
+   * lets a caller forget "the newest floor I have seen" so the authoritative
+   * snapshot is never discarded as stale after a server restart. */
+  onConnect?: () => void;
+  /** Ser 3 Round Table: the server-owned floor changed. */
+  onRoundTableFloor?: (floor: RoundTableFloor) => void;
+  /** A Round Table action was refused (not your turn, not the chairman...). */
+  onRoundTableError?: (payload: { groupId: string; message: string }) => void;
 }
 
 /**
@@ -64,7 +77,12 @@ export class StationControlClient {
       reconnectionDelay: 2_000,
     });
 
-    this.socket.on('connect', () => this.sendHello());
+    this.socket.on('connect', () => {
+      this.events.onConnect?.();
+      this.sendHello();
+    });
+    this.socket.on('rt:floor', (floor: RoundTableFloor) => this.events.onRoundTableFloor?.(floor));
+    this.socket.on('rt:error', (payload: { groupId: string; message: string }) => this.events.onRoundTableError?.(payload));
     this.socket.on('session:snapshot', (snapshot: DesiredStationState) => {
       this.currentLockState = { screen: snapshot.lock?.screen ?? false, input: snapshot.lock?.input ?? false };
       this.currentActivityId = snapshot.activity?.instanceId ?? null;
@@ -75,8 +93,9 @@ export class StationControlClient {
     this.socket.on('lock:heartbeat', (payload: { expiresAt: number }) => this.events.onLockHeartbeat(payload));
     this.socket.on('remote-control:start', (payload: { room: string; token: string }) => this.events.onRemoteControlStart?.(payload));
     this.socket.on('remote-control:stop', (payload: { room: string }) => this.events.onRemoteControlStop?.(payload));
+    this.socket.on('screen-share:set', (payload: { room: string; screen: boolean; mic: boolean }) => this.events.onScreenShareSet?.(payload));
     this.socket.on('activity:event', (payload: ActivityEventPayload & { fromStationId: string }) => this.events.onActivityEvent?.(payload));
-    this.socket.on('student:signed-out', (payload: { reason: 'class_ended' | 'released' }) => this.events.onSignedOut?.(payload));
+    this.socket.on('student:signed-out', (payload: { reason: 'released' }) => this.events.onSignedOut?.(payload));
 
     this.heartbeatTimer = setInterval(() => this.sendHeartbeat(), HEARTBEAT_INTERVAL_MS);
   }
@@ -87,6 +106,31 @@ export class StationControlClient {
 
   sendActivityEvent(payload: ActivityEventPayload): void {
     this.socket?.emit('activity:event', payload);
+  }
+
+  // ---- Ser 3 Round Table. The server decides everything; these only ask. ----
+  rtRequestMic(ref: RtGroupRef): void {
+    this.socket?.emit('rt:requestMic', ref);
+  }
+  rtCancelRequest(ref: RtGroupRef): void {
+    this.socket?.emit('rt:cancelRequest', ref);
+  }
+  /** Chairman only (the server checks); `stationId` is who gets the floor. */
+  rtGrantFloor(ref: RtGroupRef, stationId: string): void {
+    this.socket?.emit('rt:grantFloor', { ...ref, stationId });
+  }
+  rtRevokeFloor(ref: RtGroupRef): void {
+    this.socket?.emit('rt:revokeFloor', ref);
+  }
+  rtYieldFloor(ref: RtGroupRef): void {
+    this.socket?.emit('rt:yieldFloor', ref);
+  }
+  /** Call after (re)joining the group's LiveKit room so the server applies this seat's mic right. */
+  rtSync(ref: RtGroupRef): void {
+    this.socket?.emit('rt:sync', ref);
+  }
+  rtChairSpeaking(ref: RtGroupRef, speaking: boolean): void {
+    this.socket?.emit('rt:chairSpeaking', { ...ref, speaking });
   }
 
   /** Ser 8 (Phase 5) — reports which published track this station just

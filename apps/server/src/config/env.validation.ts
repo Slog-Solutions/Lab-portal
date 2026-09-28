@@ -40,6 +40,18 @@ const envSchema = z.object({
   ESPEAK_NG_DATA: z.string().min(1).optional(),  // data dir for portable (non-installed) eSpeak-NG
   PIPER_BIN: z.string().min(1).optional(),
   PIPER_VOICES_DIR: z.string().min(1).optional(),
+  // Offline dictionary (SPEC-offline-dictionary.md §5) — the read-only
+  // SQLite file tools/dictionary-build produces. Absent/missing file is
+  // NOT a boot failure (spec: "a missing dictionary must never block the
+  // server from booting") — DictionaryStoreService degrades to
+  // available:false, same posture as the speech pipeline env vars above.
+  DICTIONARY_DB_PATH: z.string().min(1).default('./LabData/dictionary/dictionary.db'),
+  // How long after starting an assignment-based test attempt the
+  // dictionary stays blocked for it, even if the student never submits
+  // (DictionaryPolicyService) — bounds a stuck/abandoned IN_PROGRESS
+  // attempt from locking the dictionary out indefinitely.
+  DICTIONARY_TEST_WINDOW_MIN: z.coerce.number().int().positive().default(60),
+  DICTIONARY_LOG_RETENTION_DAYS: z.coerce.number().int().positive().default(90),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

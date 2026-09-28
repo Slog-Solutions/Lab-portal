@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, UseGuards } from '@nestjs/common';
 import { UserRole, zCreateStudyModuleDto, zUpdateStudyModuleDto } from '@lab/shared';
 import { Roles } from '../../common/decorators/roles.decorator';
+import { CurrentStation } from '../../common/decorators/current-station.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { StationAuthGuard } from '../../common/guards/station-auth.guard';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
@@ -24,6 +25,15 @@ export class StudyModulesController {
   @Get('library')
   async library() {
     return this.modules.library();
+  }
+
+  /** Loose library files the teacher switched on for students, narrowed to the
+   * seated student's classes (see StudyModulesService.libraryFiles). */
+  @Roles()
+  @UseGuards(StationAuthGuard)
+  @Get('library/files')
+  async libraryFiles(@CurrentStation() station: { id: string }) {
+    return this.modules.libraryFiles(station.id);
   }
 
   @Roles(UserRole.TEACHER, UserRole.ADMIN)

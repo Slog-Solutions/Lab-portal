@@ -60,7 +60,7 @@ export class MediaAssetsController {
     @CurrentUser() user: JwtPayload,
   ) {
     if (!file) throw new BadRequestException('No file uploaded');
-    return this.assets.create(user.sub, dto, {
+    return this.assets.create({ id: user.sub, role: user.role }, dto, {
       tempPath: file.path,
       originalName: file.originalname,
       mimeType: file.mimetype,

@@ -2,7 +2,7 @@ import type { ActivityEventPayload } from '@lab/shared/events';
 import type { DesiredStationState } from '@lab/shared';
 import type { StationControlClient } from '../../lib/station-control-client';
 import type { LiveKitRoomClient, RemoteTrackHandle } from '../../lib/livekit-client';
-import { RoundTableActivity } from './RoundTableActivity';
+import { RoundTablePlayer, type RoundTableConfigView, type RoundTableLive } from './RoundTablePlayer';
 import { TelephoneActivity } from './TelephoneActivity';
 import { PresentationActivity } from './PresentationActivity';
 import { ModelImitationActivity } from './ModelImitationActivity';
@@ -21,6 +21,10 @@ export interface ActivityPlayerProps {
    * comment on why this one room isn't auto-attached like every other). */
   interpretingRoomClient?: LiveKitRoomClient | null;
   interpretingTracks?: Map<string, RemoteTrackHandle>;
+  /** Ser 3 only — the server-owned floor, roster and this seat's live
+   * connection to the group room (see StudentConsole). Null until the first
+   * snapshot carrying a Round Table view arrives. */
+  roundTable?: RoundTableLive | null;
 }
 
 /**
@@ -37,15 +41,14 @@ export function ActivityPlayer(props: ActivityPlayerProps) {
   switch (activity.type) {
     case 'ROUND_TABLE':
       return (
-        <RoundTableActivity
+        <RoundTablePlayer
           control={props.control}
           sessionId={props.sessionId}
           groupId={props.groupId}
           instanceId={activity.instanceId}
           stationId={props.stationId}
-          role={props.role}
-          config={activity.config as Parameters<typeof RoundTableActivity>[0]['config']}
-          lastActivityEvent={props.lastActivityEvent}
+          config={activity.config as RoundTableConfigView}
+          live={props.roundTable ?? null}
         />
       );
     case 'TELEPHONE':

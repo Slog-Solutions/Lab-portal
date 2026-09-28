@@ -6,6 +6,10 @@ export class ApiError extends Error {
   constructor(
     public status: number,
     message: string,
+    /** Machine-readable failure code from the response body, when the server
+     * sent one (e.g. 'BATCH_JOIN_INVALID') — lets a caller pick its own
+     * wording instead of showing the server's prose. */
+    public code?: string,
   ) {
     super(message);
   }
@@ -42,13 +46,15 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     },
   });
 
-  if (res.status === 401) {
-    clearSource();
-  }
-
   if (!res.ok) {
     const body = await res.json().catch(() => ({ message: res.statusText }));
-    throw new ApiError(res.status, body.message ?? res.statusText);
+    const code = typeof body.code === 'string' ? body.code : undefined;
+    // A 401 that carries a domain `code` (BATCH_JOIN_INVALID, ...) is the
+    // server's answer to THIS request — "that class key is wrong" — not proof
+    // the session died, so it must not sign the student out. A bare 401 is
+    // still an expired/invalid token and clears whichever store supplied it.
+    if (res.status === 401 && !code) clearSource();
+    throw new ApiError(res.status, body.message ?? res.statusText, code);
   }
 
   if (res.status === 204) return undefined as T;

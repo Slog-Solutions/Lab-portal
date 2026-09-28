@@ -1,9 +1,10 @@
-import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import path from 'node:path';
 import { MediaAssetScope, UserRole, type UploadMediaAssetDto, type UpdateMediaAssetDto } from '@lab/shared';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { AuditService } from '../audit/audit.service';
+import { BatchAccessService } from '../batches/batch-access.service';
 
 export interface CommittedUpload {
   tempPath: string;
@@ -24,6 +25,11 @@ export interface CommittedUpload {
  * PRIVATE is owner-only. ADMIN bypasses scope entirely.):
  *   - PRIVATE:            owner only
  *   - DEPARTMENT/INSTITUTION: every TEACHER/ADMIN
+ *
+ * Student audience is a separate axis from the above (which is about who can
+ * see the file in the teachers' library): `studentVisible` puts it in students'
+ * Study Material, and `sharedBatchIds` narrows that to the students of those
+ * classes (empty = all students). A teacher may name only classes they teach.
  */
 @Injectable()
 export class MediaAssetsService {
@@ -31,14 +37,22 @@ export class MediaAssetsService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly audit: AuditService,
+    private readonly batchAccess: BatchAccessService,
   ) {}
 
-  async create(ownerId: string, dto: UploadMediaAssetDto, upload: CommittedUpload) {
+  async create(requester: { id: string; role: string }, dto: UploadMediaAssetDto, upload: CommittedUpload) {
+    const ownerId = requester.id;
+    const studentVisible = dto.studentVisible ?? false;
+    const sharedBatchIds = dto.sharedBatchIds ?? [];
+    this.assertStudentVisibleAllowed(dto.scope, studentVisible);
+    await this.assertClassesShareable(sharedBatchIds, requester);
     const ext = path.extname(upload.originalName) || '';
     const asset = await this.prisma.mediaAsset.create({
       data: {
         ownerId,
         scope: dto.scope,
+        studentVisible,
+        sharedBatchIds,
         kind: dto.kind,
         title: dto.title,
         filename: upload.originalName,
@@ -76,7 +90,21 @@ export class MediaAssetsService {
   async update(id: string, dto: UpdateMediaAssetDto, requester: { id: string; role: string }) {
     const asset = await this.get(id, requester);
     this.assertOwnerOrAdmin(asset, requester);
-    return this.prisma.mediaAsset.update({ where: { id }, data: dto });
+    // Only classes being added are checked: an admin may have shared the file
+    // with a class this teacher doesn't teach, and saving an unrelated edit
+    // must not bounce because that class is still on the list.
+    if (dto.sharedBatchIds) {
+      await this.assertClassesShareable(
+        dto.sharedBatchIds.filter((id) => !asset.sharedBatchIds.includes(id)),
+        requester,
+      );
+    }
+    // Hiding is the safe direction: making a file PRIVATE without saying
+    // anything about students just takes it off their list, instead of
+    // bouncing the teacher with an error about a flag they never touched.
+    const studentVisible = dto.studentVisible ?? (dto.scope === MediaAssetScope.PRIVATE ? false : asset.studentVisible);
+    this.assertStudentVisibleAllowed(dto.scope ?? asset.scope, studentVisible);
+    return this.prisma.mediaAsset.update({ where: { id }, data: { ...dto, studentVisible } });
   }
 
   async remove(id: string, requester: { id: string; role: string }): Promise<void> {
@@ -93,6 +121,30 @@ export class MediaAssetsService {
 
   resolveFilePath(asset: { path: string }): string {
     return this.storage.resolve(asset.path);
+  }
+
+  /** A student seat reads files with its station token, which is never the
+   * owner of a PRIVATE asset (see assertReadable) — so a private file can't be
+   * offered to students. */
+  private assertStudentVisibleAllowed(scope: string, studentVisible: boolean): void {
+    if (studentVisible && scope === MediaAssetScope.PRIVATE) {
+      throw new BadRequestException('A private file cannot be shown to students — share it with the department or institution first');
+    }
+  }
+
+  /** A teacher may aim a file only at classes they are assigned to (the same
+   * rule as running a session); an admin at any class that exists. */
+  private async assertClassesShareable(batchIds: string[], requester: { id: string; role: string }): Promise<void> {
+    if (batchIds.length === 0) return;
+    if (requester.role === UserRole.ADMIN) {
+      const known = await this.prisma.batch.count({ where: { id: { in: batchIds } } });
+      if (known !== batchIds.length) throw new BadRequestException('One or more of those classes no longer exist');
+      return;
+    }
+    const taught = new Set(await this.batchAccess.batchIdsForTeacher(requester.id));
+    if (batchIds.some((id) => !taught.has(id))) {
+      throw new ForbiddenException('You can only share a file with classes you teach');
+    }
   }
 
   private assertReadable(asset: { ownerId: string; scope: string }, requester: { id: string; role: string }): void {

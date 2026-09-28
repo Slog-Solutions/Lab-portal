@@ -16,12 +16,17 @@ files:
 extraResources:
   - from: ../web/dist
     to: web
+  # Attribution obligations (SPEC-offline-dictionary.md §9.3) — ships
+  # alongside the app so a licence audit doesn't depend on the source repo.
+  - from: ../../THIRD-PARTY-NOTICES.md
+    to: THIRD-PARTY-NOTICES.md
 
 # Native modules must be unpacked from the asar archive — `bindings`
 # (used by @nut-tree-fork/nut-js, added in Phase 1) does a runtime
 # filesystem search that cannot see inside asar (design doc §1.5, §3.4).
 asarUnpack:
   - '**/node_modules/@nut-tree-fork/**'
+  - '**/node_modules/koffi/**'
   - '**/prebuilds/**'
 
 win:

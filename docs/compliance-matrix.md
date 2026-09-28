@@ -20,12 +20,12 @@ Status legend: ✅ built · 🚧 in progress · ⬜ planned · ⚠️ partial/ga
 | Classroom management/control | `DesiredStationState` + `CommandEnvelope`, `ControlController` REST surface, teacher console UI (`StatusBoardPage`) | ✅ | 0/1 |
 | Six independent, simultaneous sessions | `ClassSession` → `SessionGroup` (max 6) — ✅ verified live end to end, backend AND UI: `SessionBuilderPage` composes groups/activities/station assignment, `POST /sessions` → `arm` create real per-group LiveKit rooms with correctly-scoped member tokens | ✅ | 1 |
 | Lock student screen | Full-screen always-on-top overlay (`apps/desktop/src/main/lock-overlay.ts`) — ✅ verified live end-to-end: REST lock → snapshot push → client lock state → heartbeat → status board reflects LOCKED | ✅ (screen only) | 1 |
-| Lock student keyboard and mouse | `SetWindowsHookEx` WH_KEYBOARD_LL/WH_MOUSE_LL native addon — **blocked**, no C++ toolchain on the build machine (no `cl.exe`/CMake/VS installed); `native-bridge` stays the documented stub for *blocking* input (generating input, i.e. remote control, is unblocked — see below) | ⬜ | 1 (blocked) |
-| ⚠️ **Gap:** Ctrl+Alt+Del cannot be blocked | WEKF unavailable on Windows 11 Pro (Annexure-III's specified OS) — mitigated via GPO policy keys (DisableTaskMgr etc.), documented as an accepted limitation | ⚠️ | 1 |
+| Lock student keyboard and mouse | `user32!BlockInput` via `koffi`'s FFI (`packages/native-bridge/src/koffi-bridge.ts`) — ships a prebuilt win32-x64 binary, no C++ toolchain needed, unlike the still-blocked `SetWindowsHookEx` addon this row previously waited on. Wired into a new soft-lock path (`apps/desktop/src/main/soft-lock.ts`: app overlay + `BlockInput(true)`, ~1s re-assert tick, 30s failsafe) that the teacher's Unlock actually releases from the browser — the pre-existing Windows-lock path (Win+L) stays available separately for end-of-day use, where only the student's own password should release it | ✅ (koffi BlockInput) | 1 (teacher-wide control pass) |
+| ⚠️ **Gap:** Ctrl+Alt+Del cannot be blocked | `BlockInput` (like the originally-planned WH_KEYBOARD_LL/WH_MOUSE_LL hook) is released by Ctrl+Alt+Del — this is documented OS behavior, not a defect in the koffi tier above. Mitigated via GPO policy keys (DisableTaskMgr etc., `services/lab-agent-svc/src/gpo-policies.ts`) plus the soft-lock overlay's re-assert tick re-covering the screen within about a second; accepted as a limitation, not hidden behind the ✅ above | ⚠️ | 1 |
 | Remote control of student computer | LiveKit data channel (`ctrl:<stationId>` room, teacher-only token) + `@nut-tree-fork/nut-js` replay — **✅ verified live, the real deliverable of this pass**: a script acting as the teacher sent a `move` event through the real LiveKit server to a real Electron student process, which replayed it via nut.js — the actual OS mouse cursor moved to the exact commanded pixel (`{x:1152,y:216}` on a 1536×864 screen, matching normalized (0.75, 0.25)). `RemoteControlView` (teacher UI: view + mouse/keyboard capture) built; `codeToNutKeyName` maps browser key codes to nut.js's `Key` enum | ✅ | 1 |
 | Shutdown student computer | `SHUTDOWN` command → `shutdown.exe /s /t 5` (no elevation needed), built in `command-handler.ts`; outbox+ack wired and reachable via the console's Shutdown button | ✅ (code) / 🚧 (not runtime-fired) | 1 |
 | Send instructor screen/audio/video/text to consoles | Broadcast room + token minting + `BroadcastPanel`/`StudentConsole` publish-subscribe — ✅ verified live | ✅ | 1 |
-| Broadcast any student's screen to others | `MediaService.promoteScreenShare` (server-granted `canPublishSources`) — endpoint built, not runtime-tested (needs a real screen-share publisher to test against) | 🚧 | 1 |
+| Broadcast any student's screen to others | `MediaService.promoteScreenShare` (server-granted `canPublishSources`) now wired end to end: `POST /control/promote-screen` upgrades the student's LiveKit publish grant in place and emits `screen-share:set`, `StudentConsole` publishes on receipt, every other station in the class already holds a live subscribe grant for the same room and renders it in a pane (teacher side: `ScreenSpotlightPanel`; student side: `StudentConsole`'s screen-share grid, alongside any concurrent teacher broadcast) — ✅ (code) / 🚧 (not yet runtime-fired against a real multi-seat class) | ✅ (code) / 🚧 (not runtime-fired) | 5 |
 | Disable student stations | `stationEnabled` in `DesiredStationState` + `/control/disable` endpoint + console button — ✅ verified live: a real station's snapshot flipped `stationEnabled: false` the instant `/control/disable` was called, and back to `true` on `/control/enable` | ✅ | 1/5 |
 | Individual / group / whole-class intercom | LiveKit room topology (two-plane model) — ✅ rooms/tokens verified live; mic toggle UI built in both consoles | ✅ | 1 |
 | Media library, multi-teacher sharing | `MediaAssetsController`/`Service` — upload (multer, size-limited), range-request streaming (206/seeking), PRIVATE/DEPARTMENT/INSTITUTION visibility, `MediaLibraryPage` UI — ✅ verified live: real upload → real file on disk → real authenticated stream-back, in a real browser (Playwright-driven against the real server) | ✅ | 3 |
@@ -76,6 +76,8 @@ Status legend: ✅ built · 🚧 in progress · ⬜ planned · ⚠️ partial/ga
 |---|---|---|---|
 | Any text → pronunciation exercise | `PronunciationService` wraps real eSpeak-NG (`--ipa`) and Piper (stdin text → wav) binaries via `child_process`, filed into the Media Library as `MediaAsset`s. Neither binary is vendored into this dev box — confirmed live via `GET /pronunciation/status` correctly reporting `{ipa:false, voice:false}` and degrading cleanly (no crash), the same honesty pattern as native-bridge's own platform gap. Real installers are `infra/offline/`'s job at deployment time | ✅ (code) / ⚠️ (binaries not installed on this dev box) | 3 |
 | Separate student-side pronunciation app/flow | `PronunciationPlayer` — record via the same verified `ActivityRecorder` pipeline (now with `RecordingKind.PRONUNCIATION`), self-assessed 1-5 rating at submit, teacher assessment overlays via the gradebook's audited `ScoreOverride` — ✅ built, typechecked; the record→submit round trip is exercised by the same `AttemptsService` path verified live for vocabulary tests, not separately fired end-to-end for this specific activity in this pass | ✅ (code) / 🚧 (not separately runtime-fired) | 3 |
+| Student-portal pronunciation practice | `PronunciationPracticePanel` on the student console: type any word → `POST /pronunciation/speak` (eSpeak-NG IPA + Piper voice on demand; cached per word/voice with in-flight dedupe, at most 3 concurrent Piper runs) → record and compare. The student's own takes stay in the browser and are never uploaded. Teacher `PRONUNCIATION` exercises are also listed (`GET /pronunciation/practice-exercises`) and open in the existing `PronunciationPlayer` with no assignment needed. Verified against the live dev stack with eSpeak-NG + Piper actually installed on this box (`GET /pronunciation/status` → `{ipa:true, voice:true}`), driven in a real browser with a fake microphone | ✅ | post-5 |
+| Teacher-run pronunciation test (teacher gives words, student records each, teacher grades) | New `PRONUNCIATION_TEST` activity built on the existing Exercise → Assignment → Attempt → Recording → `ScoreOverride` pipeline: words are `ItemBank` items, each word's recording id lives in `ItemResponse.given` and the teacher's 1–5 rating in `ItemResponse.score`; the attempt score is the average rating as a %, saved through `GradebookService.override()` so it is audited and appears in the Gradebook. Teacher pages `/pronunciation-tests` (create + assign) and `/pronunciation-tests/:id` (listen, rate, re-grade, send to more students); student side is `PronunciationTestPlayer` from My Assignments. Server-enforced: start only via the student's own assignment, one submission per assignment (a re-take is a fresh assignment), every word needs its own finished recording of that attempt. Whether students may hear each word first is a per-test setting. Verified end to end against the live API + Postgres and in a real browser (`attempts.service.spec.ts`, `pronunciation-tests.service.spec.ts`, `pronunciation.service.spec.ts` cover the rules in isolation) | ✅ | post-5 |
 
 ## Ser 8 — Conference Interpreting
 
@@ -629,13 +631,12 @@ stack:**
 
 **Not yet built (as of this pass):** native-bridge's Win32 input-lock
 hooks remain blocked (still no C++ toolchain on this machine — unchanged
-since Phase 1); `promoteScreenShare`'s runtime path (a student
-broadcasting to the whole class) remains built-but-untested, unchanged
-since Phase 1, since it needs a real screen-share publisher this pass
-didn't add one. Everything else this section originally listed as
+since Phase 1). Everything else this section originally listed as
 outstanding — the real native agent, `installer.nsh` invoking it, the
 internal CA/Caddy config, CI, backup/restore, and an actual load-tested
-offline installer — is closed below.
+offline installer — is closed below. (`promoteScreenShare`'s runtime
+path, listed here as outstanding through every prior pass, is now built
+end to end — see the Ser 1 row above.)
 
 ## Phase 5 close-out, continued — the plan-fidelity gaps (2026-09-08)
 
@@ -870,3 +871,38 @@ sign-in screen*, and `GET /control/status-board` (queried live, as
 ADMIN-001) showed that same station's `lastSeenAt` current and heartbeat
 active while signed out — the gate is a render-level overlay, not a route
 guard, and the station runtime never stops.
+
+**Note (2026-09-18):** the class-scoping this section otherwise assumes
+for *control* no longer holds. `ClassAccessService.controllableStationIds`
+now resolves `'all'` for a TEACHER as well as an ADMIN (design decision:
+"a teacher controls every lab PC, always, no active class required") —
+lock/unlock/shutdown/restart/enable/disable and the status board are no
+longer gated on the caller's own `ACTIVE LiveClass`. `activeClassForTeacher`
+is untouched and still governs *media* (spotlight, group monitoring, the
+class broadcast room), which genuinely needs a LiveKit room to exist.
+Student credential sign-in itself, and what seat/class it attaches a
+student to, is unaffected by this change.
+
+## Offline dictionary (SPEC-offline-dictionary.md)
+
+Not an Annexure-I serial — a separate feature spec, tracked here the same
+way. See `docs/decisions/dictionary-licence.md` for the Phase 0 licence
+decision (OEWN-only, CC BY 4.0) and `tools/dictionary-build/README.md`
+for the build pipeline.
+
+| Requirement | Feature | Status | Phase |
+|---|---|---|---|
+| Data pipeline builds `dictionary.db` from open data, reproducibly | `tools/dictionary-build/` (parse WN-LMF → rank/clean/inflect → SQLite → manifest → quality gate) — ✅ full pipeline verified end-to-end against a hand-written WN-LMF fixture (unit + integration tests, 68 passing); ⬜ NOT yet run against the real Open English WordNet release (no internet access in this environment to download it — see `fetch-inputs.ts`'s own doc comment). The real 50,000-headword quality-gate threshold is therefore unverified against real data | ✅ (code) / ⬜ (real data) | — |
+| Server serves lookup/suggest/search/meta, degrades honestly | `DictionaryModule` (`apps/server/src/modules/dictionary/`) — read-only SQLite, in-memory LRU cache + suggest index, FTS5 prefix + edit-distance did-you-mean, boots fine with the file missing (`available:false`) — ✅ verified live via unit tests (44 passing) covering resolution order, run/running/ran/runs, missing-file/bad-schema-version boot | ✅ | — |
+| Student panel: search, type-ahead, results, recent, attribution | `DictionaryPanel`/`DictionaryAbout` (`apps/web/src/features/dictionary/`) — a docked, non-modal side panel (never a `Sheet`/modal, per spec §6.3), wired into `StudentConsole` — ✅ (code, typecheck + build verified); ⬜ not run against a live server/real dictionary.db in this pass | ✅ (code) | — |
+| In-context lookup: select-and-look-up, Ctrl+D | `useSelectionLookup`/`SelectionLookupPopover`, `shouldHandleDictionaryShortcut` (`@lab/shared`) — scoped via `data-dictionary-scope` on `ReadingTestPlayer`/`WritingTestPlayer`/`ListeningTestPlayer`'s prompts (a representative subset, not every text surface — `ContentExercisePlayer`'s cross-origin iframe is explicitly out of reach, noted in-code); Ctrl+D ignores typed-answer inputs and OS auto-repeat | ✅ (representative coverage) | — |
+| Teacher control: per-activity toggle, server-side enforcement | `dictionaryEnabled` on `ActivityInstance`/`Exercise` (nullable = type default), `resolveDictionaryEnabled` (defaults `VOCABULARY_TEST` off), `DictionaryPolicyService` + `DictionaryAccessGuard` (blocks a live-session activity AND an in-progress assignment-based test — the assignment-test path was a scope decision beyond the spec's literal wording, confirmed with the project owner 2026-09-28), `PATCH /sessions/:id/groups/:groupId/dictionary` (live toggle, pushes a fresh snapshot) — ✅ verified via unit tests (policy service, sessions service's snapshot-push assertion) | ✅ | — |
+| Lookup logging, retention, teacher report, item-bank export | `DictionaryLookup` model, `DictionaryLogService` (fire-and-forget logging, daily retention purge, admin purge-now), `DictionaryReportsController` (`top-words`, `export-to-item-bank` → a real bank-mode Vocabulary Test with the word masked out of its own dictionary definition), `ReportsPage`'s "Dictionary Lookups" card — ✅ (code + unit tests); deliberately does not scope by batch, matching `BatchAccessService`'s own documented "Attempt/Assignment stay unscoped" precedent | ✅ | — |
+| Attribution | `THIRD-PARTY-NOTICES.md` (shipped via `electron-builder.yml` extraResources), in-app About dialog reading live from `dictionary.db`'s own `meta` table, panel footer | ✅ (OEWN); ⬜ Charis SIL IPA font not yet vendored — panel currently falls back to system fonts (see `THIRD-PARTY-NOTICES.md`'s own "planned" section) | — |
+| CSP hardening (spec §6.3 "no external origin") | `applyContentSecurityPolicy` (`apps/desktop/src/main/protocol.ts`) — shipped as `Content-Security-Policy-Report-Only` deliberately, not yet enforcing; needs a real packaged-app pass (DevTools console, every renderer feature exercised) before flipping to enforcing | 🚧 (report-only) | — |
+
+**Known gaps, stated plainly (none silently hidden behind a ✅ above):**
+- The pipeline has never ingested the real OEWN release — only a small hand-written fixture. A real build, with the spec's actual quality-gate thresholds, is a required step before shipping, not a formality.
+- Dictionary lookup logs record `stationId` only, not `studentId`/`sessionId` (a per-student drill-down would need an extra DB round trip per lookup this pass chose not to pay).
+- The item-bank export always creates a brand-new Vocabulary Test; it does not offer merging picked words into an existing one.
+- None of this was exercised against a real running server + real Electron renderer in this pass — verification here is typecheck, build, and unit tests only (377+ server tests, 68 pipeline tests, clean `tsc`/`vite build` for web and desktop).

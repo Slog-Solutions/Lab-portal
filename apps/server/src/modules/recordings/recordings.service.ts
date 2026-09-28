@@ -33,7 +33,19 @@ export class RecordingsService {
     this.dataRoot = this.config.get('LAB_DATA_ROOT', { infer: true });
   }
 
+  /** A recording that names no student is attributed to whoever is signed
+   * in at the recording station — live activities (Round Table, Telephone,
+   * Model Imitation, Interpreting) record per seat, and this is what puts
+   * them in that student's class history. */
   async createPending(params: CreateRecordingParams) {
+    let studentIds = params.studentIds ?? [];
+    if (studentIds.length === 0 && params.stationId) {
+      const station = await this.prisma.station.findUnique({
+        where: { id: params.stationId },
+        select: { currentUserId: true },
+      });
+      if (station?.currentUserId) studentIds = [station.currentUserId];
+    }
     return this.prisma.recording.create({
       data: {
         kind: params.kind,
@@ -41,7 +53,7 @@ export class RecordingsService {
         activityInstanceId: params.activityInstanceId,
         attemptId: params.attemptId,
         stationId: params.stationId,
-        studentIds: params.studentIds ?? [],
+        studentIds,
         status: 'pending',
       },
     });

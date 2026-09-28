@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "@lab/shared": "*",
-    "@nut-tree-fork/nut-js": "4.2.6"
+    "@nut-tree-fork/nut-js": "4.2.6",
+    "koffi": "3.3.0"
   },
   "devDependencies": {
     "typescript": "5.9.2",

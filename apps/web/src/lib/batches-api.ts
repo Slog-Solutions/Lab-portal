@@ -1,4 +1,7 @@
+import type { ClassHistoryView, CreateClassroomDto, MyBatchView } from '@lab/shared';
 import { apiFetch } from './api-client';
+import { getRuntimeConfig } from './runtime-config';
+import { useStudentSession } from '../stores/student-session-store';
 
 export interface BatchRow {
   id: string;
@@ -46,7 +49,34 @@ export interface UpdateBatchInput {
 
 export const batchesApi = {
   list: () => apiFetch<BatchRow[]>('/batches'),
-  mine: () => apiFetch<BatchRow[]>('/batches/mine'),
+  /** The caller's own classes — enrolled (student), taught (teacher) or all
+   * (admin). `joinKey` is present only for staff. */
+  mine: () => apiFetch<MyBatchView[]>('/batches/mine'),
+  /** A student's record of one of their classes: the live activities they
+   * took part in, the assignments created from it, and the teacher's own
+   * recordings of the whole class broadcast. */
+  myActivity: (id: string) => apiFetch<ClassHistoryView>(`/batches/${id}/my-activity`),
+  /** A class recording's file, for a student — this is the STUDENT user
+   * JWT (useStudentSession, minted at classroom sign-in), not the
+   * station token RecordingPlayback uses for per-activity recordings:
+   * ClassRecordingsController's student route checks batch enrollment,
+   * which only that JWT carries. Caller must revoke the returned URL. */
+  fetchClassRecordingBlob: async (recordingId: string): Promise<string> => {
+    const { serverUrl } = getRuntimeConfig();
+    const token = useStudentSession.getState().token;
+    const res = await fetch(`${serverUrl}/api/class-recordings/${recordingId}/student-file`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    });
+    if (!res.ok) throw new Error(`Recording fetch failed (${res.status})`);
+    const blob = await res.blob();
+    return URL.createObjectURL(blob);
+  },
+  /** A teacher creating their own class: code and join key may be omitted and
+   * the server generates them. Returns the full row, key included. */
+  createClassroom: (dto: Pick<CreateClassroomDto, 'name'> & Partial<Pick<CreateClassroomDto, 'code' | 'joinKey' | 'joinOpen'>>) =>
+    apiFetch<BatchRow>('/batches', { method: 'POST', body: JSON.stringify(dto) }),
+  /** Rotates the join key; the old one stops working at once. */
+  regenerateKey: (id: string) => apiFetch<{ joinKey: string }>(`/batches/${id}/regenerate-key`, { method: 'POST' }),
   get: (id: string) => apiFetch<BatchDetail>(`/batches/${id}`),
   create: (dto: CreateBatchInput) => apiFetch<BatchRow>('/batches', { method: 'POST', body: JSON.stringify(dto) }),
   update: (id: string, patch: UpdateBatchInput) =>

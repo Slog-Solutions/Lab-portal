@@ -5,11 +5,15 @@ import { diskStorage } from 'multer';
 import { mkdirSync } from 'node:fs';
 import type { EnvConfig } from '../../config/env.validation';
 import { StorageService } from '../../common/storage/storage.service';
+import { ClassAccessModule } from '../classroom/class-access.module';
 import { RecordingsService } from './recordings.service';
 import { RecordingsController } from './recordings.controller';
+import { ClassRecordingsService } from './class-recordings.service';
+import { ClassRecordingsController } from './class-recordings.controller';
 
 @Module({
   imports: [
+    ClassAccessModule,
     MulterModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService, StorageService],
@@ -30,8 +34,8 @@ import { RecordingsController } from './recordings.controller';
       }),
     }),
   ],
-  controllers: [RecordingsController],
-  providers: [RecordingsService],
+  controllers: [RecordingsController, ClassRecordingsController],
+  providers: [RecordingsService, ClassRecordingsService],
   exports: [RecordingsService],
 })
 export class RecordingsModule {}

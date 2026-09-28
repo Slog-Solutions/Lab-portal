@@ -1,6 +1,14 @@
 import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 import { Throttle } from '@nestjs/throttler';
-import { UserRole, zClaimStationDto, zStartClassDto, type ClaimStationDto, type StartClassDto } from '@lab/shared';
+import {
+  UserRole,
+  zClaimStationDto,
+  zJoinLiveClassDto,
+  zStartClassDto,
+  type ClaimStationDto,
+  type JoinLiveClassDto,
+  type StartClassDto,
+} from '@lab/shared';
 import { ZodValidationPipe } from '../../common/pipes/zod-validation.pipe';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -48,6 +56,17 @@ export class ClassroomController {
   @Post('sign-in')
   async signIn(@Body(new ZodValidationPipe(zClaimStationDto)) dto: ClaimStationDto, @CurrentStation() station: { id: string }) {
     return this.classroom.signIn(station.id, dto);
+  }
+
+  /** Attaches an already-signed-in seat to a teacher's live class — sign-in
+   * itself no longer needs one. Same throttle as sign-in: a wrong guess
+   * leaves an audit-trail entry. */
+  @Roles()
+  @UseGuards(StationAuthGuard)
+  @Throttle({ default: { limit: 5, ttl: 60_000 } })
+  @Post('join')
+  async joinLiveClass(@Body(new ZodValidationPipe(zJoinLiveClassDto)) dto: JoinLiveClassDto, @CurrentStation() station: { id: string }) {
+    return this.classroom.joinLiveClass(station.id, dto);
   }
 
   @Roles()
