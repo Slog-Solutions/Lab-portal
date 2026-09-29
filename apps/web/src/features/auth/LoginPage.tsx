@@ -1,17 +1,31 @@
-import { useState, type FormEvent } from 'react';
+import { useState, type FormEvent, type KeyboardEvent } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { apiFetch, ApiError } from '../../lib/api-client';
 import { useAuthStore } from '../../stores/auth-store';
-import { ArrowRight, Lock, User } from 'lucide-react';
+import { AlertCircle, Eye, EyeOff, Film, Loader2, Lock, Mic, Radio, User } from 'lucide-react';
+import { BrandLogo } from '@/components/brand/BrandLogo';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+// Vendored (not hot-linked) — the deployment is air-gapped. Recoloured from
+// Storyset's #407BFF to --color-brand-muted; see THIRD-PARTY-NOTICES.md.
+import loginIllustrationUrl from '@/assets/illustrations/mobile-login.svg';
 
 interface LoginResponse {
   accessToken: string;
   user: { id: string; role: 'ADMIN' | 'TEACHER' | 'STUDENT'; fullName: string };
 }
 
+const HIGHLIGHTS = [
+  { icon: Radio, label: 'Live classes' },
+  { icon: Mic, label: 'Pronunciation practice' },
+  { icon: Film, label: 'Class recordings' },
+] as const;
+
 export function LoginPage() {
   const [serviceNumber, setServiceNumber] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [capsLock, setCapsLock] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const setSession = useAuthStore((s) => s.setSession);
@@ -24,7 +38,7 @@ export function LoginPage() {
     try {
       const res = await apiFetch<LoginResponse>('/auth/login', {
         method: 'POST',
-        body: JSON.stringify({ serviceNumber, password }),
+        body: JSON.stringify({ serviceNumber: serviceNumber.trim(), password }),
       });
       setSession(res.accessToken, res.user);
       navigate(res.user.role === 'STUDENT' ? '/student' : '/dashboard');
@@ -35,91 +49,158 @@ export function LoginPage() {
     }
   }
 
-  function fillDemo(user: 'teacher' | 'admin') {
-    if (user === 'teacher') {
-      setServiceNumber('TCH-001');
-      setPassword('Teacher@12345');
-    } else {
-      setServiceNumber('ADMIN-001');
-      setPassword('Admin@12345');
-    }
+  function trackCapsLock(e: KeyboardEvent<HTMLInputElement>) {
+    setCapsLock(e.getModifierState('CapsLock'));
   }
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-[#A9AF98] p-4">
-      <div className="w-full max-w-md rounded-[28px] border border-[rgba(20,21,15,0.08)] bg-[#F4F4EF] p-8 text-[#14150F] shadow-none">
-        <div className="mb-6 border-b border-[rgba(20,21,15,0.08)] pb-5">
-          <div className="flex items-center gap-2">
-            <span className="h-2.5 w-2.5 rounded-full bg-[#D7F83C] ring-2 ring-[#17181A]" />
-            <h1 className="text-xl font-semibold tracking-tight text-[#14150F]">Digital Language Lab</h1>
+    // Locked to the viewport on desktop so the page never scrolls; the
+    // illustration shrinks to fit instead of pushing the panel taller.
+    <div className="grid min-h-dvh bg-canvas text-foreground lg:h-dvh lg:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)] lg:gap-4 lg:overflow-hidden lg:p-4">
+      {/* ---- Left: sign-in ------------------------------------------- */}
+      <div className="flex min-h-dvh flex-col px-6 sm:px-12 lg:min-h-0">
+        <main className="flex flex-1 items-center py-8">
+          <div className="mx-auto w-full max-w-[400px]">
+            <BrandLogo variant="small" className="mb-8 w-20" />
+            <h1 className="text-[28px] font-semibold leading-tight tracking-tight">Sign in to your console</h1>
+            <p className="mt-2 text-sm text-muted-foreground">
+              Enter your service number and password to continue.
+            </p>
+
+            <form onSubmit={onSubmit} className="mt-8 space-y-5">
+              <div className="space-y-2">
+                <label className="text-sm font-medium" htmlFor="serviceNumber">
+                  Service number
+                </label>
+                <div className="relative">
+                  <User className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="serviceNumber"
+                    name="username"
+                    autoComplete="username"
+                    autoCapitalize="characters"
+                    spellCheck={false}
+                    className="h-12 bg-card pl-10 text-[15px] shadow-none"
+                    value={serviceNumber}
+                    onChange={(e) => setServiceNumber(e.target.value)}
+                    placeholder="e.g. TCH-001"
+                    aria-invalid={!!error || undefined}
+                    autoFocus
+                    required
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-medium" htmlFor="password">
+                  Password
+                </label>
+                <div className="relative">
+                  <Lock className="pointer-events-none absolute left-3.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="password"
+                    name="password"
+                    type={showPassword ? 'text' : 'password'}
+                    autoComplete="current-password"
+                    className="h-12 bg-card pl-10 pr-12 text-[15px] shadow-none"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    onKeyDown={trackCapsLock}
+                    onKeyUp={trackCapsLock}
+                    onBlur={() => setCapsLock(false)}
+                    placeholder="Enter your password"
+                    aria-invalid={!!error || undefined}
+                    aria-describedby={capsLock ? 'caps-lock-hint' : undefined}
+                    required
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((v) => !v)}
+                    aria-label={showPassword ? 'Hide password' : 'Show password'}
+                    aria-pressed={showPassword}
+                    className="absolute right-1.5 top-1/2 flex h-9 w-9 -translate-y-1/2 items-center justify-center rounded-control text-muted-foreground transition-colors hover:bg-accent hover:text-accent-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
+                {capsLock && (
+                  <p id="caps-lock-hint" className="text-xs font-medium text-status-pending">
+                    Caps Lock is on
+                  </p>
+                )}
+              </div>
+
+              <div aria-live="polite">
+                {error && (
+                  <div
+                    role="alert"
+                    className="flex items-start gap-2.5 rounded-control border border-destructive/25 bg-destructive/[0.06] px-3.5 py-3 text-sm text-destructive"
+                  >
+                    <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>{error}</span>
+                  </div>
+                )}
+              </div>
+
+              <Button type="submit" disabled={loading} className="h-12 w-full text-[15px] font-semibold">
+                {loading ? (
+                  <>
+                    <Loader2 className="animate-spin" />
+                    <span>Signing in…</span>
+                  </>
+                ) : (
+                  'Sign in'
+                )}
+              </Button>
+            </form>
+
+            <p className="mt-6 text-sm text-muted-foreground">
+              Forgot your password?{' '}
+              <span className="font-medium text-foreground">Contact your lab administrator.</span>
+            </p>
           </div>
-          <p className="mt-1 text-xs text-[#6E7066]">ACTC · No 2 TRG BN · ASC Centre (South)</p>
-        </div>
-
-        <form onSubmit={onSubmit} className="space-y-4">
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-[#14150F]">Service number</label>
-            <div className="relative flex items-center">
-              <input
-                className="w-full rounded-2xl border border-[rgba(20,21,15,0.12)] bg-[#E5E8DC]/50 py-2.5 pl-3.5 pr-9 text-sm text-[#14150F] outline-none transition focus:border-[#17181A] focus:bg-white"
-                value={serviceNumber}
-                onChange={(e) => setServiceNumber(e.target.value)}
-                placeholder="e.g. TCH-001 or ADMIN-001"
-                autoFocus
-                required
-              />
-              <User className="absolute right-3 h-4 w-4 text-[#6E7066]" />
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="text-xs font-semibold text-[#14150F]">Password</label>
-            <div className="relative flex items-center">
-              <input
-                type="password"
-                className="w-full rounded-2xl border border-[rgba(20,21,15,0.12)] bg-[#E5E8DC]/50 py-2.5 pl-3.5 pr-9 text-sm text-[#14150F] outline-none transition focus:border-[#17181A] focus:bg-white"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                placeholder="••••••••••••"
-                required
-              />
-              <Lock className="absolute right-3 h-4 w-4 text-[#6E7066]" />
-            </div>
-          </div>
-
-          {error && <p className="text-xs font-medium text-[#C9503F]">{error}</p>}
-
-          <button
-            type="submit"
-            disabled={loading}
-            className="flex w-full items-center justify-center gap-2 rounded-full bg-[#17181A] py-3 text-sm font-semibold text-[#F5F5F0] transition hover:bg-black disabled:opacity-40"
-          >
-            <span>{loading ? 'Signing in…' : 'Sign in'}</span>
-            <ArrowRight className="h-4 w-4" />
-          </button>
-        </form>
-
-        {/* Quick Demo sign-in helpers */}
-        <div className="mt-6 border-t border-[rgba(20,21,15,0.08)] pt-4">
-          <p className="mb-2 text-center text-xs text-[#6E7066]">Quick demo sign-in:</p>
-          <div className="flex gap-2">
-            <button
-              type="button"
-              onClick={() => fillDemo('teacher')}
-              className="flex-1 rounded-full border border-[rgba(20,21,15,0.12)] bg-black/5 py-1.5 text-xs font-medium text-[#14150F] hover:bg-black/10"
-            >
-              Teacher (TCH-001)
-            </button>
-            <button
-              type="button"
-              onClick={() => fillDemo('admin')}
-              className="flex-1 rounded-full border border-[rgba(20,21,15,0.12)] bg-black/5 py-1.5 text-xs font-medium text-[#14150F] hover:bg-black/10"
-            >
-              Admin (ADMIN-001)
-            </button>
-          </div>
-        </div>
+        </main>
       </div>
+
+      {/* ---- Right: illustration panel (desktop only) ------------------ */}
+      <aside className="relative hidden overflow-hidden rounded-card bg-brand-soft lg:flex lg:flex-col">
+        {/* Soft cream blob behind the artwork, echoing the brand's two colours. */}
+        <div
+          aria-hidden
+          className="pointer-events-none absolute -right-24 -top-24 h-[34rem] w-[34rem] rounded-full bg-cream/70"
+        />
+
+        <div className="relative flex min-h-0 flex-1 items-center justify-center px-10 pt-8">
+          <img
+            src={loginIllustrationUrl}
+            alt=""
+            aria-hidden
+            draggable={false}
+            className="h-full max-h-[520px] w-full max-w-[520px] select-none object-contain"
+          />
+        </div>
+
+        <div className="relative shrink-0 px-12 pb-8">
+          <h2 className="max-w-md text-2xl font-semibold leading-snug tracking-tight text-brand">
+            Every voice in the lab, one console.
+          </h2>
+          <p className="mt-2 max-w-md text-sm text-muted-foreground">
+            Run live sessions, assign speaking practice and review every recording from a single place.
+          </p>
+          <ul className="mt-6 flex flex-wrap gap-2">
+            {HIGHLIGHTS.map(({ icon: Icon, label }) => (
+              <li
+                key={label}
+                className="inline-flex items-center gap-2 rounded-pill border border-hairline bg-card/70 px-3.5 py-1.5 text-xs font-medium text-brand"
+              >
+                <Icon className="h-3.5 w-3.5" />
+                {label}
+              </li>
+            ))}
+          </ul>
+          <p className="mt-5 text-[11px] text-muted-foreground/80">Illustration by Storyset (storyset.com)</p>
+        </div>
+      </aside>
     </div>
   );
 }

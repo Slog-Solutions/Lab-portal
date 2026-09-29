@@ -208,7 +208,7 @@ function RecordingPlayerDialog({ recording, onClose }: { recording: ClassRecordi
               }}
             />
           ) : state.failed ? (
-            <p className="text-sm text-amber-600 dark:text-amber-400">Could not load this recording.</p>
+            <p className="text-sm text-status-pending">Could not load this recording.</p>
           ) : (
             <p className="flex items-center gap-1.5 text-sm text-muted-foreground">
               <Loader2 className="h-4 w-4 animate-spin" /> Loading…

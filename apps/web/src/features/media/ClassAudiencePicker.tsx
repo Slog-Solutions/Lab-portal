@@ -81,7 +81,7 @@ export function ClassAudiencePicker({ value, onChange }: { value: Audience; onCh
         </div>
       )}
       {value.mode === 'classes' && value.batchIds.length === 0 && !isLoading && (
-        <p className="text-xs text-amber-600 dark:text-amber-400">Tick at least one class.</p>
+        <p className="text-xs text-status-pending">Tick at least one class.</p>
       )}
     </div>
   );

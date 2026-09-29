@@ -15,6 +15,7 @@ import {
 import { useAuthStore } from '../stores/auth-store';
 import { ASSIGNMENT_KINDS } from '../features/assignments/assignment-kinds';
 import { cn } from '@/lib/utils';
+import { BrandLogo } from '@/components/brand/BrandLogo';
 
 const NAV = [
   { to: '/dashboard', label: 'Lab Control', icon: LayoutDashboard },
@@ -34,12 +35,15 @@ const ADMIN_NAV = [
   { to: '/admin/users', label: 'Users', icon: UserCog },
 ];
 
+// The sidebar is the green chrome, so the active/inactive relationship is
+// inverted from a light nav: active is a cream fill with green ink, and
+// inactive text sits directly on the green.
 function navLinkClassName({ isActive }: { isActive: boolean }): string {
   return cn(
-    'group flex items-center justify-between rounded-2xl px-3.5 py-2.5 text-sm font-medium transition-all duration-150',
+    'group flex items-center justify-between rounded-control px-3.5 py-2.5 text-sm font-medium transition-all duration-150',
     isActive
-      ? 'bg-[#17181A] text-[#F5F5F0] shadow-sm'
-      : 'text-[#6E7066] hover:bg-[#E5E8DC] hover:text-[#14150F]',
+      ? 'bg-cream text-brand shadow-sm'
+      : 'text-brand-ink-muted hover:bg-white/10 hover:text-brand-ink',
   );
 }
 
@@ -49,17 +53,22 @@ export function TeacherLayout() {
   const isAdmin = user?.role === 'ADMIN';
 
   return (
-    <div className="flex min-h-screen bg-[#A9AF98] text-[#14150F] p-3 sm:p-4 gap-4">
-      {/* Editorial Bento Sidebar */}
-      <aside className="flex w-60 shrink-0 flex-col rounded-[28px] border border-[rgba(20,21,15,0.08)] bg-[#F4F4EF] p-4 text-[#14150F]">
-        <div className="border-b border-[rgba(20,21,15,0.08)] pb-4 pt-1 px-2">
-          <div className="flex items-center gap-2">
-            <span className="h-2 w-2 rounded-full bg-[#D7F83C] ring-2 ring-[#17181A]" />
-            <h1 className="text-sm font-semibold tracking-tight text-[#14150F]">Digital Language Lab</h1>
+    <div className="flex min-h-screen gap-4 bg-canvas p-3 text-foreground sm:p-4">
+      {/* Brand chrome: the one full-green surface on a teacher screen. */}
+      <aside className="flex w-60 shrink-0 flex-col rounded-card bg-brand p-4 text-brand-ink">
+        <div className="border-b border-hairline-on-dark px-2 pb-4 pt-1">
+          {/*
+            The logo artwork is deep green on transparent, so it needs a light
+            plate to sit on — placed directly on the green chrome it would be
+            invisible. The cream plate is the same fill as an active nav item.
+          */}
+          <div className="rounded-control bg-cream px-3 py-2.5">
+            {/* The wordmark carries the product name, so no adjacent <h1>. */}
+            <BrandLogo variant="full" className="w-full" />
           </div>
-          <div className="mt-2 flex items-center justify-between">
-            <p className="text-xs font-medium text-[#6E7066] truncate">{user?.fullName}</p>
-            <span className="rounded-full bg-[#E5E8DC] px-2 py-0.5 text-[10px] font-semibold text-[#14150F]">
+          <div className="mt-3 flex items-center justify-between gap-2">
+            <p className="truncate text-xs font-medium text-brand-ink-muted">{user?.fullName}</p>
+            <span className="rounded-pill bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-brand-ink">
               {user?.role}
             </span>
           </div>
@@ -74,15 +83,15 @@ export function TeacherLayout() {
                     <Icon className="h-4 w-4" />
                     <span>{label}</span>
                   </div>
-                  {isActive && <span className="h-1.5 w-1.5 rounded-full bg-[#D7F83C]" />}
+                  {isActive && <span className="h-1.5 w-1.5 rounded-full bg-brand" />}
                 </>
               )}
             </NavLink>
           ))}
 
-          {/* Sentence-case section header per DESIGN_SYSTEM_LIME_BENTO.md §3 */}
+          {/* Sentence-case section header per DESIGN_SYSTEM.md §3 */}
           <div className="px-3.5 pt-4 pb-1">
-            <p className="text-xs font-semibold text-[#6E7066]">Create assignment</p>
+            <p className="text-xs font-semibold uppercase tracking-wide text-brand-ink-muted">Create assignment</p>
           </div>
           {ASSIGNMENT_NAV.map(({ to, label, icon: Icon }) => (
             <NavLink key={to} to={to} className={navLinkClassName}>
@@ -92,7 +101,7 @@ export function TeacherLayout() {
                     <Icon className="h-4 w-4" />
                     <span>{label}</span>
                   </div>
-                  {isActive && <span className="h-1.5 w-1.5 rounded-full bg-[#D7F83C]" />}
+                  {isActive && <span className="h-1.5 w-1.5 rounded-full bg-brand" />}
                 </>
               )}
             </NavLink>
@@ -101,7 +110,7 @@ export function TeacherLayout() {
           {isAdmin && (
             <>
               <div className="px-3.5 pt-4 pb-1">
-                <p className="text-xs font-semibold text-[#6E7066]">Administration</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-brand-ink-muted">Administration</p>
               </div>
               {ADMIN_NAV.map(({ to, label, icon: Icon }) => (
                 <NavLink key={to} to={to} className={navLinkClassName}>
@@ -111,7 +120,7 @@ export function TeacherLayout() {
                         <Icon className="h-4 w-4" />
                         <span>{label}</span>
                       </div>
-                      {isActive && <span className="h-1.5 w-1.5 rounded-full bg-[#D7F83C]" />}
+                      {isActive && <span className="h-1.5 w-1.5 rounded-full bg-brand" />}
                     </>
                   )}
                 </NavLink>
@@ -120,11 +129,11 @@ export function TeacherLayout() {
           )}
         </nav>
 
-        <div className="border-t border-[rgba(20,21,15,0.08)] pt-3">
+        <div className="border-t border-hairline-on-dark pt-3">
           <button
             type="button"
             onClick={() => clear()}
-            className="flex w-full items-center gap-2.5 rounded-2xl px-3.5 py-2 text-sm font-medium text-[#6E7066] transition-colors hover:bg-[#E5E8DC] hover:text-[#14150F]"
+            className="flex w-full items-center gap-2.5 rounded-control px-3.5 py-2 text-sm font-medium text-brand-ink-muted transition-colors hover:bg-white/10 hover:text-brand-ink"
           >
             <LogOut className="h-4 w-4" />
             <span>Sign out</span>

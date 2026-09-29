@@ -123,8 +123,8 @@ export function PronunciationAuthoringPage() {
         <div
           className={`flex items-start gap-3 rounded-lg border px-4 py-3 text-sm ${
             pipelineStatus.ipa && pipelineStatus.voice
-              ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400'
-              : 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-400'
+              ? 'border-emerald-500/30 bg-emerald-500/10 text-status-online'
+              : 'border-amber-500/30 bg-amber-500/10 text-status-pending'
           }`}
         >
           {pipelineStatus.ipa && pipelineStatus.voice ? (
@@ -219,7 +219,7 @@ export function PronunciationAuthoringPage() {
 
             {create.isError && <p className="text-sm text-destructive">{create.error instanceof Error ? create.error.message : 'Could not create the exercise'}</p>}
             {created && (
-              <p className="flex flex-wrap items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400">
+              <p className="flex flex-wrap items-center gap-1.5 text-sm text-status-online">
                 <CheckCircle2 className="h-4 w-4" />
                 Sent to {created.assigned} {created.assigned === 1 ? 'student' : 'students'}.
                 <Link to={`/pronunciation/${created.exerciseId}/review`} className="font-medium underline">

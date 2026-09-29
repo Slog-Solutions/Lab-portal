@@ -88,7 +88,7 @@ function PreviewBody({ asset }: { asset: PreviewableAsset }) {
         ) : state.url ? (
           <AssetViewer kind={kind} url={state.url} title={title} height="60vh" />
         ) : state.failed ? (
-          <p className="flex items-center gap-1.5 text-sm text-amber-600 dark:text-amber-400">
+          <p className="flex items-center gap-1.5 text-sm text-status-pending">
             <AlertTriangle className="h-4 w-4" /> Could not load this file.
           </p>
         ) : (
@@ -99,7 +99,7 @@ function PreviewBody({ asset }: { asset: PreviewableAsset }) {
       </div>
 
       <DialogFooter className="items-center">
-        {downloadFailed && <p className="text-xs text-amber-600 dark:text-amber-400">Could not download this file.</p>}
+        {downloadFailed && <p className="text-xs text-status-pending">Could not download this file.</p>}
         <Button variant="outline" size="sm" onClick={() => void download()}>
           <Download className="mr-1.5 h-4 w-4" /> Download
         </Button>

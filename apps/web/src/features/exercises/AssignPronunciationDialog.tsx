@@ -150,7 +150,7 @@ export function AssignPronunciationDialog({
 
               {assign.isError && <p className="text-sm text-destructive">{assign.error instanceof Error ? assign.error.message : 'Could not assign'}</p>}
               {assign.isSuccess && assign.data && (
-                <p className="flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400">
+                <p className="flex items-center gap-1.5 text-sm text-status-online">
                   <CheckCircle2 className="h-4 w-4" />
                   Sent to {assign.data.created} {assign.data.created === 1 ? 'student' : 'students'}.
                   {assign.data.skipped > 0 && ` ${assign.data.skipped} already had it.`}

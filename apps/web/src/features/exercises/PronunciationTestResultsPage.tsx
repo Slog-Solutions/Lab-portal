@@ -166,7 +166,7 @@ function GradeDialog({ test, row, onClose }: { test: PronunciationTestDetail; ro
                 {a?.url ? (
                   <audio controls src={a.url} className="h-9 w-full" />
                 ) : a?.failed ? (
-                  <p className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+                  <p className="flex items-center gap-1.5 text-xs text-status-pending">
                     <AlertTriangle className="h-3.5 w-3.5" /> Could not load this recording.
                   </p>
                 ) : (
@@ -192,7 +192,7 @@ function GradeDialog({ test, row, onClose }: { test: PronunciationTestDetail; ro
               </div>
             );
           })}
-          {modelNote && <p className="text-xs text-amber-600 dark:text-amber-400">{modelNote}</p>}
+          {modelNote && <p className="text-xs text-status-pending">{modelNote}</p>}
         </div>
 
         <div className="space-y-1.5">
@@ -337,7 +337,7 @@ export function PronunciationTestResultsPage() {
               <StudentPicker students={(students ?? []).filter((s) => s.active)} selected={sendTo} onChange={setSendTo} tag={(s) => tagFor(s.id)} />
               {send.isError && <p className="text-sm text-destructive">{send.error instanceof Error ? send.error.message : 'Could not send'}</p>}
               {send.isSuccess && (
-                <p className="flex items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400">
+                <p className="flex items-center gap-1.5 text-sm text-status-online">
                   <CheckCircle2 className="h-4 w-4" /> Sent.
                 </p>
               )}

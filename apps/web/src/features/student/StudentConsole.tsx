@@ -28,6 +28,7 @@ import { PronunciationPracticePanel } from './PronunciationPracticePanel';
 import { MyClassesSection } from './MyClassesSection';
 import { JoinLiveClassCard } from './JoinLiveClassCard';
 import { StudentSignInScreen } from './StudentSignInScreen';
+import { BrandLogo } from '@/components/brand/BrandLogo';
 import { StudentDrawer, SECTION_TITLES, type StudentSection } from './StudentDrawer';
 import { StudentHome } from './StudentHome';
 import { DictionaryPanel } from '../dictionary/DictionaryPanel';
@@ -579,13 +580,15 @@ export function StudentConsole() {
     <div className="flex min-h-screen flex-col bg-background text-foreground">
       <header className="flex items-center justify-between gap-3 border-b border-border px-6 py-3">
         <div className="flex min-w-0 items-center gap-3">
+          {/* Decorative: the seat/section text beside it already names the app. */}
+          <BrandLogo variant="mark" decorative className="h-8 w-8 shrink-0" />
           {student && (
             <>
               <button
                 type="button"
                 onClick={() => setDrawerOpen(true)}
                 aria-label="Open menu"
-                className="rounded-md p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                className="rounded-control p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
               >
                 <Menu className="h-5 w-5" />
               </button>
@@ -604,14 +607,14 @@ export function StudentConsole() {
           </div>
         </div>
         {remoteControlActive && snapshot?.monitoringIndicator && (
-          <span className="flex items-center gap-1.5 rounded-full bg-red-900 px-3 py-1 text-xs font-medium text-red-100">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-red-400" />
+          <span className="flex items-center gap-1.5 rounded-pill bg-destructive px-3 py-1 text-xs font-medium text-destructive-foreground">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-destructive-foreground" />
             Instructor has taken control
           </span>
         )}
         {presentingRoom && (
-          <span className="flex items-center gap-1.5 rounded-full bg-emerald-900 px-3 py-1 text-xs font-medium text-emerald-100">
-            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+          <span className="flex items-center gap-1.5 rounded-pill bg-status-online px-3 py-1 text-xs font-medium text-white">
+            <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-white" />
             Your screen is being shared with the class{presenterMic ? ' · mic is on' : ''}
           </span>
         )}
@@ -620,7 +623,7 @@ export function StudentConsole() {
           onClick={() => void toggleMic()}
           disabled={snapshot?.activity?.type === ActivityType.ROUND_TABLE}
           title={snapshot?.activity?.type === ActivityType.ROUND_TABLE ? 'Your microphone follows the discussion floor' : undefined}
-          className={`shrink-0 rounded-md px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60 ${micOn ? 'bg-red-700 text-white' : 'bg-secondary text-secondary-foreground'}`}
+          className={`shrink-0 rounded-control px-3 py-1.5 text-sm font-medium disabled:cursor-not-allowed disabled:opacity-60 ${micOn ? 'bg-destructive text-destructive-foreground' : 'bg-cream text-brand'}`}
         >
           {snapshot?.activity?.type === ActivityType.ROUND_TABLE ? 'Mic: by floor' : micOn ? 'Mute Mic' : 'Unmute Mic'}
         </button>
@@ -642,7 +645,7 @@ export function StudentConsole() {
       )}
 
       {toast && (
-        <div className={`m-4 rounded-md px-4 py-2 text-sm ${toast.severity === 'warning' ? 'bg-amber-900 text-amber-100' : 'bg-sky-900 text-sky-100'}`}>
+        <div className={`m-4 rounded-control px-4 py-2 text-sm ${toast.severity === 'warning' ? 'bg-status-pending text-white' : 'bg-status-info text-white'}`}>
           {toast.text}
         </div>
       )}
@@ -669,7 +672,7 @@ export function StudentConsole() {
               snapshot so it doesn't flash before the first push arrives. */}
           {student && snapshot && !snapshot.liveClass && <JoinLiveClassCard stationToken={stationToken} />}
           {student && snapshot?.liveClass && (
-            <div className="w-full max-w-2xl rounded-lg border border-emerald-800 bg-emerald-950/40 px-4 py-3 text-sm">
+            <div className="w-full max-w-2xl rounded-control border border-hairline bg-brand-soft px-4 py-3 text-sm">
               <span className="font-medium">You're in {snapshot.liveClass.title}</span>
               <span className="text-muted-foreground"> · {snapshot.liveClass.teacherName}</span>
             </div>
@@ -685,7 +688,7 @@ export function StudentConsole() {
               }
             />
             {screenShareCount === 0 && student && snapshot?.liveClass && (
-              <div className="flex h-48 w-full items-center justify-center rounded-lg bg-black text-sm text-slate-600">
+              <div className="flex h-48 w-full items-center justify-center rounded-control bg-black text-sm text-white/50">
                 No screen is being shared right now
               </div>
             )}

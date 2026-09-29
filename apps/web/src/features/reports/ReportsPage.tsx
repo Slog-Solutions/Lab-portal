@@ -189,7 +189,7 @@ function DictionaryLookupsReport() {
         )}
 
         {exported && (
-          <p className="text-sm text-emerald-600 dark:text-emerald-400">
+          <p className="text-sm text-status-online">
             Created a Vocabulary Test with {exported.itemCount} word(s) — find it under Exercises.
           </p>
         )}

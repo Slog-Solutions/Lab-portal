@@ -38,20 +38,57 @@ field to see which mode this deployment was built with.
 
 ---
 
+## Noto Sans
+
+The application's interface typeface. **Vendored, not loaded from a CDN** —
+this deployment is air-gapped, so no Google Fonts or other network request
+is made at runtime.
+
+- **Licence:** SIL Open Font License 1.1
+  — https://openfontlicense.org/
+- **Source:** https://fonts.google.com/noto/specimen/Noto+Sans (Google
+  Fonts, version v42), https://github.com/notofonts/latin-greek-cyrillic
+- **Files:** four variable `.woff2` subsets (`wght 100–900`) in
+  `apps/web/src/assets/fonts/` — roman and italic × `latin` and
+  `latin-ext` — declared with matching `unicode-range` in
+  `apps/web/src/styles/index.css`.
+
+The OFL requires the licence text to accompany the font binaries. Add
+`OFL.txt` alongside them in `apps/web/src/assets/fonts/` before shipping
+an external release.
+
+---
+
+## Storyset "Mobile login" illustration
+
+`apps/web/src/assets/illustrations/mobile-login.svg`, used on the login
+page. Illustration by Storyset (https://storyset.com), a Freepik
+Company project, used under the Storyset free licence, **which requires
+attribution**. The credit line "Illustration by Storyset" is rendered on
+the login page's illustration panel; keep it there, or acquire a Freepik
+premium licence before removing it.
+
+Modified from the original: the accent colour `#407BFF` was recoloured to
+the brand's `#0A6B51`, and a `prefers-reduced-motion` rule was added to
+the embedded animation.
+
+---
+
 ## Charis SIL (planned)
 
 The dictionary panel's IPA pronunciation text is intended to use a bundled
 font with full IPA glyph coverage (Charis SIL, SIL Open Font License 1.1
 — https://software.sil.org/charis/), per SPEC-offline-dictionary.md §6.3.
 
-**Status: not yet vendored.** No font binary or `OFL.txt` licence file has
-been added to this repository — the panel currently falls back to system
-fonts (`Segoe UI`, `Noto Sans`) via `apps/web/src/styles/index.css`'s
-`.font-ipa` rule. Verify IPA glyph coverage (`ɪ ʃ ð ŋ ɜː`) on the actual
-deployed Windows 11 image before relying on this for a real rollout; if
-coverage is incomplete, vendor Charis SIL's `.woff2` and its `OFL.txt`
-into `apps/web/src/assets/fonts/`, wire an `@font-face` rule, and update
-this section with its exact version and licence text.
+**Status: not vendored, and likely no longer required.** The `.font-ipa`
+rule in `apps/web/src/styles/index.css` now leads with the bundled Noto
+Sans above, whose `latin-ext` subset spans `U+0100–02BA` and therefore
+covers IPA Extensions (`U+0250–02AF`). Verify the glyphs the spec calls
+out (`ɪ ʃ ð ŋ ɜː`) render from Noto Sans rather than a system fallback on
+the deployed Windows 11 image; only if coverage proves incomplete, vendor
+Charis SIL's `.woff2` and its `OFL.txt` into
+`apps/web/src/assets/fonts/`, wire an `@font-face` rule, and update this
+section with its exact version and licence text.
 
 ---
 

@@ -135,7 +135,7 @@ export function PronunciationTestsPage() {
                 Let students hear each word before recording
               </label>
               {voiceUnavailable && (
-                <p className="flex items-start gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+                <p className="flex items-start gap-1.5 text-xs text-status-pending">
                   <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
                   The model voice (Piper) isn&apos;t configured on this server, so students can only see the words.
                 </p>
@@ -170,7 +170,7 @@ export function PronunciationTestsPage() {
 
             {create.isError && <p className="text-sm text-destructive">{create.error instanceof Error ? create.error.message : 'Could not create the test'}</p>}
             {created && (
-              <p className="flex flex-wrap items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400">
+              <p className="flex flex-wrap items-center gap-1.5 text-sm text-status-online">
                 <CheckCircle2 className="h-4 w-4" />
                 Test sent to {created.assigned} {created.assigned === 1 ? 'student' : 'students'} ({created.wordCount} words).
                 <Link to={`/pronunciation-tests/${created.exerciseId}`} className="font-medium underline">
