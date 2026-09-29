@@ -2,8 +2,13 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import {
   ActivityType,
   AttemptStatus,
+  SessionState,
+  TEST_ERROR_CODES,
   resolveDictionaryEnabled,
+  resolveTestPolicy,
+  type AttemptResultView,
   type ItemResponseDto,
+  type SaveDraftAnswersDto,
   type StartAttemptDto,
   type SubmitAttemptDto,
   type VocabularyTestConfig,
@@ -11,8 +16,10 @@ import {
   countWords,
 } from '@lab/shared';
 import { getActivity } from '@lab/shared/activities';
+import type { Prisma } from '../../../generated/prisma';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuditService } from '../audit/audit.service';
+import { projectConfigForStation } from '../../common/served-config';
 
 export interface ServedItem {
   id: string; // real Item.id for bank mode, "inline:<index>" for inline mode
@@ -28,7 +35,10 @@ export interface ServedItem {
 
 // Types startable through this module — the assessment activities.
 // Everything else (MODEL_IMITATION, ROUND_TABLE, ...) is Phase 2's live
-// ActivityInstance flow, which doesn't create Exercise/Attempt rows.
+// ActivityInstance flow, which doesn't create Exercise/Attempt rows
+// UNLESS it's a launched vocabulary test (see startLiveTest) — that one
+// still goes through this module's Attempt/ItemResponse pipeline, the
+// live ActivityInstance is just where the deadline/reveal state lives.
 const ATTEMPTABLE_TYPES: ActivityType[] = [
   ActivityType.CONTENT_EXERCISE,
   ActivityType.VOCABULARY_TEST,
@@ -42,9 +52,11 @@ const ATTEMPTABLE_TYPES: ActivityType[] = [
 // Teacher-controlled tests, as opposed to open practice: each can only be
 // started through the student's own Assignment and, once submitted, is
 // locked — a re-take needs the teacher to send it again. VOCABULARY_TEST is
-// deliberately not here: it stays a retryable self-paced exercise. Nor is
-// PRONUNCIATION — that stays retryable, self-rated practice; READING_TEST is
-// its one-shot, teacher-marked counterpart (see submitReadingTest).
+// deliberately not here even though a real timed/teacher-released one is
+// ALSO one-shot now (see resolveTestPolicy) — that rule is per-config, not
+// per-type, so it's enforced separately in startSelfPaced/startLiveTest.
+// Nor is PRONUNCIATION — that stays retryable, self-rated practice;
+// READING_TEST is its one-shot, teacher-marked counterpart (see submitReadingTest).
 const ONE_SHOT_TYPES: ActivityType[] = [
   ActivityType.PRONUNCIATION_TEST,
   ActivityType.WRITING_TEST,
@@ -56,6 +68,8 @@ const ONE_SHOT_TYPES: ActivityType[] = [
 // submit can't carry an unbounded payload.
 const DEFAULT_MAX_WORDS = 5000;
 
+type VocabPolicy = ReturnType<typeof resolveTestPolicy>;
+
 /**
  * Attempts + scoring (Ser 4, Ser 5, Ser 7, Ser 10). Grading authority
  * lives here, not in the Activity Type Registry's schemas: a randomized
@@ -64,6 +78,15 @@ const DEFAULT_MAX_WORDS = 5000;
  * must never carry the answer key for items it references — see
  * zVocabularyTestConfig's own comment on why inline vs. bank-sourced
  * items are two different trust boundaries.
+ *
+ * SPEC-mcq-test-timed-reveal.md adds a second trust boundary on top: a
+ * VOCABULARY_TEST attempt's *correctness* must not be disclosed to the
+ * student before its reveal moment (Attempt.revealAt). See
+ * finalizeVocabAttempt and getResult. LISTENING_TEST is graded with the
+ * same pure gradeVocab() logic (see scoreListeningTest) but is NOT routed
+ * through the timed-reveal machinery — it predates this spec, has no
+ * player built for a live/timed run, and keeps its original "reveal
+ * immediately on submit" contract untouched.
  */
 @Injectable()
 export class AttemptsService {
@@ -72,55 +95,25 @@ export class AttemptsService {
     private readonly audit: AuditService,
   ) {}
 
-  async start(studentId: string, dto: StartAttemptDto) {
-    const exercise = await this.prisma.exercise.findUnique({ where: { id: dto.exerciseId } });
-    if (!exercise) throw new NotFoundException('Exercise not found');
-    if (!ATTEMPTABLE_TYPES.includes(exercise.type)) {
-      throw new BadRequestException(`${exercise.type} attempts are not started through this endpoint — it is a live-session activity`);
+  async start(studentId: string, stationId: string, dto: StartAttemptDto) {
+    if (dto.activityInstanceId) {
+      return this.startLiveTest(studentId, stationId, dto.activityInstanceId, dto.exerciseId);
     }
-
-    if (ONE_SHOT_TYPES.includes(exercise.type)) {
-      await this.assertTestStartable(studentId, exercise.id, dto.assignmentId);
-    }
-
-    const { maxScore, itemOrder, items } = await this.prepareServe(exercise.id, exercise.type, exercise.config);
-
-    const attempt = await this.prisma.attempt.create({
-      data: {
-        exerciseId: exercise.id,
-        studentId,
-        assignmentId: dto.assignmentId,
-        activityInstanceId: dto.activityInstanceId,
-        maxScore,
-        itemOrder,
-        status: AttemptStatus.IN_PROGRESS,
-      },
-    });
-
-    return {
-      attemptId: attempt.id,
-      exercise: {
-        id: exercise.id,
-        type: exercise.type,
-        title: exercise.title,
-        config: exercise.config,
-        // Offline dictionary (SPEC-offline-dictionary.md §7) — the client
-        // hides its dictionary panel while this is false (server-side
-        // enforcement is DictionaryPolicyService, independent of this).
-        dictionaryEnabled: resolveDictionaryEnabled(exercise.type, exercise.dictionaryEnabled),
-      },
-      items, // answer keys already stripped — see prepareServe
-    };
+    return this.startSelfPaced(studentId, dto);
   }
 
   async submit(attemptId: string, studentId: string, dto: SubmitAttemptDto) {
     const attempt = await this.prisma.attempt.findUnique({ where: { id: attemptId }, include: { exercise: true } });
     if (!attempt) throw new NotFoundException('Attempt not found');
     if (attempt.studentId !== studentId) throw new ForbiddenException('This attempt belongs to a different student');
+
+    if (attempt.exercise.type === ActivityType.VOCABULARY_TEST) {
+      return this.submitVocab(attempt, studentId, dto);
+    }
+
     if (attempt.status !== AttemptStatus.IN_PROGRESS) {
       throw new BadRequestException(`Attempt is already ${attempt.status.toLowerCase()}`);
     }
-
     const descriptor = getActivity(attempt.exercise.type);
     const responseResult = descriptor.responseSchema.safeParse(dto.response);
     if (!responseResult.success) {
@@ -142,17 +135,108 @@ export class AttemptsService {
     return updated;
   }
 
-  async get(id: string) {
-    const attempt = await this.prisma.attempt.findUnique({
-      where: { id },
-      include: { exercise: true, itemResponses: { include: { item: true } }, scoreOverride: true },
+  /** PUT /attempts/:id/answers — buffers answers before submit (§8.1). One
+   * atomic conditional update: a save that lands after the close sequence
+   * claimed this attempt (or after the student already submitted) fails
+   * cleanly with a distinct code, never silently succeeding past the
+   * deadline. */
+  async saveDraft(attemptId: string, studentId: string, dto: SaveDraftAnswersDto): Promise<{ ok: true }> {
+    const now = new Date();
+    const current = await this.prisma.attempt.findUnique({ where: { id: attemptId }, select: { studentId: true, status: true, answers: true } });
+    if (!current) throw new NotFoundException('Attempt not found');
+    if (current.studentId !== studentId) throw new ForbiddenException('This attempt belongs to a different student');
+
+    const merged: Record<string, string> = { ...((current.answers as Record<string, string> | null) ?? {}) };
+    for (const a of dto.answers) merged[a.itemId] = a.given;
+
+    const result = await this.prisma.attempt.updateMany({
+      where: { id: attemptId, status: AttemptStatus.IN_PROGRESS, OR: [{ closesAt: null }, { closesAt: { gt: now } }] },
+      data: { answers: merged as unknown as Prisma.InputJsonValue },
     });
-    if (!attempt) throw new NotFoundException('Attempt not found');
-    return attempt;
+    if (result.count === 0) {
+      if (current.status !== AttemptStatus.IN_PROGRESS) {
+        throw new BadRequestException({ message: 'This test has already been submitted', code: TEST_ERROR_CODES.ALREADY_SUBMITTED });
+      }
+      throw new BadRequestException({ message: 'This test is closed', code: TEST_ERROR_CODES.TEST_CLOSED });
+    }
+    return { ok: true };
   }
 
-  async listForStudent(studentId: string) {
-    return this.prisma.attempt.findMany({ where: { studentId }, include: { exercise: true }, orderBy: { startedAt: 'desc' } });
+  /** Public entry point for TestCloseService's sweep (§6.2 close
+   * scheduler) — auto-submits one attempt past its deadline, cohort or
+   * individual, with `enforceDeadline: false` since the deadline is
+   * exactly WHY this is being called. A no-op (returns false) if the
+   * attempt already left IN_PROGRESS by the time this runs (the student's
+   * own submit won the race — see finalizeVocabAttempt's own doc comment). */
+  async autoSubmitExpired(attemptId: string): Promise<boolean> {
+    const outcome = await this.finalizeVocabAttempt(attemptId, { enforceDeadline: false, now: new Date() });
+    return outcome !== null;
+  }
+
+  /** GET /attempts/:id/result. `opts.staff` bypasses both ownership and
+   * reveal (§6.4 "Teacher/admin → always full detail, regardless of
+   * reveal state"); callers pass it only after their own role check. */
+  async getResult(attemptId: string, studentId: string, opts?: { staff?: boolean }): Promise<AttemptResultView> {
+    const attempt = await this.prisma.attempt.findUnique({ where: { id: attemptId }, include: { exercise: true } });
+    if (!attempt) throw new NotFoundException('Attempt not found');
+    if (!opts?.staff && attempt.studentId !== studentId) throw new ForbiddenException('This attempt belongs to a different student');
+    if (attempt.exercise.type !== ActivityType.VOCABULARY_TEST) {
+      throw new BadRequestException('Results for this activity type are shown in My Assignments, not through this endpoint');
+    }
+
+    // Lazy finalize: a station that was offline when the sweep ran still
+    // gets a correct result the moment it asks (§4.6 "Offline").
+    if (attempt.status === AttemptStatus.IN_PROGRESS && attempt.closesAt && attempt.closesAt.getTime() <= Date.now()) {
+      const outcome = await this.finalizeVocabAttempt(attemptId, { enforceDeadline: false, now: new Date() });
+      if (outcome) return this.getResult(attemptId, studentId, opts);
+    }
+
+    if (attempt.status === AttemptStatus.IN_PROGRESS) {
+      return { status: 'OPEN' };
+    }
+
+    const now = new Date();
+    const revealed = Boolean(opts?.staff) || (attempt.revealAt !== null && attempt.revealAt <= now);
+    const policy = resolveTestPolicy(attempt.exercise.config as VocabularyTestConfig);
+    if (!revealed) {
+      return {
+        status: 'WAITING',
+        awaiting: policy.revealMode === 'ON_TEACHER_RELEASE' ? 'TEACHER' : 'TIME',
+        closesAt: attempt.closesAt ? attempt.closesAt.getTime() : null,
+        serverNow: now.getTime(),
+      };
+    }
+
+    const effectiveDetail = opts?.staff ? 'FULL_ANSWERS' : policy.revealDetail;
+    const served = ((attempt.served as unknown as ServedItem[] | null) ?? []).reduce<Map<string, ServedItem>>((m, s) => m.set(s.id, s), new Map());
+    const answers = (attempt.answers as Record<string, string> | null) ?? {};
+    const key = await this.resolveAnswerKey(attempt.itemOrder, attempt.exercise.type, attempt.exercise.config);
+
+    const items = attempt.itemOrder.map((itemId) => {
+      const s = served.get(itemId);
+      const k = key.get(itemId);
+      const given = answers[itemId] ?? '';
+      const base = { itemId, prompt: s?.prompt ?? '', choices: s?.choices ?? [], given };
+      if (effectiveDetail === 'SCORE_ONLY') return base;
+      const correct = normalize(given) === normalize(k?.answer ?? '');
+      if (effectiveDetail === 'SCORE_AND_FLAGS') return { ...base, correct };
+      return { ...base, correct, correctAnswer: k?.answer, explanation: k?.explanation };
+    });
+
+    return { status: 'RELEASED', rawScore: attempt.rawScore, maxScore: attempt.maxScore, revealDetail: effectiveDetail, items };
+  }
+
+  /** A student's own attempt history — never the exercise's raw config
+   * (see the class doc comment's "must never carry the answer key"), and
+   * a not-yet-revealed VOCABULARY_TEST row is masked the same way
+   * listAssignmentsForStudent masks it. */
+  async listForStudent(studentId: string, exerciseId?: string) {
+    const attempts = await this.prisma.attempt.findMany({
+      where: { studentId, ...(exerciseId ? { exerciseId } : {}) },
+      include: { exercise: { select: { id: true, type: true, title: true } }, scoreOverride: true },
+      orderBy: { startedAt: 'desc' },
+    });
+    return attempts.map((a) => this.maskAttemptRow(a));
   }
 
   /** "My Assignments" — the standalone, self-paced launch point for
@@ -185,17 +269,31 @@ export class AttemptsService {
       return shared.length === 1 ? (shared[0]?.batch.name ?? null) : null;
     };
 
+    const now = new Date();
     const results = await Promise.all(
       assignments.map(async ({ teacher, batch, ...a }) => {
-        const latestAttempt = await this.prisma.attempt.findFirst({
+        const latestAttemptRaw = await this.prisma.attempt.findFirst({
           where: { studentId, exerciseId: a.exerciseId, assignmentId: a.id },
           orderBy: { startedAt: 'desc' },
           include: { scoreOverride: true },
         });
+        const oneShot =
+          ONE_SHOT_TYPES.includes(a.exercise.type) ||
+          (a.exercise.type === ActivityType.VOCABULARY_TEST && resolveTestPolicy(a.exercise.config as VocabularyTestConfig).oneShot);
+        const pending =
+          a.exercise.type === ActivityType.VOCABULARY_TEST &&
+          latestAttemptRaw?.status === AttemptStatus.SCORED &&
+          (latestAttemptRaw.revealAt === null || latestAttemptRaw.revealAt > now);
+        const latestAttempt = pending
+          ? { ...latestAttemptRaw!, status: AttemptStatus.SUBMITTED, rawScore: null, maxScore: null, scoreOverride: null }
+          : latestAttemptRaw;
         return {
           assignment: a,
-          exercise: a.exercise,
+          // Never the raw config here either — see the class doc comment.
+          exercise: { id: a.exercise.id, type: a.exercise.type, title: a.exercise.title },
           latestAttempt,
+          oneShot,
+          resultsPending: Boolean(pending),
           // An assignment created from a class knows it; older ones fall back to the guess.
           source: { teacherName: teacher.fullName, className: batch?.name ?? classNameFor(a.teacherId) },
         };
@@ -206,19 +304,192 @@ export class AttemptsService {
 
   // ---- Serving (start) ----------------------------------------------------
 
+  /** "Launch in lab" mode — the seat's own membership in the launched
+   * group IS the authorization (§6.1); there is no Assignment row. */
+  private async startLiveTest(studentId: string, stationId: string, instanceId: string, exerciseIdHint?: string) {
+    const instance = await this.prisma.activityInstance.findUnique({
+      where: { id: instanceId },
+      include: { group: { include: { session: true } } },
+    });
+    if (!instance || !instance.exerciseId) throw new NotFoundException('Test not found');
+    if (exerciseIdHint && exerciseIdHint !== instance.exerciseId) {
+      throw new BadRequestException('exerciseId does not match this test');
+    }
+    const sessionState = instance.group.session.state;
+    if (sessionState === SessionState.DRAFT || sessionState === SessionState.ARMED) {
+      throw new BadRequestException({ message: 'This test has not started yet', code: TEST_ERROR_CODES.TEST_NOT_STARTED });
+    }
+
+    const member = await this.prisma.sessionMember.findUnique({
+      where: { groupId_stationId: { groupId: instance.groupId, stationId } },
+    });
+    if (!member) throw new ForbiddenException('This station is not part of this test');
+
+    const exercise = await this.prisma.exercise.findUniqueOrThrow({ where: { id: instance.exerciseId } });
+
+    const existing = await this.prisma.attempt.findFirst({
+      where: { activityInstanceId: instance.id, studentId },
+      orderBy: { startedAt: 'desc' },
+    });
+    if (existing) {
+      if (existing.status === AttemptStatus.IN_PROGRESS) return this.resumeAttemptResponse(existing, exercise);
+      throw new BadRequestException({
+        message: 'You have already submitted this test',
+        code: TEST_ERROR_CODES.ALREADY_SUBMITTED,
+        attemptId: existing.id,
+      });
+    }
+
+    // Read right here, right before creating (same convention
+    // session-state.service.ts documents on its own late-read) — shrinks
+    // the window against a close claimed in between, though a request
+    // that still slips through creates an attempt that the very next 5s
+    // sweep picks up (closesAt already passed) and scores from whatever
+    // was answered — never an early reveal, at worst a fairness edge case.
+    const fresh = await this.prisma.activityInstance.findUniqueOrThrow({ where: { id: instance.id }, select: { closedAt: true, closesAt: true } });
+    if (fresh.closedAt) throw new BadRequestException({ message: 'This test is closed', code: TEST_ERROR_CODES.TEST_CLOSED });
+
+    const served = await this.prepareServe(exercise.id, exercise.type, exercise.config);
+    const attempt = await this.prisma.attempt.create({
+      data: {
+        exerciseId: exercise.id,
+        studentId,
+        activityInstanceId: instance.id,
+        maxScore: served.maxScore,
+        itemOrder: served.itemOrder,
+        served: (served.items ?? null) as unknown as Prisma.InputJsonValue,
+        answers: {},
+        closesAt: fresh.closesAt,
+        status: AttemptStatus.IN_PROGRESS,
+      },
+    });
+
+    const policy = resolveTestPolicy(exercise.config as VocabularyTestConfig);
+    return this.startedAttemptResponse(attempt, exercise, served.items, {}, fresh.closesAt, policy);
+  }
+
+  private async startSelfPaced(studentId: string, dto: StartAttemptDto) {
+    const exerciseId = dto.exerciseId!; // guaranteed by zStartAttemptDto's refine
+    const exercise = await this.prisma.exercise.findUnique({ where: { id: exerciseId } });
+    if (!exercise) throw new NotFoundException('Exercise not found');
+    if (!ATTEMPTABLE_TYPES.includes(exercise.type)) {
+      throw new BadRequestException(`${exercise.type} attempts are not started through this endpoint — it is a live-session activity`);
+    }
+
+    const policy = exercise.type === ActivityType.VOCABULARY_TEST ? resolveTestPolicy(exercise.config as VocabularyTestConfig) : null;
+
+    if (ONE_SHOT_TYPES.includes(exercise.type)) {
+      await this.assertTestStartable(studentId, exercise.id, dto.assignmentId);
+    } else if (dto.assignmentId) {
+      // VOCABULARY_TEST isn't in ONE_SHOT_TYPES, but an assignment must
+      // still actually be this student's own — this was never checked
+      // for non-one-shot types before.
+      await this.assertAssignmentOwnership(studentId, exercise.id, dto.assignmentId);
+    } else if (policy?.oneShot) {
+      // A real timed/teacher-released test must not be openable as an
+      // ungated self-study exercise — that would hand it an independent
+      // deadline unrelated to (and possibly revealing before) any lab run
+      // of the same test still in progress.
+      throw new BadRequestException('This test can only be started from your assignments or a live session');
+    }
+
+    if (dto.assignmentId) {
+      const resumable = await this.prisma.attempt.findFirst({
+        where: { assignmentId: dto.assignmentId, studentId, status: AttemptStatus.IN_PROGRESS },
+        orderBy: { startedAt: 'desc' },
+      });
+      if (resumable) return this.resumeAttemptResponse(resumable, exercise);
+    }
+
+    const served = await this.prepareServe(exercise.id, exercise.type, exercise.config);
+    const closesAt =
+      policy?.revealMode === 'ON_TIME_EXPIRY' && (exercise.config as VocabularyTestConfig).timeLimitSec
+        ? new Date(Date.now() + (exercise.config as VocabularyTestConfig).timeLimitSec! * 1000)
+        : null;
+
+    const attempt = await this.prisma.attempt.create({
+      data: {
+        exerciseId: exercise.id,
+        studentId,
+        assignmentId: dto.assignmentId,
+        maxScore: served.maxScore,
+        itemOrder: served.itemOrder,
+        served: (served.items ?? null) as unknown as Prisma.InputJsonValue,
+        answers: {},
+        closesAt,
+        status: AttemptStatus.IN_PROGRESS,
+      },
+    });
+
+    return this.startedAttemptResponse(attempt, exercise, served.items, {}, closesAt, policy);
+  }
+
+  private resumeAttemptResponse(
+    attempt: { id: string; closesAt: Date | null; served: unknown; answers: unknown },
+    exercise: { id: string; type: ActivityType; title: string; config: unknown; dictionaryEnabled: boolean | null },
+  ) {
+    const policy = exercise.type === ActivityType.VOCABULARY_TEST ? resolveTestPolicy(exercise.config as VocabularyTestConfig) : null;
+    const items = (attempt.served as unknown as ServedItem[] | null) ?? undefined;
+    const answers = (attempt.answers as Record<string, string> | null) ?? {};
+    return this.startedAttemptResponse(attempt, exercise, items, answers, attempt.closesAt, policy);
+  }
+
+  private startedAttemptResponse(
+    attempt: { id: string },
+    exercise: { id: string; type: ActivityType; title: string; config: unknown; dictionaryEnabled: boolean | null },
+    items: ServedItem[] | undefined,
+    answers: Record<string, string>,
+    closesAt: Date | null,
+    policy: VocabPolicy | null,
+  ) {
+    return {
+      attemptId: attempt.id,
+      exercise: {
+        id: exercise.id,
+        type: exercise.type,
+        title: exercise.title,
+        // SPEC-mcq-test-timed-reveal.md §3.2 (GF-6): the config a station
+        // holds must never carry an answer key. For VOCABULARY_TEST this
+        // strips items/itemBankId entirely — the questions themselves
+        // only ever travel through `items` below (already answer-stripped
+        // per-attempt), never through the raw exercise config.
+        config: projectConfigForStation(exercise.type, exercise.config),
+        // Offline dictionary (SPEC-offline-dictionary.md §7) — the client
+        // hides its dictionary panel while this is false (server-side
+        // enforcement is DictionaryPolicyService, independent of this).
+        dictionaryEnabled: resolveDictionaryEnabled(exercise.type, exercise.dictionaryEnabled),
+      },
+      items, // answer keys already stripped — see prepareServe
+      answers,
+      timing: policy
+        ? {
+            closesAt: closesAt ? closesAt.getTime() : null,
+            serverNow: Date.now(),
+            revealMode: policy.revealMode,
+            revealDetail: policy.revealDetail,
+            allowReview: policy.allowReview,
+          }
+        : null,
+    };
+  }
+
   /** See ONE_SHOT_TYPES: started only through the student's own
    * Assignment, locked once submitted — a re-take needs the teacher to
    * send it again (a fresh Assignment). */
   private async assertTestStartable(studentId: string, exerciseId: string, assignmentId?: string): Promise<void> {
     if (!assignmentId) throw new BadRequestException('A test can only be started from your assignments');
-    const assignment = await this.prisma.assignment.findUnique({ where: { id: assignmentId } });
-    if (!assignment || assignment.studentId !== studentId || assignment.exerciseId !== exerciseId) {
-      throw new ForbiddenException('This test is not assigned to you');
-    }
+    await this.assertAssignmentOwnership(studentId, exerciseId, assignmentId);
     const submitted = await this.prisma.attempt.count({
       where: { assignmentId, status: { in: [AttemptStatus.SUBMITTED, AttemptStatus.SCORED] } },
     });
     if (submitted > 0) throw new BadRequestException('You have already submitted this test');
+  }
+
+  private async assertAssignmentOwnership(studentId: string, exerciseId: string, assignmentId: string): Promise<void> {
+    const assignment = await this.prisma.assignment.findUnique({ where: { id: assignmentId } });
+    if (!assignment || assignment.studentId !== studentId || assignment.exerciseId !== exerciseId) {
+      throw new ForbiddenException('This test is not assigned to you');
+    }
   }
 
   private async prepareServe(
@@ -293,11 +564,135 @@ export class AttemptsService {
     return {
       maxScore: 100,
       itemOrder: order.map((idx) => `inline:${idx}`),
-      items: order.map((idx) => ({ id: `inline:${idx}`, prompt: items[idx]!.prompt, choices: items[idx]!.choices ?? [] })),
+      // Inline choices are shuffled too now — they never were before,
+      // which meant an inline MCQ (stored answer-first, same as a bank
+      // item) always served the correct answer in slot one.
+      items: order.map((idx) => ({ id: `inline:${idx}`, prompt: items[idx]!.prompt, choices: shuffleChoices(items[idx]!.choices ?? []) })),
     };
   }
 
   // ---- Scoring (submit) ----------------------------------------------------
+
+  /** VOCABULARY_TEST only (SPEC-mcq-test-timed-reveal.md). Routed through
+   * the atomic finalizeVocabAttempt rather than the read-then-write path
+   * every other type still uses, so a student's own submit racing the
+   * close scheduler's auto-submit can never double-grade. */
+  private async submitVocab(
+    attempt: { id: string; status: string; exercise: { type: ActivityType } },
+    studentId: string,
+    dto: SubmitAttemptDto,
+  ) {
+    const descriptor = getActivity(attempt.exercise.type);
+    const responseResult = descriptor.responseSchema.safeParse(dto.response);
+    if (!responseResult.success) {
+      throw new BadRequestException({ message: 'Invalid response payload for this activity type', issues: responseResult.error.issues });
+    }
+    if (attempt.status !== AttemptStatus.IN_PROGRESS) {
+      throw new BadRequestException({ message: `Attempt is already ${attempt.status.toLowerCase()}`, code: TEST_ERROR_CODES.ALREADY_SUBMITTED });
+    }
+
+    const answers = dto.itemResponses?.length ? Object.fromEntries(dto.itemResponses.map((r) => [r.itemId, r.given])) : undefined;
+    const outcome = await this.finalizeVocabAttempt(attempt.id, { answers, enforceDeadline: true, now: new Date() });
+    if (!outcome) {
+      const fresh = await this.prisma.attempt.findUnique({ where: { id: attempt.id }, select: { status: true } });
+      if (fresh?.status !== AttemptStatus.IN_PROGRESS) {
+        throw new BadRequestException({ message: `Attempt is already ${fresh?.status.toLowerCase()}`, code: TEST_ERROR_CODES.ALREADY_SUBMITTED });
+      }
+      throw new BadRequestException({ message: 'This test is closed', code: TEST_ERROR_CODES.TEST_CLOSED });
+    }
+    return this.getResult(attempt.id, studentId);
+  }
+
+  /**
+   * Shared by a student's own submit (enforceDeadline: true — must run
+   * before closesAt) and TestCloseService's auto-submit (enforceDeadline:
+   * false — the instance already decided it's time, or this is a lazy
+   * finalize on a result fetch past the deadline). One atomic conditional
+   * transition (IN_PROGRESS -> SCORED) via `updateMany`: whichever caller's
+   * UPDATE actually matches the row wins the race; the other gets
+   * `count: 0` and returns null having changed nothing — no double
+   * ItemResponse rows, no double SkillProgress, no double audit entry.
+   */
+  private async finalizeVocabAttempt(
+    attemptId: string,
+    opts: { answers?: Record<string, string>; enforceDeadline: boolean; now: Date },
+  ): Promise<{ rawScore: number } | null> {
+    const attempt = await this.prisma.attempt.findUnique({ where: { id: attemptId }, include: { exercise: true } });
+    if (!attempt || attempt.status !== AttemptStatus.IN_PROGRESS) return null;
+
+    const answers = opts.answers ?? (attempt.answers as Record<string, string> | null) ?? {};
+    const answerKey = await this.resolveAnswerKey(attempt.itemOrder, attempt.exercise.type, attempt.exercise.config);
+    const { rawScore, responseRows } = gradeVocab(
+      attempt.itemOrder,
+      new Map([...answerKey].map(([id, v]) => [id, v.answer])),
+      answers,
+    );
+
+    const policy = resolveTestPolicy(attempt.exercise.config as VocabularyTestConfig);
+    const revealAt =
+      policy.revealMode === 'ON_SUBMIT' ? opts.now : policy.revealMode === 'ON_TIME_EXPIRY' ? (attempt.closesAt ?? opts.now) : null; // ON_TEACHER_RELEASE — set later by an explicit release
+
+    const guard: Record<string, unknown> = { id: attemptId, status: AttemptStatus.IN_PROGRESS };
+    if (opts.enforceDeadline) guard.OR = [{ closesAt: null }, { closesAt: { gt: opts.now } }];
+
+    const result = await this.prisma.attempt.updateMany({
+      where: guard,
+      data: { rawScore, status: AttemptStatus.SCORED, submittedAt: opts.now, answers: answers as unknown as Prisma.InputJsonValue, revealAt },
+    });
+    if (result.count === 0) return null;
+
+    const isBankMode = attempt.itemOrder.length === 0 || !attempt.itemOrder[0]!.startsWith('inline:');
+    if (isBankMode) {
+      await this.prisma.itemResponse.createMany({
+        data: responseRows.map((r) => ({ attemptId, itemId: r.itemId, given: r.given, correct: r.correct, order: r.order })),
+      });
+    }
+    if (attempt.itemOrder.length > 0) {
+      await this.recordSkillProgress(attempt.studentId, attempt.exercise.type, rawScore, attempt.maxScore ?? 100);
+    }
+    await this.audit.log({ actorId: attempt.studentId, action: 'attempt.submit', detail: { attemptId, rawScore, status: AttemptStatus.SCORED } });
+
+    return { rawScore };
+  }
+
+  /** Bank mode reads the key from Item; inline mode reads it from the
+   * exercise's own config. Shared by finalizeVocabAttempt (scoring) and
+   * getResult (showing the key after reveal). */
+  private async resolveAnswerKey(
+    itemOrder: string[],
+    type: ActivityType,
+    config: unknown,
+  ): Promise<Map<string, { answer: string; explanation?: string }>> {
+    if (itemOrder.length === 0) return new Map();
+    const isBankMode = !itemOrder[0]!.startsWith('inline:');
+    if (isBankMode) {
+      const items = await this.prisma.item.findMany({ where: { id: { in: itemOrder } } });
+      return new Map(items.map((i) => [i.id, { answer: i.answer, explanation: i.explanation ?? undefined }]));
+    }
+    const inlineItems = type === ActivityType.VOCABULARY_TEST ? ((config as VocabularyTestConfig).items ?? []) : [];
+    return new Map(
+      itemOrder.map((key) => {
+        const item = inlineItems[Number(key.split(':')[1])];
+        return [key, { answer: item?.answer ?? '', explanation: item?.explanation }];
+      }),
+    );
+  }
+
+  private maskAttemptRow<
+    T extends {
+      exercise: { type: ActivityType };
+      status: string;
+      rawScore: number | null;
+      maxScore: number | null;
+      revealAt: Date | null;
+      scoreOverride: unknown;
+    },
+  >(a: T): T {
+    if (a.exercise.type !== ActivityType.VOCABULARY_TEST || a.status !== AttemptStatus.SCORED) return a;
+    const revealed = a.revealAt !== null && a.revealAt <= new Date();
+    if (revealed) return a;
+    return { ...a, status: AttemptStatus.SUBMITTED, rawScore: null, maxScore: null, scoreOverride: null };
+  }
 
   private async score(
     attempt: { id: string; itemOrder: string[]; exerciseId: string },
@@ -331,14 +726,32 @@ export class AttemptsService {
       return this.submitReadingTest(attempt, response as { studentAudioAssetId: string });
     }
 
-    // A listening test is graded exactly like a bank-mode vocabulary test:
-    // each question against its stored answer.
     if (exercise.type === ActivityType.LISTENING_TEST) {
-      return this.scoreVocabularyTest(attempt, {}, itemResponses);
+      return this.scoreListeningTest(attempt, itemResponses);
     }
 
-    // VOCABULARY_TEST
-    return this.scoreVocabularyTest(attempt, exercise.config as VocabularyTestConfig, itemResponses);
+    throw new BadRequestException(`${exercise.type} is scored through submitVocab, not score()`);
+  }
+
+  /** Graded exactly like a bank-mode vocabulary test (same gradeVocab
+   * logic), but NOT routed through the timed-reveal machinery —
+   * LISTENING_TEST predates SPEC-mcq-test-timed-reveal.md, has no live/timed
+   * player, and keeps its original "reveal immediately on submit" contract
+   * (the plain updated Attempt row) so the existing ListeningTestPlayer
+   * keeps working unchanged. */
+  private async scoreListeningTest(
+    attempt: { id: string; itemOrder: string[] },
+    itemResponses: ItemResponseDto[],
+  ): Promise<{ rawScore: number; status: string }> {
+    if (attempt.itemOrder.length === 0) return { rawScore: 0, status: AttemptStatus.SCORED };
+    const items = await this.prisma.item.findMany({ where: { id: { in: attempt.itemOrder } } });
+    const answerKey = new Map(items.map((i) => [i.id, i.answer]));
+    const answers = Object.fromEntries(itemResponses.map((r) => [r.itemId, r.given]));
+    const { rawScore, responseRows } = gradeVocab(attempt.itemOrder, answerKey, answers);
+    await this.prisma.itemResponse.createMany({
+      data: responseRows.map((r) => ({ attemptId: attempt.id, itemId: r.itemId, given: r.given, correct: r.correct, order: r.order })),
+    });
+    return { rawScore, status: AttemptStatus.SCORED };
   }
 
   /** No score yet — a teacher marks the essay later
@@ -452,50 +865,6 @@ export class AttemptsService {
     return { rawScore: null, status: AttemptStatus.SUBMITTED };
   }
 
-  private async scoreVocabularyTest(
-    attempt: { id: string; itemOrder: string[] },
-    config: Pick<VocabularyTestConfig, 'items'>,
-    itemResponses: ItemResponseDto[],
-  ): Promise<{ rawScore: number; status: string }> {
-    if (attempt.itemOrder.length === 0) return { rawScore: 0, status: AttemptStatus.SCORED };
-
-    const givenByItemId = new Map(itemResponses.map((r) => [r.itemId, r]));
-    const isBankMode = !attempt.itemOrder[0]!.startsWith('inline:');
-
-    let answerKey = new Map<string, string>();
-    if (isBankMode) {
-      const items = await this.prisma.item.findMany({ where: { id: { in: attempt.itemOrder } } });
-      answerKey = new Map(items.map((i) => [i.id, i.answer]));
-    } else {
-      const inlineItems = config.items ?? [];
-      answerKey = new Map(attempt.itemOrder.map((key) => [key, inlineItems[Number(key.split(':')[1])]?.answer ?? '']));
-    }
-
-    let correctCount = 0;
-    const responseRows: Array<{ itemId: string; given: string; correct: boolean; order: number }> = [];
-    attempt.itemOrder.forEach((itemId, order) => {
-      const given = givenByItemId.get(itemId)?.given ?? '';
-      const correctAnswer = answerKey.get(itemId) ?? '';
-      const correct = normalize(given) === normalize(correctAnswer);
-      if (correct) correctCount += 1;
-      responseRows.push({ itemId, given, correct, order });
-    });
-
-    // ItemResponse.itemId has a real FK to Item — only persist rows for
-    // bank-sourced items, which have one. Inline items were never given
-    // an Item row (they live only in the exercise's config JSON), so
-    // there is nothing valid to point the FK at; the score itself is
-    // still computed and stored on Attempt either way.
-    if (isBankMode) {
-      await this.prisma.itemResponse.createMany({
-        data: responseRows.map((r) => ({ attemptId: attempt.id, itemId: r.itemId, given: r.given, correct: r.correct, order: r.order })),
-      });
-    }
-
-    const rawScore = Math.round((correctCount / attempt.itemOrder.length) * 100);
-    return { rawScore, status: AttemptStatus.SCORED };
-  }
-
   private async recordSkillProgress(studentId: string, type: ActivityType, rawScore: number, maxScore: number): Promise<void> {
     const skill =
       type === ActivityType.VOCABULARY_TEST
@@ -528,4 +897,26 @@ function shuffleChoices(choices: string[]): string[] {
 
 function normalize(s: string): string {
   return s.trim().toLowerCase();
+}
+
+/** Pure grading — shared by finalizeVocabAttempt (both a student's own
+ * submit and the close scheduler's auto-submit go through it, so there is
+ * exactly one place "is this answer correct" is decided). `answers` is
+ * itemId -> given. */
+export function gradeVocab(
+  itemOrder: string[],
+  answerKey: Map<string, string>,
+  answers: Record<string, string>,
+): { rawScore: number; responseRows: Array<{ itemId: string; given: string; correct: boolean; order: number }> } {
+  if (itemOrder.length === 0) return { rawScore: 0, responseRows: [] };
+  let correctCount = 0;
+  const responseRows = itemOrder.map((itemId, order) => {
+    const given = answers[itemId] ?? '';
+    const correctAnswer = answerKey.get(itemId) ?? '';
+    const correct = normalize(given) === normalize(correctAnswer);
+    if (correct) correctCount += 1;
+    return { itemId, given, correct, order };
+  });
+  const rawScore = Math.round((correctCount / itemOrder.length) * 100);
+  return { rawScore, responseRows };
 }

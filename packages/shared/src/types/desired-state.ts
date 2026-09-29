@@ -1,6 +1,7 @@
 import type { ActivityType, CommandType, SessionRole } from './enums.js';
 import type { CommandTarget, StationMediaGrant } from './station.js';
 import type { RoundTableView } from './round-table.js';
+import type { TimedTestState } from './timed-test.js';
 
 /**
  * Declarative, reconciled state (design doc §4.3). The server pushes a
@@ -21,6 +22,10 @@ export interface DesiredStationState {
     instanceId: string;
     /** Activity-specific config, validated against that activity's configSchema. */
     config: unknown;
+    /** SPEC-mcq-test-timed-reveal.md §5.3 — set only for a VOCABULARY_TEST
+     * instance launched via "Launch in lab" (ActivityInstance.exerciseId is
+     * set). Absent for every other activity, and for an older server. */
+    timedTest?: TimedTestState | null;
   } | null;
   lock: {
     /** Identifies one Lock click — a re-sent snapshot carries the same id,

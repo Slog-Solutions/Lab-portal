@@ -81,14 +81,32 @@ describe('DictionaryPolicyService.assertAllowed', () => {
     });
   });
 
-  it('queries only attempts started within the configured window', async () => {
+  it('queries an untimed attempt only within the configured window (no closesAt to check instead)', async () => {
     const findFirst = vi.fn().mockResolvedValue(null);
     const prisma = makeFakePrisma({ station: { findUnique: vi.fn().mockResolvedValue({ currentUserId: 'stu1' }) }, attempt: { findFirst } });
     const service = makeService(prisma, 30);
     await service.assertAllowed({ kind: 'station', stationId: 'st1' });
     const callArg = findFirst.mock.calls[0]![0];
     expect(callArg.where.studentId).toBe('stu1');
-    expect(callArg.where.startedAt.gte).toBeInstanceOf(Date);
+    const windowBranch = callArg.where.OR.find((c: { closesAt: unknown }) => c.closesAt === null);
+    expect(windowBranch.startedAt.gte).toBeInstanceOf(Date);
+  });
+
+  it('SPEC-mcq-test-timed-reveal.md: a real timed test still blocks the dictionary past the configured window, as long as its own closesAt has not passed', async () => {
+    const findFirst = vi.fn().mockResolvedValue({ exercise: { type: ActivityType.VOCABULARY_TEST, dictionaryEnabled: null } });
+    const prisma = makeFakePrisma({ station: { findUnique: vi.fn().mockResolvedValue({ currentUserId: 'stu1' }) }, attempt: { findFirst } });
+    // A short configured window (5 min) — a real 90-minute timed test must
+    // not slip through it just because it has been running longer than 5
+    // minutes. The fake doesn't actually filter by the query (it always
+    // returns the attempt), so this asserts the QUERY ITSELF offers a
+    // closesAt-based branch that doesn't depend on the window at all.
+    const service = makeService(prisma, 5);
+    await expect(service.assertAllowed({ kind: 'station', stationId: 'st1' })).rejects.toMatchObject({
+      response: expect.objectContaining({ code: 'DICTIONARY_DISABLED' }),
+    });
+    const callArg = findFirst.mock.calls[0]![0];
+    const closesAtBranch = callArg.where.OR.find((c: { closesAt?: unknown }) => c.closesAt && typeof c.closesAt === 'object' && 'gt' in c.closesAt);
+    expect(closesAtBranch).toBeDefined();
   });
 
   it('allows a station whose seat has nobody signed in', async () => {

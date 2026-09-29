@@ -61,6 +61,13 @@ describe('AssessmentsService.create', () => {
     title: 'Unit 3 words',
     studentIds: STUDENTS,
     wordListText: 'cat = gato\ndog = perro | gato | pez',
+    // The DTO's zod schema `.default()`s these (ON_TIME_EXPIRY/FULL_ANSWERS/true)
+    // when a real request omits them — a raw object literal typed as
+    // CreateAssessmentDto has to spell them out itself, since it never
+    // goes through zCreateAssessmentDto.parse().
+    revealMode: 'ON_SUBMIT',
+    revealDetail: 'SCORE_ONLY',
+    allowReview: true,
     ...over,
   });
 
@@ -74,13 +81,13 @@ describe('AssessmentsService.create', () => {
     expect(result).toEqual({ exerciseId: 'ex1', type: ActivityType.VOCABULARY_TEST, questionCount: 2, assigned: 2 });
     expect(prisma.item.createMany).toHaveBeenCalledWith({
       data: [
-        { itemBankId: 'bank1', order: 0, type: 'SHORT_ANSWER', prompt: 'cat', answer: 'gato', choices: [], mediaAssetId: null },
-        { itemBankId: 'bank1', order: 1, type: 'MCQ', prompt: 'dog', answer: 'perro', choices: ['perro', 'gato', 'pez'], mediaAssetId: null },
+        { itemBankId: 'bank1', order: 0, type: 'SHORT_ANSWER', prompt: 'cat', answer: 'gato', choices: [], mediaAssetId: null, explanation: null },
+        { itemBankId: 'bank1', order: 1, type: 'MCQ', prompt: 'dog', answer: 'perro', choices: ['perro', 'gato', 'pez'], mediaAssetId: null, explanation: null },
       ],
     });
     expect(prisma.exercise.update).toHaveBeenCalledWith({
       where: { id: 'ex1' },
-      data: { config: { itemBankId: 'bank1', shuffleItems: true } },
+      data: { config: { itemBankId: 'bank1', shuffleItems: true, revealMode: 'ON_SUBMIT', revealDetail: 'SCORE_ONLY', allowReview: true } },
     });
     expect(prisma.assignment.createMany).toHaveBeenCalledWith({
       data: STUDENTS.map((studentId) => ({ teacherId: 'teacher1', studentId, exerciseId: 'ex1', dueAt })),
@@ -91,11 +98,17 @@ describe('AssessmentsService.create', () => {
   it('vocabulary: keeps sampleSize only when it is smaller than the bank', async () => {
     const small = makePrisma();
     await makeSvc(small).svc.create(TEACHER_USER, vocab({ sampleSize: 1 }));
-    expect(small.exercise.update).toHaveBeenCalledWith(expect.objectContaining({ data: { config: { itemBankId: 'bank1', shuffleItems: true, sampleSize: 1 } } }));
+    expect(small.exercise.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: { config: { itemBankId: 'bank1', shuffleItems: true, sampleSize: 1, revealMode: 'ON_SUBMIT', revealDetail: 'SCORE_ONLY', allowReview: true } },
+      }),
+    );
 
     const big = makePrisma();
     await makeSvc(big).svc.create(TEACHER_USER, vocab({ sampleSize: 50 }));
-    expect(big.exercise.update).toHaveBeenCalledWith(expect.objectContaining({ data: { config: { itemBankId: 'bank1', shuffleItems: true } } }));
+    expect(big.exercise.update).toHaveBeenCalledWith(
+      expect.objectContaining({ data: { config: { itemBankId: 'bank1', shuffleItems: true, revealMode: 'ON_SUBMIT', revealDetail: 'SCORE_ONLY', allowReview: true } } }),
+    );
   });
 
   it('turns a malformed question list into a 400 that names the bad line, and writes nothing', async () => {
@@ -185,7 +198,7 @@ describe('AssessmentsService.create', () => {
       await makeSvc(prisma).svc.create(TEACHER_USER, writing({ instructions: 'Use full sentences.', minWords: 50, maxWords: 120 }));
 
       expect(prisma.item.createMany).toHaveBeenCalledWith({
-        data: [{ itemBankId: 'bank1', order: 0, type: 'SHORT_ANSWER', prompt: 'Describe your hometown.', answer: '', choices: [], mediaAssetId: null }],
+        data: [{ itemBankId: 'bank1', order: 0, type: 'SHORT_ANSWER', prompt: 'Describe your hometown.', answer: '', choices: [], mediaAssetId: null, explanation: null }],
       });
       expect(prisma.exercise.update).toHaveBeenCalledWith({
         where: { id: 'ex1' },
@@ -217,7 +230,7 @@ describe('AssessmentsService.create', () => {
 
       expect(prisma.exercise.update).toHaveBeenCalledWith({ where: { id: 'ex1' }, data: { config: { audioAssetId: cuid } } });
       expect(prisma.item.createMany).toHaveBeenCalledWith({
-        data: [{ itemBankId: 'bank1', order: 0, type: 'MCQ', prompt: 'Which gate?', answer: 'B12', choices: ['B12', 'A4', 'C9'], mediaAssetId: null }],
+        data: [{ itemBankId: 'bank1', order: 0, type: 'MCQ', prompt: 'Which gate?', answer: 'B12', choices: ['B12', 'A4', 'C9'], mediaAssetId: null, explanation: null }],
       });
     });
 
@@ -248,7 +261,7 @@ describe('AssessmentsService.create', () => {
       await makeSvc(prisma).svc.create(TEACHER_USER, reading({ instructions: 'Read clearly.', voice: 'en_US' }));
 
       expect(prisma.item.createMany).toHaveBeenCalledWith({
-        data: [{ itemBankId: 'bank1', order: 0, type: 'SHORT_ANSWER', prompt: 'The quick brown fox.', answer: '', choices: [], mediaAssetId: null }],
+        data: [{ itemBankId: 'bank1', order: 0, type: 'SHORT_ANSWER', prompt: 'The quick brown fox.', answer: '', choices: [], mediaAssetId: null, explanation: null }],
       });
       expect(prisma.exercise.update).toHaveBeenCalledWith({
         where: { id: 'ex1' },
@@ -273,7 +286,7 @@ describe('AssessmentsService.create', () => {
 
       expect(prisma.mediaAsset.findUnique).toHaveBeenCalledWith({ where: { id: cuid }, select: { mimeType: true, scope: true } });
       expect(prisma.item.createMany).toHaveBeenCalledWith({
-        data: [{ itemBankId: 'bank1', order: 0, type: 'SHORT_ANSWER', prompt: '', answer: '', choices: [], mediaAssetId: cuid }],
+        data: [{ itemBankId: 'bank1', order: 0, type: 'SHORT_ANSWER', prompt: '', answer: '', choices: [], mediaAssetId: cuid, explanation: null }],
       });
     });
 
@@ -284,7 +297,7 @@ describe('AssessmentsService.create', () => {
       await makeSvc(prisma).svc.create(TEACHER_USER, reading({ documentAssetId: cuid }));
 
       expect(prisma.item.createMany).toHaveBeenCalledWith({
-        data: [{ itemBankId: 'bank1', order: 0, type: 'SHORT_ANSWER', prompt: 'The quick brown fox.', answer: '', choices: [], mediaAssetId: cuid }],
+        data: [{ itemBankId: 'bank1', order: 0, type: 'SHORT_ANSWER', prompt: 'The quick brown fox.', answer: '', choices: [], mediaAssetId: cuid, explanation: null }],
       });
     });
 
@@ -325,12 +338,14 @@ describe('AssessmentsService.list', () => {
 
     await svc.list(teacher, ActivityType.WRITING_TEST);
     expect(prisma.exercise.findMany).toHaveBeenLastCalledWith(
-      expect.objectContaining({ where: { type: ActivityType.WRITING_TEST, assignments: { some: {} }, teacherId: 'teacher1' } }),
+      expect.objectContaining({
+        where: { type: ActivityType.WRITING_TEST, OR: [{ assignments: { some: {} } }, { isAssessment: true }], teacherId: 'teacher1' },
+      }),
     );
 
     await svc.list({ id: 'admin1', role: 'ADMIN' }, ActivityType.WRITING_TEST);
     expect(prisma.exercise.findMany).toHaveBeenLastCalledWith(
-      expect.objectContaining({ where: { type: ActivityType.WRITING_TEST, assignments: { some: {} } } }),
+      expect.objectContaining({ where: { type: ActivityType.WRITING_TEST, OR: [{ assignments: { some: {} } }, { isAssessment: true }] } }),
     );
   });
 
@@ -345,6 +360,7 @@ describe('AssessmentsService.list', () => {
         createdAt: new Date(),
         teacher: { fullName: 'T' },
         itemBank: { _count: { items: 1 } },
+        _count: { activityInstances: 0 },
         assignments: [
           { id: 'a1', attempts: [attempt(AttemptStatus.SCORED, 80)] },
           { id: 'a2', attempts: [attempt(AttemptStatus.SUBMITTED, null)] }, // waiting to be marked
@@ -370,6 +386,7 @@ describe('AssessmentsService.get', () => {
     config: {},
     teacher: { fullName: 'Teacher One' },
     itemBank: { items: [{ id: 'q1', prompt: 'Prompt', answer: 'secret', choices: [], order: 0 }] },
+    _count: { attempts: 0, activityInstances: 0 },
   });
 
   it('does not ship an answer key for a writing prompt or a reading passage, but does for a self-scoring test', async () => {

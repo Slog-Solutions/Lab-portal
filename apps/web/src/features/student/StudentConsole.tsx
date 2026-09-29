@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Menu } from 'lucide-react';
 import { Track } from 'livekit-client';
-import type { CommandEnvelope, DesiredStationState, RoundTableFloor } from '@lab/shared';
+import type { CommandEnvelope, DesiredStationState, RoundTableFloor, TimedTestState } from '@lab/shared';
 import { ActivityType, CommandType, seatLabel, shouldHandleDictionaryShortcut } from '@lab/shared';
 import {
   BROADCAST_ROOM,
@@ -22,6 +22,7 @@ import { queryKeys } from '../../lib/query-keys';
 import { useStudentSession } from '../../stores/student-session-store';
 import { useDictionaryStore } from '../../stores/dictionary-store';
 import { ActivityPlayer } from '../activities/registry';
+import { LiveVocabularyTest } from '../activities/LiveVocabularyTest';
 import { AssignmentsPanel } from './AssignmentsPanel';
 import { StudyLibraryPanel } from './StudyLibraryPanel';
 import { PronunciationPracticePanel } from './PronunciationPracticePanel';
@@ -141,6 +142,21 @@ export function StudentConsole() {
   const [interpretingTracks, setInterpretingTracks] = useState<Map<string, RemoteTrackHandle>>(new Map());
   const student = useStudentSession((s) => s.student);
   const staleClaimCheckedRef = useRef(false);
+  // SPEC-mcq-test-timed-reveal.md — a launched vocabulary test's own
+  // {instanceId, timedTest}, updated from every snapshot that carries one
+  // but — unlike `snapshot` itself — NEVER cleared just because a later
+  // snapshot's activity goes back to null (the teacher ended the session).
+  // Without this, ActivityPlayer's own "only rendered while `snapshot.activity`
+  // is truthy" contract would yank the waiting/results screen away the
+  // instant the session ends, even though the student's own result is
+  // still there to see. Cleared only when the student dismisses it
+  // (LiveVocabularyTest's onDismiss) or signs out/changes.
+  const [heldTest, setHeldTest] = useState<{ instanceId: string; timedTest: TimedTestState } | null>(null);
+  // Bumped per-instance on a 'test:revealed' socket event — LiveVocabularyTest
+  // reads the counter for ITS OWN instanceId as VocabularyTestPlayer's
+  // `revealSignal`, so a stale counter from a PREVIOUS test can never
+  // spuriously trigger an extra result fetch for a new one.
+  const [revealPulses, setRevealPulses] = useState<Record<string, number>>({});
   const queryClient = useQueryClient();
   // Which drawer section a signed-in student is looking at. Every section
   // stays MOUNTED and is only hidden (see the render below) — an exercise
@@ -163,6 +179,10 @@ export function StudentConsole() {
     const control = new StationControlClient({
       onSnapshot: (snap) => {
         setSnapshot(snap);
+        if (snap.activity?.type === ActivityType.VOCABULARY_TEST && snap.activity.timedTest) {
+          const tt = snap.activity.timedTest;
+          setHeldTest((prev) => (prev?.instanceId === tt.activityInstanceId && prev.timedTest === tt ? prev : { instanceId: tt.activityInstanceId, timedTest: tt }));
+        }
         if (snap.roundTable) applyRoundTableFloor(snap.roundTable.floor);
         else clearRoundTableFloor();
         void reconcileRooms(snap);
@@ -185,6 +205,7 @@ export function StudentConsole() {
       onActivityEvent: (payload) => setLastActivityEvent(payload),
       onToken: (token) => setStationToken(token),
       onSignedOut: () => useStudentSession.getState().clear(),
+      onTestRevealed: (payload) => setRevealPulses((prev) => ({ ...prev, [payload.activityInstanceId]: (prev[payload.activityInstanceId] ?? 0) + 1 })),
     });
     controlRef.current = control;
     control.connect();
@@ -232,6 +253,9 @@ export function StudentConsole() {
       // Recent lookups are session-local (spec §6.2) — the same shared-
       // hardware boundary as the query-cache clears above.
       useDictionaryStore.getState().resetForNewStudent();
+      // A shared seat's next student must never see the previous
+      // student's own waiting/results screen.
+      setHeldTest(null);
     }
     prevStudentIdRef.current = studentId;
     setSection(studentId && (screenShareCount > 0 || activityInstanceId) ? 'class' : 'home');
@@ -710,6 +734,23 @@ export function StudentConsole() {
               />
             </div>
           )}
+          {/* SPEC-mcq-test-timed-reveal.md — rendered from `heldTest`, not
+              `snapshot.activity` (see ActivityPlayer's own VOCABULARY_TEST
+              case and heldTest's doc comment): this is what keeps the
+              waiting/results screen up after the teacher ends the session.
+              Requires a signed-in student — a launched test always needs
+              one to attempt it, unlike the identity-free activities above. */}
+          {student && heldTest && controlRef.current && (
+            <div className="w-full max-w-2xl">
+              <LiveVocabularyTest
+                key={heldTest.instanceId}
+                control={controlRef.current}
+                timedTest={heldTest.timedTest}
+                revealSignal={revealPulses[heldTest.instanceId] ?? 0}
+                onDismiss={() => setHeldTest(null)}
+              />
+            </div>
+          )}
         </section>
 
         {/* A live teacher-run activity is station/group-scoped, not
@@ -717,8 +758,12 @@ export function StudentConsole() {
             identity-free (see StationsService.claim's doc comment), so
             they render above regardless of sign-in state. Everything
             personal is behind a real student credential: this login page
-            replaces the old passwordless "type your service number" card. */}
-        {!snapshot?.activity && !student && (
+            replaces the old passwordless "type your service number" card.
+            A VOCABULARY_TEST is the one live activity that's an exception —
+            it needs a signed-in student to actually attempt (see heldTest
+            above), so it must not hide this screen the way every other
+            live activity correctly does. */}
+        {(!snapshot?.activity || snapshot.activity.type === ActivityType.VOCABULARY_TEST) && !student && (
           <StudentSignInScreen
             stationToken={stationToken}
             defaultSystemNumber={identity && identity.seatNo > 1 ? identity.seatNo - 1 : null}

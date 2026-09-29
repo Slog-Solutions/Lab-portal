@@ -1,4 +1,4 @@
-import type { DictionaryLookupResult, DictionaryMeta } from '@lab/shared';
+import type { AttemptResultView, DictionaryLookupResult, DictionaryMeta } from '@lab/shared';
 import { ApiError } from './api-client';
 import { getRuntimeConfig } from './runtime-config';
 import type { PronunciationVoice, SpeakResult } from './pronunciation-api';
@@ -22,17 +22,33 @@ async function stationFetch<T>(path: string, token: string | null, init?: Reques
   if (!res.ok) {
     const body = await res.json().catch(() => ({ message: res.statusText }));
     // ApiError (an Error subclass) rather than a bare Error, so callers can
-    // still tell a 429 or a coded failure apart from a plain message.
-    throw new ApiError(res.status, body.message ?? res.statusText, typeof body.code === 'string' ? body.code : undefined);
+    // still tell a 429 or a coded failure apart from a plain message —
+    // `details` carries the rest of the body (e.g. TEST_ERROR_CODES.ALREADY_SUBMITTED's
+    // `attemptId`, see AttemptsService.startLiveTest).
+    throw new ApiError(res.status, body.message ?? res.statusText, typeof body.code === 'string' ? body.code : undefined, body);
   }
   if (res.status === 204) return undefined as T;
   return res.json() as Promise<T>;
+}
+
+export interface StartedAttemptTiming {
+  closesAt: number | null;
+  serverNow: number;
+  revealMode: 'ON_TIME_EXPIRY' | 'ON_SUBMIT' | 'ON_TEACHER_RELEASE';
+  revealDetail: 'SCORE_ONLY' | 'SCORE_AND_FLAGS' | 'FULL_ANSWERS';
+  allowReview: boolean;
 }
 
 export interface StartedAttempt {
   attemptId: string;
   exercise: { id: string; type: string; title: string; config: unknown; dictionaryEnabled: boolean };
   items?: Array<{ id: string; prompt: string; choices: string[]; mediaAssetId?: string }>;
+  /** SPEC-mcq-test-timed-reveal.md — the saved/draft answers for this
+   * attempt (itemId -> given), present on resume; empty on a fresh start. */
+  answers?: Record<string, string>;
+  /** Present only for a VOCABULARY_TEST attempt (null for every other
+   * activity type, which has no reveal policy). */
+  timing?: StartedAttemptTiming | null;
 }
 
 export interface ClaimResponse {
@@ -83,6 +99,17 @@ export const stationApi = {
         /** Where the assignment came from — `className` is set only when the
          * assigning teacher teaches exactly one of the student's classes. */
         source: { teacherName: string; className: string | null };
+        /** True for a genuinely one-shot test — either a type that always
+         * was (writing/reading/listening/pronunciation tests) or a real
+         * timed/teacher-released vocabulary test (see resolveTestPolicy). A
+         * retryable practice vocabulary test (the ON_SUBMIT legacy default)
+         * is false. */
+        oneShot: boolean;
+        /** True when the latest attempt is SCORED but not yet revealed —
+         * `latestAttempt.status` below reads SUBMITTED in that case (masked
+         * server-side), not SCORED, so the UI shows "waiting for results"
+         * rather than a stale/wrong percentage. */
+        resultsPending: boolean;
         latestAttempt: {
           id: string;
           status: string;
@@ -94,8 +121,27 @@ export const stationApi = {
       }>
     >('/attempts/assignments/mine', token),
 
-  startAttempt: (token: string | null, body: { exerciseId: string; assignmentId?: string }) =>
+  startAttempt: (token: string | null, body: { exerciseId?: string; assignmentId?: string; activityInstanceId?: string }) =>
     stationFetch<StartedAttempt>('/attempts/start', token, { method: 'POST', body: JSON.stringify(body) }),
+
+  /** §8.1 "Answers buffer locally; a disconnect must not lose them" — this
+   * is the save side of that buffer (see features/activities/vocab/use-answer-buffer.ts).
+   * Throws ApiError with code TEST_CLOSED/ALREADY_SUBMITTED past the deadline. */
+  saveAnswers: (token: string | null, attemptId: string, answers: Array<{ itemId: string; given: string }>) =>
+    stationFetch<{ ok: true }>(`/attempts/${attemptId}/answers`, token, { method: 'PUT', body: JSON.stringify({ answers }) }),
+
+  /** GF-4/GF-5 — the student's own result: OPEN while still answering,
+   * WAITING before reveal (no score, no hints — see TestResultView), or
+   * RELEASED. Safe to poll; also finalizes an individual attempt whose own
+   * deadline has quietly passed (the "Offline" acceptance test). */
+  attemptResult: (token: string | null, attemptId: string) => stationFetch<AttemptResultView>(`/attempts/${attemptId}/result`, token),
+
+  /** Past attempts of one exercise, newest first — masked the same way
+   * assignments/mine is until reveal (see AttemptsService.listForStudent). */
+  myAttempts: (token: string | null, exerciseId: string) =>
+    stationFetch<
+      Array<{ id: string; status: string; rawScore: number | null; maxScore: number | null; startedAt: string; revealAt: string | null }>
+    >(`/attempts/mine?exerciseId=${encodeURIComponent(exerciseId)}`, token),
 
   /** Ser 1 self-study library (Phase 4) — station-authenticated, no
    * claimed student or live session required to browse (see

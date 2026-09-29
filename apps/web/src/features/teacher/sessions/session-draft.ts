@@ -8,9 +8,17 @@ import { ROUND_TABLE_DEFAULTS, roundTableConfigFromForm, type RoundTableForm } f
  * session slot). */
 export type BuilderActivityType = 'VOCABULARY_TEST' | 'ROUND_TABLE' | 'TELEPHONE' | 'MODEL_IMITATION' | 'CONFERENCE_INTERPRETING';
 
+// SPEC-mcq-test-timed-reveal.md — VOCABULARY_TEST is deliberately absent
+// here: the public POST /sessions now refuses that type outright
+// (SessionsService.create), because the generic builder below only ever
+// produced an unlinked, answer-bearing inline config (buildActivityConfig's
+// own VOCABULARY_TEST case, kept only so GroupDraft/buildActivityConfig's
+// switch stays exhaustive for any lingering caller — never reachable from
+// this picker). A vocabulary test now launches only through a saved test's
+// own "Launch in lab" button (TimedTestsService.launch), which links the
+// live instance back to the real, answer-key-stripped Exercise.
 export const ACTIVITY_OPTIONS: Array<{ type: BuilderActivityType; label: string }> = [
   { type: 'ROUND_TABLE', label: 'Round Table Discussion' },
-  { type: 'VOCABULARY_TEST', label: 'Vocabulary Test' },
   { type: 'TELEPHONE', label: 'Telephone Activity' },
   { type: 'MODEL_IMITATION', label: 'Model Imitation' },
   { type: 'CONFERENCE_INTERPRETING', label: 'Conference Interpreting' },
@@ -128,7 +136,7 @@ export interface SessionSummary {
   groups: Array<{
     id: string;
     index: number;
-    activity?: { type: string; dictionaryEnabled: boolean | null } | null;
+    activity?: { id: string; type: string; dictionaryEnabled: boolean | null; exerciseId?: string | null } | null;
     members?: Array<{ student: { id: string; fullName: string } | null }>;
   }>;
 }

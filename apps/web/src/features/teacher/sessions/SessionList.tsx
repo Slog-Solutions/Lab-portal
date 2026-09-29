@@ -99,11 +99,14 @@ export function SessionList({
               );
             })}
           </ul>
-          {/* Ser 3 Teacher listens in on any group */}
+          {/* Ser 3 Teacher listens in on any group — except a vocabulary
+              test's group, which has no media room at all (see
+              SessionsService.arm's own skip), and Round Table, which gets
+              its own dedicated monitor link below instead. */}
           {s.state !== 'DRAFT' && s.groups.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-1.5 border-t border-[rgba(20,21,15,0.08)] pt-2.5">
               {s.groups
-                .filter((g) => g.activity?.type !== 'ROUND_TABLE')
+                .filter((g) => g.activity?.type !== 'ROUND_TABLE' && g.activity?.type !== 'VOCABULARY_TEST')
                 .map((g) => (
                   <GroupMonitorButton key={g.id} groupId={g.id} label={`Group ${g.index}`} />
                 ))}
@@ -115,6 +118,21 @@ export function SessionList({
                   {s.state === 'ENDED' ? 'Round Table review' : 'Round Table monitor'}
                 </Link>
               )}
+              {/* SPEC-mcq-test-timed-reveal.md §7.3 — a vocabulary test group
+                  is only ever created by TimedTestsService.launch, which
+                  always links exerciseId; the live board is keyed by the
+                  ActivityInstance id (activity.id), not the group id. */}
+              {s.groups
+                .filter((g) => g.activity?.type === 'VOCABULARY_TEST' && g.activity.id)
+                .map((g) => (
+                  <Link
+                    key={g.id}
+                    to={`/tests/live/${g.activity!.id}`}
+                    className="rounded-full bg-[#17181A] px-3 py-1 text-xs font-semibold text-[#F5F5F0] hover:bg-black"
+                  >
+                    Test board
+                  </Link>
+                ))}
             </div>
           )}
         </div>

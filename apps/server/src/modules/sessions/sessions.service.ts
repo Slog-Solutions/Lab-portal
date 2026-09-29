@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ActivityType, SessionRole, SessionState, UserRole, seatLabel, type CreateSessionDto } from '@lab/shared';
 import { mediaRoomForActivity } from '@lab/shared/events';
-import { validateRoundTableSetup } from '@lab/shared/activities';
+import { getActivity, hasActivity, validateRoundTableSetup } from '@lab/shared/activities';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MediaService } from '../media/media.service';
 import { SessionStateService } from '../control/session-state.service';
@@ -12,6 +12,7 @@ import { BatchAccessService } from '../batches/batch-access.service';
 import { BatchesService } from '../batches/batches.service';
 import { ClassAccessService } from '../classroom/class-access.service';
 import { RoundTableService } from '../round-table/round-table.service';
+import { TestClockService } from '../timed-tests/test-clock.service';
 
 /**
  * Session/group CRUD + the server-authoritative state machine (design
@@ -33,14 +34,34 @@ export class SessionsService {
     private readonly batches: BatchesService,
     private readonly classAccess: ClassAccessService,
     private readonly roundTable: RoundTableService,
+    private readonly testClock: TestClockService,
   ) {}
 
-  async create(dto: CreateSessionDto, user: JwtPayload) {
+  /**
+   * `opts.exerciseIdByGroupIndex` links a group's live ActivityInstance
+   * back to the saved Exercise it was launched from (SPEC-mcq-test-timed-reveal.md
+   * §6.1 "Launch in lab") — a plain method parameter, not part of
+   * `CreateSessionDto`, so it can only ever be set by TimedTestsService.launch
+   * calling this method directly, never by an HTTP body. Its presence is
+   * also what tells a VOCABULARY_TEST group apart from the public
+   * POST /sessions route, which refuses that type outright (see below) —
+   * the generic Session Builder used to build unlinked, answer-bearing
+   * inline configs for it (session-draft.ts), which "Launch in lab" replaces.
+   */
+  async create(dto: CreateSessionDto, user: JwtPayload, opts?: { exerciseIdByGroupIndex?: Record<number, string> }) {
     await this.batchAccess.assertCanUseBatch(user, dto.batchId);
     const teacherId = user.sub;
     const indices = new Set(dto.groups.map((g) => g.index));
     if (indices.size !== dto.groups.length) {
       throw new BadRequestException('Group indices must be unique within a session (max 6)');
+    }
+    if (!opts?.exerciseIdByGroupIndex) {
+      const vocab = dto.groups.find((g) => g.activityType === ActivityType.VOCABULARY_TEST);
+      if (vocab) {
+        throw new BadRequestException(
+          `Group ${vocab.index}: vocabulary tests are launched from a saved test's "Launch in lab" button, not the session builder`,
+        );
+      }
     }
     // Round Table groups are validated here (config defaults materialised) so
     // a session can never arm with a config the floor service cannot run.
@@ -94,7 +115,14 @@ export class SessionsService {
                 studentId: studentAt.get(stationId) ?? null,
               })),
             },
-            activity: { create: { type: g.activityType, config: activityConfigs[i] as object, dictionaryEnabled: g.dictionaryEnabled } },
+            activity: {
+              create: {
+                type: g.activityType,
+                config: activityConfigs[i] as object,
+                dictionaryEnabled: g.dictionaryEnabled,
+                exerciseId: opts?.exerciseIdByGroupIndex?.[g.index],
+              },
+            },
           })),
         },
       },
@@ -133,7 +161,10 @@ export class SessionsService {
           select: {
             id: true,
             index: true,
-            activity: { select: { type: true, dictionaryEnabled: true } },
+            // id/exerciseId let the session list link a VOCABULARY_TEST
+            // group to its live board (/tests/live/:instanceId) the same
+            // way activity.type already routes a Round Table group.
+            activity: { select: { id: true, type: true, dictionaryEnabled: true, exerciseId: true } },
             members: { select: { student: { select: { id: true, fullName: true } } } },
           },
         },
@@ -170,6 +201,15 @@ export class SessionsService {
 
     await this.media.ensureBroadcastRoom();
     for (const group of session.groups) {
+      // SPEC-mcq-test-timed-reveal.md — a launched vocabulary test group
+      // gets NO LiveKit room and no mic grant (registered in the Activity
+      // Type Registry as `realtimeRequirements.mediaRoom: 'none'`):
+      // without this, every test-taker would be minted a mic-publish
+      // token into a shared room with the rest of their own group — a
+      // real audio channel between students during a test, and 40
+      // needless LiveKit connections. See session-state.service.ts's
+      // matching skip.
+      if (this.mediaRoomKind(group.activity?.type) === 'none') continue;
       await this.media.ensureRoom(mediaRoomForActivity(sessionId, group.id, group.activity?.type ?? ''));
     }
 
@@ -190,6 +230,13 @@ export class SessionsService {
         where: { group: { sessionId } },
         data: { startedAt: new Date() },
       });
+      // Only from ARMED — a resume from PAUSED must not reset a timed
+      // test's deadline (§4.6 "Extending time... Already-submitted
+      // students keep waiting" implies the clock keeps running once set;
+      // PAUSED is refused entirely while a timed test is open anyway,
+      // see TestClockService.hasOpenTimedTest, so this only ever matters
+      // for an untimed one, where onSessionStarted is a no-op regardless).
+      await this.testClock.onSessionStarted(sessionId, new Date());
     }
     const updated = await this.bumpAndPersist(sessionId, SessionState.RUNNING, { startedAt: new Date() });
     await this.stampMemberStudents(sessionId, { overwrite: false });
@@ -204,6 +251,12 @@ export class SessionsService {
     await this.batchAccess.assertCanUseBatch(user, session.batchId);
     if (session.state !== SessionState.RUNNING) {
       throw new BadRequestException(`Cannot pause a session in state ${session.state}`);
+    }
+    // A launched test's closesAt is an absolute server timestamp (§4.1) —
+    // pausing the session doesn't stop that clock, so pausing while one is
+    // still open would silently eat into the time students have left.
+    if (await this.testClock.hasOpenTimedTest(sessionId)) {
+      throw new BadRequestException('Cannot pause a session with a vocabulary test still running — use Extend or Reveal now instead');
     }
     const updated = await this.bumpAndPersist(sessionId, SessionState.PAUSED);
     await this.roundTableHook(sessionId, SessionState.PAUSED);
@@ -243,8 +296,17 @@ export class SessionsService {
     // Close open Round Table turns (and drop the floors) before their rooms go.
     await this.roundTableHook(sessionId, SessionState.ENDED);
     for (const group of session.groups) {
+      if (this.mediaRoomKind(group.activity?.type) === 'none') continue; // never had a room (see arm())
       await this.media.deleteRoom(mediaRoomForActivity(sessionId, group.id, group.activity?.type ?? ''));
     }
+    // SPEC-mcq-test-timed-reveal.md §4.6 "Teacher control: Session End
+    // during an open test closes it WITHOUT revealing" (a scope decision
+    // for this pass — an accidental End must never publish the answer
+    // key). Claims the close now (no new answers accepted from this
+    // instant); the actual grade/reveal sequence runs on TestCloseService's
+    // next sweep, same durability story as every other close path. A
+    // teacher who wants to show answers uses Release afterwards.
+    await this.testClock.claimCloseForSession(sessionId, 'SESSION_ENDED', new Date());
     const updated = await this.bumpAndPersist(sessionId, SessionState.ENDED, { endedAt: new Date() });
     // Push a fresh (now empty-for-this-session) snapshot so stations
     // fall back to idle/broadcast-only immediately rather than waiting
@@ -252,6 +314,19 @@ export class SessionsService {
     await this.pushToAllMembers(session.groups.flatMap((g) => g.members.map((m) => m.stationId)));
     await this.audit.log({ actorId: user.sub, action: 'session.end', detail: { sessionId } });
     return updated;
+  }
+
+  /** SPEC-mcq-test-timed-reveal.md — a fresh snapshot with no session-state
+   * change, used by TestCloseService/TimedTestsService after moving a
+   * timed instance's clock (extend, reveal, close) so every affected
+   * station converges within the spec's 2s bound. Bumping `seq` matters:
+   * without it, a snapshot that only changed `activity.timedTest` could be
+   * (wrongly) treated as a duplicate/stale push by a client comparing seq. */
+  async republish(sessionId: string, stationIds?: string[]): Promise<void> {
+    const session = await this.get(sessionId);
+    await this.bumpAndPersist(sessionId, session.state);
+    const targets = stationIds ?? session.groups.flatMap((g) => g.members.map((m) => m.stationId));
+    await this.pushToAllMembers(targets);
   }
 
   /**
@@ -343,6 +418,14 @@ export class SessionsService {
       const snapshot = await this.sessionState.getDesiredState(stationId);
       this.gateway.pushSnapshot(stationId, snapshot);
     }
+  }
+
+  /** `getActivity` throws on an unregistered type, so this goes through
+   * `hasActivity` first — mirrors SessionStateService.getDesiredState's
+   * own guard against a type the registry doesn't (yet) know. */
+  private mediaRoomKind(type: string | undefined): string {
+    if (!type || !hasActivity(type as ActivityType)) return 'default';
+    return getActivity(type as ActivityType).realtimeRequirements.mediaRoom;
   }
 
   /** CONFERENCE_INTERPRETING's config.roles[] assigns INTERPRETER/DELEGATE/

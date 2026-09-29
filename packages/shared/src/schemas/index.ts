@@ -155,26 +155,92 @@ export const zVocabularyItem = z.object({
   prompt: z.string().min(1),
   answer: z.string().min(1),
   choices: z.array(z.string()).min(2).max(6).optional(),
+  /** SPEC-mcq-test-timed-reveal.md §5.2 — shown on the results screen
+   * after reveal. Never sent to a station before then. An empty string or
+   * null (Prisma's shape for an unset nullable column — see zItemDto's own
+   * comment on this) collapses to undefined, same convention as cefrTag. */
+  explanation: z.preprocess((v) => (v ? v : undefined), z.string().trim().max(500).optional()),
 });
+
+/** GF-4: when correct answers become visible to the student. */
+export const zTestRevealMode = z.enum(['ON_TIME_EXPIRY', 'ON_SUBMIT', 'ON_TEACHER_RELEASE']);
+export type TestRevealMode = z.infer<typeof zTestRevealMode>;
+
+/** What the student sees once revealed. */
+export const zTestRevealDetail = z.enum(['SCORE_ONLY', 'SCORE_AND_FLAGS', 'FULL_ANSWERS']);
+export type TestRevealDetail = z.infer<typeof zTestRevealDetail>;
 
 // Two modes: authored inline (simple, self-contained in the config the
 // student's client already holds) or sampled from an ItemBank (Ser 10
 // "large test bank... different set of questions each attempt" — grading
 // for this path is necessarily server-side, since the config a student
 // receives must never carry the answer key for un-served items).
+//
+// revealMode/revealDetail/allowReview are deliberately left OPTIONAL here,
+// unlike the spec's own `.default(...)` — a `.default()` plus the
+// ON_TIME_EXPIRY-needs-a-time-limit refine below would reject every
+// pre-existing config that has neither field, breaking "existing configs
+// still parse" (see the parent spec's Phase 2 exit criterion). Callers
+// read the *effective* policy through resolveTestPolicy() in
+// ../types/timed-test.js, which supplies the same defaults only when the
+// field is actually absent. The authoring UI always writes explicit values.
 export const zVocabularyTestConfig = z
   .object({
     itemBankId: z.string().cuid2().optional(),
     sampleSize: z.number().int().positive().optional(),
     items: z.array(zVocabularyItem).optional(),
     shuffleItems: z.boolean().default(true),
-    timeLimitSec: z.number().int().positive().optional(),
+    timeLimitSec: z.number().int().min(30).max(10_800).optional(),
+    revealMode: zTestRevealMode.optional(),
+    revealDetail: zTestRevealDetail.optional(),
+    /** Allow changing an answer before submitting. */
+    allowReview: z.boolean().optional(),
   })
   .refine((cfg) => Boolean(cfg.itemBankId) || (cfg.items?.length ?? 0) > 0, {
     message: 'Either itemBankId (with sampleSize) or a non-empty items[] is required',
     path: ['items'],
+  })
+  .refine((cfg) => cfg.revealMode !== 'ON_TIME_EXPIRY' || Boolean(cfg.timeLimitSec), {
+    message: 'A time limit is required when answers are revealed on time expiry',
+    path: ['timeLimitSec'],
   });
 export type VocabularyTestConfig = z.infer<typeof zVocabularyTestConfig>;
+
+/** One question in the Google-Forms-style builder (SPEC-mcq-test-timed-reveal.md
+ * §7.1) — structurally enforces "exactly one correct answer" (correctIndex is a
+ * single number, not a per-option boolean a teacher could tick twice or never). */
+export const zVocabQuestionInput = z
+  .object({
+    prompt: z.string().trim().min(1).max(500),
+    options: z.array(z.string().trim().min(1).max(200)).min(2).max(6),
+    correctIndex: z.number().int().min(0),
+    explanation: z.preprocess((v) => (v ? v : undefined), z.string().trim().max(500).optional()),
+    mediaAssetId: z.string().cuid2().optional(),
+  })
+  .superRefine((q, ctx) => {
+    if (q.correctIndex >= q.options.length) {
+      ctx.addIssue({ code: 'custom', message: 'correctIndex is out of range', path: ['correctIndex'] });
+    }
+    const seen = new Set<string>();
+    q.options.forEach((opt, i) => {
+      const key = opt.toLowerCase();
+      if (seen.has(key)) {
+        ctx.addIssue({ code: 'custom', message: `Option ${i + 1} duplicates an earlier option`, path: ['options', i] });
+      }
+      seen.add(key);
+    });
+  });
+export type VocabQuestionInput = z.infer<typeof zVocabQuestionInput>;
+
+export const zVocabTestSettings = z.object({
+  timeLimitSec: z.number().int().min(30).max(10_800).optional(),
+  revealMode: zTestRevealMode.default('ON_TIME_EXPIRY'),
+  revealDetail: zTestRevealDetail.default('FULL_ANSWERS'),
+  allowReview: z.boolean().default(true),
+  /** Give each student a random subset of this many questions. */
+  sampleSize: z.number().int().positive().max(500).optional(),
+});
+export type VocabTestSettings = z.infer<typeof zVocabTestSettings>;
 
 // ---- Writing test / listening test (teacher-created assignments) -----------------
 // Both keep their questions in the exercise's ItemBank rather than in this
@@ -333,9 +399,25 @@ const zAssessmentCommon = z.object({
 export const zCreateAssessmentDto = z.discriminatedUnion('type', [
   zAssessmentCommon.extend({
     type: z.literal(ActivityType.VOCABULARY_TEST),
-    wordListText: z.string().min(1).max(20_000),
+    // Assigning students is optional for a vocabulary test: "save without
+    // assigning" (SPEC-mcq-test-timed-reveal.md — a test meant for
+    // "Launch in lab" would otherwise have to be assigned to someone
+    // first, letting them open it early from My Assignments).
+    studentIds: z.array(z.string().cuid2()).max(500),
+    // Exactly one of these is required — enforced in AssessmentsService.build(),
+    // not here (a discriminated union branch can't carry a cross-field
+    // .refine() — see the READING_TEST branch's own comment on this).
+    wordListText: z.string().min(1).max(20_000).optional(),
+    /** The form-style builder's own question shape (GF-1) — kept alongside
+     * wordListText, not replacing it, so the fast word-list import still
+     * works as a seed the teacher then edits in the builder. */
+    questions: z.array(zVocabQuestionInput).min(1).max(500).optional(),
     /** Give each student a random subset of this many questions. */
     sampleSize: z.number().int().positive().max(500).optional(),
+    timeLimitSec: z.number().int().min(30).max(10_800).optional(),
+    revealMode: zTestRevealMode.default('ON_TIME_EXPIRY'),
+    revealDetail: zTestRevealDetail.default('FULL_ANSWERS'),
+    allowReview: z.boolean().default(true),
   }),
   zAssessmentCommon.extend({
     type: z.literal(ActivityType.WRITING_TEST),
@@ -378,6 +460,52 @@ export type GradeAssessmentDto = z.infer<typeof zGradeAssessmentDto>;
 export const zGradeWritingTestDto = zGradeAssessmentDto;
 /** @deprecated Use GradeAssessmentDto — kept so existing imports keep compiling. */
 export type GradeWritingTestDto = GradeAssessmentDto;
+
+// ---- Timed MCQ vocabulary tests (SPEC-mcq-test-timed-reveal.md) ----------------
+
+/** PUT /assessments/:id — re-edit a saved test's questions/settings. Refused
+ * server-side once any attempt exists (see AssessmentsService.update's doc
+ * comment) — the same edit-after-attempts hazard setItems/importItems have
+ * always had for the item bank underneath (a stale itemOrder/ItemResponse FK). */
+export const zUpdateVocabTestDto = z.object({
+  title: z.string().trim().min(1).max(200).optional(),
+  wordListText: z.string().min(1).max(20_000).optional(),
+  questions: z.array(zVocabQuestionInput).min(1).max(500).optional(),
+  sampleSize: z.number().int().positive().max(500).optional(),
+  timeLimitSec: z.number().int().min(30).max(10_800).optional(),
+  revealMode: zTestRevealMode.optional(),
+  revealDetail: zTestRevealDetail.optional(),
+  allowReview: z.boolean().optional(),
+  dictionaryEnabled: z.boolean().optional(),
+});
+export type UpdateVocabTestDto = z.infer<typeof zUpdateVocabTestDto>;
+
+/** PUT /attempts/:id/answers — buffers answers before submit, so a
+ * disconnect never loses what the student has picked so far (§8.1). */
+export const zSaveDraftAnswersDto = z.object({
+  answers: z.array(z.object({ itemId: z.string().min(1), given: z.string().max(500) })).max(200),
+});
+export type SaveDraftAnswersDto = z.infer<typeof zSaveDraftAnswersDto>;
+
+/** POST /activity-instances/launch — "Launch in lab" (§6.1): one call turns
+ * a saved test into a live, one-group ClassSession over the class's
+ * currently signed-in seats, already armed and started. `expectedStudents`
+ * mirrors CreateSessionDto's own guard against a stale seat pick (see
+ * SessionsService.assertExpectedStudents) — keyed by stationId. */
+export const zLaunchTestDto = z.object({
+  exerciseId: z.string().cuid2(),
+  batchId: z.string().cuid2(),
+  expectedStudents: z.record(z.string().cuid2(), z.string().cuid2()).refine((m) => Object.keys(m).length >= 1 && Object.keys(m).length <= 40, {
+    message: 'Pick between 1 and 40 students',
+  }),
+});
+export type LaunchTestDto = z.infer<typeof zLaunchTestDto>;
+
+/** POST /activity-instances/:id/extend */
+export const zExtendTestDto = z.object({
+  seconds: z.number().int().min(30).max(3600),
+});
+export type ExtendTestDto = z.infer<typeof zExtendTestDto>;
 
 // ---- Media library (Ser 1 "media library... multi-teacher sharing") ------------
 
@@ -493,6 +621,9 @@ export const zItemDto = z.object({
   choices: z.preprocess((v) => (Array.isArray(v) && v.length === 0 ? undefined : v), z.array(z.string()).min(2).max(6).optional()),
   cefrTag: z.preprocess((v) => v ?? undefined, z.string().max(8).optional()),
   mediaAssetId: z.preprocess((v) => v ?? undefined, z.string().cuid2().optional()),
+  // Same null/''-collapses-to-undefined convention as cefrTag above —
+  // Prisma serialises Item.explanation as null when unset, not undefined.
+  explanation: z.preprocess((v) => (v ? v : undefined), z.string().max(500).optional()),
 });
 export type ItemDto = z.infer<typeof zItemDto>;
 
@@ -513,11 +644,20 @@ export type ImportWordListDto = z.infer<typeof zImportWordListDto>;
 
 // ---- Attempts (Ser 4, Ser 5, Ser 7, Ser 10 — every graded/self-study activity) --
 
-export const zStartAttemptDto = z.object({
-  exerciseId: z.string().cuid2(),
-  assignmentId: z.string().cuid2().optional(),
-  activityInstanceId: z.string().cuid2().optional(),
-});
+// exerciseId is optional when activityInstanceId is given — a launched lab
+// test derives its own exerciseId from ActivityInstance.exerciseId
+// server-side (AttemptsService.start), rather than trusting a station to
+// send the right one alongside it.
+export const zStartAttemptDto = z
+  .object({
+    exerciseId: z.string().cuid2().optional(),
+    assignmentId: z.string().cuid2().optional(),
+    activityInstanceId: z.string().cuid2().optional(),
+  })
+  .refine((dto) => Boolean(dto.exerciseId) || Boolean(dto.activityInstanceId), {
+    message: 'Either exerciseId or activityInstanceId is required',
+    path: ['exerciseId'],
+  });
 export type StartAttemptDto = z.infer<typeof zStartAttemptDto>;
 
 export const zItemResponseDto = z.object({

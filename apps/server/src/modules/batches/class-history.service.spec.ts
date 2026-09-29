@@ -193,6 +193,35 @@ describe('ClassHistoryService.forStudent', () => {
     expect(view.assignments[2]!.latestAttempt).toBeNull();
   });
 
+  it('SPEC-mcq-test-timed-reveal.md: masks a VOCABULARY_TEST attempt that is SCORED but not yet revealed (revealAt in the future or null)', async () => {
+    const prisma = makePrisma({
+      assignment: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'a1',
+            dueAt: null,
+            createdAt: new Date('2026-09-21T00:00:00Z'),
+            exercise: { title: 'Timed vocab', type: 'VOCABULARY_TEST' },
+            attempts: [{ status: 'SCORED', rawScore: 9, maxScore: 10, submittedAt: new Date('2026-09-22T00:00:00Z'), revealAt: null, scoreOverride: null }],
+          },
+          {
+            id: 'a2',
+            dueAt: null,
+            createdAt: new Date('2026-09-20T00:00:00Z'),
+            exercise: { title: 'Revealed vocab', type: 'VOCABULARY_TEST' },
+            attempts: [
+              { status: 'SCORED', rawScore: 8, maxScore: 10, submittedAt: new Date('2026-09-22T00:00:00Z'), revealAt: new Date('2026-01-01T00:00:00Z'), scoreOverride: null },
+            ],
+          },
+        ]),
+      },
+    });
+    const view = await svcFor(prisma).forStudent(ME, CLASS);
+
+    expect(view.assignments[0]!.latestAttempt).toMatchObject({ status: 'SUBMITTED', percent: null, feedback: null });
+    expect(view.assignments[1]!.latestAttempt).toMatchObject({ status: 'SCORED', percent: 80 });
+  });
+
   it("lists the class's own broadcast recordings, scoped by the live class's batchId", async () => {
     const prisma = makePrisma({
       recording: {

@@ -4,6 +4,7 @@ import { ActivityType, AttemptStatus } from '@lab/shared';
 import { AttemptsService } from './attempts.service';
 import type { PrismaService } from '../../prisma/prisma.service';
 import type { AuditService } from '../audit/audit.service';
+import { findAnswerLeaks } from '../../common/answer-leak.spec-helper';
 
 /**
  * Ser 5/10's actual grading authority (this file's own doc comment: "a
@@ -23,7 +24,7 @@ import type { AuditService } from '../audit/audit.service';
 function makeFakePrisma(overrides: Record<string, unknown> = {}) {
   return {
     exercise: { findUnique: vi.fn() },
-    attempt: { create: vi.fn(), findUnique: vi.fn(), update: vi.fn() },
+    attempt: { create: vi.fn(), findUnique: vi.fn(), findFirst: vi.fn().mockResolvedValue(null), update: vi.fn(), updateMany: vi.fn() },
     itemBank: { findUnique: vi.fn() },
     item: { findMany: vi.fn() },
     itemResponse: { createMany: vi.fn() },
@@ -34,6 +35,33 @@ function makeFakePrisma(overrides: Record<string, unknown> = {}) {
 
 function makeFakeAudit() {
   return { log: vi.fn() };
+}
+
+/**
+ * A tiny mutable fake for the VOCABULARY_TEST submit path: finalizeVocabAttempt
+ * re-reads the Attempt row, then submitVocab's own getResult() re-reads it
+ * again — a plain static `.mockResolvedValue` can't reflect the write in
+ * between, so this simulates just enough of a real row. `updateMany`
+ * mirrors the real atomic guard: it only "succeeds" (count: 1) while the
+ * row is IN_PROGRESS, same as a real conditional UPDATE would.
+ */
+function makeMutableAttempt(initial: Record<string, unknown>) {
+  let state: Record<string, unknown> = { ...initial };
+  return {
+    findUnique: vi.fn().mockImplementation(() => Promise.resolve({ ...state })),
+    // `where.OR` is finalizeVocabAttempt/saveDraft's closesAt guard
+    // (enforceDeadline: true) — absent for an auto-submit/lazy finalize
+    // (enforceDeadline: false), which must succeed regardless of closesAt.
+    updateMany: vi.fn().mockImplementation(({ where, data }: { where: Record<string, unknown>; data: Record<string, unknown> }) => {
+      if (state.status !== AttemptStatus.IN_PROGRESS) return Promise.resolve({ count: 0 });
+      if (where.OR) {
+        const closesAt = state.closesAt as Date | null;
+        if (closesAt !== null && closesAt.getTime() <= Date.now()) return Promise.resolve({ count: 0 });
+      }
+      state = { ...state, ...data };
+      return Promise.resolve({ count: 1 });
+    }),
+  };
 }
 
 function makeService(prisma: ReturnType<typeof makeFakePrisma>, audit: ReturnType<typeof makeFakeAudit>): AttemptsService {
@@ -59,7 +87,7 @@ describe('AttemptsService — inline-mode vocabulary test scoring', () => {
     prisma.attempt.create.mockResolvedValue({ id: 'att1' });
     const service = makeService(prisma, makeFakeAudit());
 
-    const result = await service.start('student1', { exerciseId: 'ex1' });
+    const result = await service.start('student1', 'station1', { exerciseId: 'ex1' });
 
     expect(result.items).toEqual([
       { id: 'inline:0', prompt: 'cat', choices: [] },
@@ -70,16 +98,24 @@ describe('AttemptsService — inline-mode vocabulary test scoring', () => {
     }
   });
 
-  it('grades 100% when every answer matches (case/whitespace-insensitive)', async () => {
+  it('grades 100% when every answer matches (case/whitespace-insensitive), and reveals immediately (ON_SUBMIT is the legacy default)', async () => {
     const prisma = makeFakePrisma();
-    prisma.attempt.findUnique.mockResolvedValue({
+    const attempt = makeMutableAttempt({
       id: 'att1',
       studentId: 'student1',
       itemOrder: ['inline:0', 'inline:1'],
       status: AttemptStatus.IN_PROGRESS,
       exercise,
+      closesAt: null,
+      maxScore: 100,
+      answers: {},
+      served: [
+        { id: 'inline:0', prompt: 'cat', choices: [] },
+        { id: 'inline:1', prompt: 'dog', choices: [] },
+      ],
     });
-    prisma.attempt.update.mockImplementation(({ data }: { data: unknown }) => Promise.resolve({ id: 'att1', ...(data as object) }));
+    prisma.attempt.findUnique = attempt.findUnique;
+    prisma.attempt.updateMany = attempt.updateMany;
     const service = makeService(prisma, makeFakeAudit());
 
     const result = await service.submit('att1', 'student1', {
@@ -90,19 +126,27 @@ describe('AttemptsService — inline-mode vocabulary test scoring', () => {
       ],
     });
 
-    expect(result).toMatchObject({ rawScore: 100, status: AttemptStatus.SCORED });
+    expect(result).toMatchObject({ status: 'RELEASED', rawScore: 100 });
   });
 
   it('grades partial credit and records SkillProgress for a SCORED attempt', async () => {
     const prisma = makeFakePrisma();
-    prisma.attempt.findUnique.mockResolvedValue({
+    const attempt = makeMutableAttempt({
       id: 'att1',
       studentId: 'student1',
       status: AttemptStatus.IN_PROGRESS,
       itemOrder: ['inline:0', 'inline:1'],
       exercise,
+      closesAt: null,
+      maxScore: 100,
+      answers: {},
+      served: [
+        { id: 'inline:0', prompt: 'cat', choices: [] },
+        { id: 'inline:1', prompt: 'dog', choices: [] },
+      ],
     });
-    prisma.attempt.update.mockImplementation(({ data }: { data: unknown }) => Promise.resolve({ id: 'att1', ...(data as object) }));
+    prisma.attempt.findUnique = attempt.findUnique;
+    prisma.attempt.updateMany = attempt.updateMany;
     const service = makeService(prisma, makeFakeAudit());
 
     const result = await service.submit('att1', 'student1', {
@@ -113,7 +157,7 @@ describe('AttemptsService — inline-mode vocabulary test scoring', () => {
       ],
     });
 
-    expect(result).toMatchObject({ rawScore: 50, status: AttemptStatus.SCORED });
+    expect(result).toMatchObject({ status: 'RELEASED', rawScore: 50 });
     expect(prisma.skillProgress.create).toHaveBeenCalledWith({
       data: { studentId: 'student1', skill: 'vocabulary', score: expect.any(Number) },
     });
@@ -121,8 +165,22 @@ describe('AttemptsService — inline-mode vocabulary test scoring', () => {
 
   it('never persists ItemResponse rows for inline items (they have no real Item row to point the FK at)', async () => {
     const prisma = makeFakePrisma();
-    prisma.attempt.findUnique.mockResolvedValue({ id: 'att1', studentId: 'student1', status: AttemptStatus.IN_PROGRESS, itemOrder: ['inline:0', 'inline:1'], exercise });
-    prisma.attempt.update.mockImplementation(({ data }: { data: unknown }) => Promise.resolve({ id: 'att1', ...(data as object) }));
+    const attempt = makeMutableAttempt({
+      id: 'att1',
+      studentId: 'student1',
+      status: AttemptStatus.IN_PROGRESS,
+      itemOrder: ['inline:0', 'inline:1'],
+      exercise,
+      closesAt: null,
+      maxScore: 100,
+      answers: {},
+      served: [
+        { id: 'inline:0', prompt: 'cat', choices: [] },
+        { id: 'inline:1', prompt: 'dog', choices: [] },
+      ],
+    });
+    prisma.attempt.findUnique = attempt.findUnique;
+    prisma.attempt.updateMany = attempt.updateMany;
     const service = makeService(prisma, makeFakeAudit());
 
     await service.submit('att1', 'student1', {
@@ -160,7 +218,7 @@ describe('AttemptsService — inline-mode vocabulary test scoring', () => {
     prisma.exercise.findUnique.mockResolvedValue({ id: 'ex2', type: ActivityType.ROUND_TABLE, config: {} });
     const service = makeService(prisma, makeFakeAudit());
 
-    await expect(service.start('student1', { exerciseId: 'ex2' })).rejects.toBeInstanceOf(BadRequestException);
+    await expect(service.start('student1', 'station1', { exerciseId: 'ex2' })).rejects.toBeInstanceOf(BadRequestException);
   });
 });
 
@@ -182,7 +240,13 @@ describe('AttemptsService — pronunciation test', () => {
     return {
       exercise: { findUnique: vi.fn().mockResolvedValue(exercise) },
       assignment: { findUnique: vi.fn().mockResolvedValue({ id: 'as1', studentId: 'student1', exerciseId: 'ex1' }) },
-      attempt: { create: vi.fn().mockResolvedValue({ id: 'att1' }), findUnique: vi.fn(), update: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+      attempt: {
+        create: vi.fn().mockResolvedValue({ id: 'att1' }),
+        findUnique: vi.fn(),
+        findFirst: vi.fn().mockResolvedValue(null),
+        update: vi.fn(),
+        count: vi.fn().mockResolvedValue(0),
+      },
       itemBank: { findUnique: vi.fn().mockResolvedValue({ id: 'bank1', exerciseId: 'ex1', items: words }) },
       item: { findMany: vi.fn().mockResolvedValue(words.map((w) => ({ id: w.id, prompt: w.prompt }))) },
       itemResponse: { createMany: vi.fn() },
@@ -197,19 +261,19 @@ describe('AttemptsService — pronunciation test', () => {
   describe('start()', () => {
     it('refuses to start without an assignment', async () => {
       const svc = makeSvc(makePrisma());
-      await expect(svc.start('student1', { exerciseId: 'ex1' })).rejects.toBeInstanceOf(BadRequestException);
+      await expect(svc.start('student1', 'station1', { exerciseId: 'ex1' })).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it("refuses another student's assignment", async () => {
       const prisma = makePrisma();
       prisma.assignment.findUnique.mockResolvedValue({ id: 'as1', studentId: 'someone-else', exerciseId: 'ex1' });
-      await expect(makeSvc(prisma).start('student1', { exerciseId: 'ex1', assignmentId: 'as1' })).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(makeSvc(prisma).start('student1', 'station1', { exerciseId: 'ex1', assignmentId: 'as1' })).rejects.toBeInstanceOf(ForbiddenException);
     });
 
     it('refuses an assignment that is for a different exercise', async () => {
       const prisma = makePrisma();
       prisma.assignment.findUnique.mockResolvedValue({ id: 'as1', studentId: 'student1', exerciseId: 'other-exercise' });
-      await expect(makeSvc(prisma).start('student1', { exerciseId: 'ex1', assignmentId: 'as1' })).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(makeSvc(prisma).start('student1', 'station1', { exerciseId: 'ex1', assignmentId: 'as1' })).rejects.toBeInstanceOf(ForbiddenException);
     });
 
     it('locks the test once an attempt on that assignment is submitted or scored (one submission only)', async () => {
@@ -217,7 +281,7 @@ describe('AttemptsService — pronunciation test', () => {
       prisma.attempt.count.mockResolvedValue(1);
       const svc = makeSvc(prisma);
 
-      await expect(svc.start('student1', { exerciseId: 'ex1', assignmentId: 'as1' })).rejects.toThrow(/already submitted/);
+      await expect(svc.start('student1', 'station1', { exerciseId: 'ex1', assignmentId: 'as1' })).rejects.toThrow(/already submitted/);
       expect(prisma.attempt.count).toHaveBeenCalledWith({
         where: { assignmentId: 'as1', status: { in: [AttemptStatus.SUBMITTED, AttemptStatus.SCORED] } },
       });
@@ -226,7 +290,7 @@ describe('AttemptsService — pronunciation test', () => {
 
     it('serves the words in authored order with no answer key and no media', async () => {
       const prisma = makePrisma();
-      const result = await makeSvc(prisma).start('student1', { exerciseId: 'ex1', assignmentId: 'as1' });
+      const result = await makeSvc(prisma).start('student1', 'station1', { exerciseId: 'ex1', assignmentId: 'as1' });
 
       expect(result.items).toEqual([
         { id: 'w1', prompt: 'thorough', choices: [] },
@@ -240,7 +304,7 @@ describe('AttemptsService — pronunciation test', () => {
     it('refuses a test with no words', async () => {
       const prisma = makePrisma();
       prisma.itemBank.findUnique.mockResolvedValue({ id: 'bank1', exerciseId: 'ex1', items: [] });
-      await expect(makeSvc(prisma).start('student1', { exerciseId: 'ex1', assignmentId: 'as1' })).rejects.toThrow(/no words/);
+      await expect(makeSvc(prisma).start('student1', 'station1', { exerciseId: 'ex1', assignmentId: 'as1' })).rejects.toThrow(/no words/);
     });
   });
 
@@ -416,6 +480,7 @@ describe('AttemptsService — reading test', () => {
       attempt: {
         create: vi.fn().mockResolvedValue({ id: 'att1' }),
         findUnique: vi.fn(),
+        findFirst: vi.fn().mockResolvedValue(null),
         update: vi.fn().mockImplementation(({ data }: { data: object }) => Promise.resolve({ id: 'att1', ...data })),
         count: vi.fn().mockResolvedValue(0),
       },
@@ -431,19 +496,19 @@ describe('AttemptsService — reading test', () => {
 
   describe('start()', () => {
     it('refuses to start without an assignment', async () => {
-      await expect(makeSvc(makePrisma()).start('student1', { exerciseId: 'ex1' })).rejects.toBeInstanceOf(BadRequestException);
+      await expect(makeSvc(makePrisma()).start('student1', 'station1', { exerciseId: 'ex1' })).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('locks the test once an attempt on that assignment is submitted or scored (one submission only)', async () => {
       const prisma = makePrisma();
       prisma.attempt.count.mockResolvedValue(1);
-      await expect(makeSvc(prisma).start('student1', { exerciseId: 'ex1', assignmentId: 'as1' })).rejects.toThrow(/already submitted/);
+      await expect(makeSvc(prisma).start('student1', 'station1', { exerciseId: 'ex1', assignmentId: 'as1' })).rejects.toThrow(/already submitted/);
       expect(prisma.attempt.create).not.toHaveBeenCalled();
     });
 
     it('serves the passage with no answer key, maxScore 100', async () => {
       const prisma = makePrisma();
-      const result = await makeSvc(prisma).start('student1', { exerciseId: 'ex1', assignmentId: 'as1' });
+      const result = await makeSvc(prisma).start('student1', 'station1', { exerciseId: 'ex1', assignmentId: 'as1' });
 
       expect(result.items).toEqual([{ id: 'p1', prompt: 'The quick brown fox jumps over the lazy dog.', choices: [] }]);
       expect(prisma.attempt.create).toHaveBeenCalledWith({
@@ -459,7 +524,7 @@ describe('AttemptsService — reading test', () => {
         items: [{ ...passageItem, prompt: '', mediaAssetId: 'doc1' }],
       });
 
-      const result = await makeSvc(prisma).start('student1', { exerciseId: 'ex1', assignmentId: 'as1' });
+      const result = await makeSvc(prisma).start('student1', 'station1', { exerciseId: 'ex1', assignmentId: 'as1' });
 
       expect(result.items).toEqual([{ id: 'p1', prompt: '', choices: [], mediaAssetId: 'doc1' }]);
     });
@@ -467,7 +532,7 @@ describe('AttemptsService — reading test', () => {
     it('refuses a test with no passage', async () => {
       const prisma = makePrisma();
       prisma.itemBank.findUnique.mockResolvedValue({ id: 'bank1', exerciseId: 'ex1', items: [] });
-      await expect(makeSvc(prisma).start('student1', { exerciseId: 'ex1', assignmentId: 'as1' })).rejects.toThrow(/no passage/);
+      await expect(makeSvc(prisma).start('student1', 'station1', { exerciseId: 'ex1', assignmentId: 'as1' })).rejects.toThrow(/no passage/);
     });
   });
 
@@ -532,7 +597,14 @@ describe('AttemptsService — writing and listening tests', () => {
     return {
       exercise: { findUnique: vi.fn().mockResolvedValue(exercise) },
       assignment: { findUnique: vi.fn().mockResolvedValue({ id: 'as1', studentId: 'student1', exerciseId: exercise.id }) },
-      attempt: { create: vi.fn().mockResolvedValue({ id: 'att1' }), findUnique: vi.fn(), update: vi.fn(), count: vi.fn().mockResolvedValue(0) },
+      attempt: {
+        create: vi.fn().mockResolvedValue({ id: 'att1' }),
+        findUnique: vi.fn(),
+        findFirst: vi.fn().mockResolvedValue(null),
+        update: vi.fn(),
+        updateMany: vi.fn(),
+        count: vi.fn().mockResolvedValue(0),
+      },
       itemBank: { findUnique: vi.fn().mockResolvedValue({ id: 'bank1', exerciseId: exercise.id, items }) },
       item: { findMany: vi.fn().mockResolvedValue(items) },
       itemResponse: { createMany: vi.fn() },
@@ -552,20 +624,20 @@ describe('AttemptsService — writing and listening tests', () => {
 
     it('is one-shot: refuses to start without an assignment, and once one is submitted', async () => {
       const prisma = makePrisma(writing, prompt);
-      await expect(makeSvc(prisma).start('student1', { exerciseId: 'wx' })).rejects.toThrow(/only be started from your assignments/);
+      await expect(makeSvc(prisma).start('student1', 'station1', { exerciseId: 'wx' })).rejects.toThrow(/only be started from your assignments/);
 
       prisma.attempt.count.mockResolvedValue(1);
-      await expect(makeSvc(prisma).start('student1', { exerciseId: 'wx', assignmentId: 'as1' })).rejects.toThrow(/already submitted/);
+      await expect(makeSvc(prisma).start('student1', 'station1', { exerciseId: 'wx', assignmentId: 'as1' })).rejects.toThrow(/already submitted/);
       expect(prisma.attempt.create).not.toHaveBeenCalled();
     });
 
     it('serves the prompt only', async () => {
-      const result = await makeSvc(makePrisma(writing, prompt)).start('student1', { exerciseId: 'wx', assignmentId: 'as1' });
+      const result = await makeSvc(makePrisma(writing, prompt)).start('student1', 'station1', { exerciseId: 'wx', assignmentId: 'as1' });
       expect(result.items).toEqual([{ id: 'p1', prompt: 'Describe your hometown.', choices: [] }]);
     });
 
     it('refuses a test that has no prompt', async () => {
-      await expect(makeSvc(makePrisma(writing, [])).start('student1', { exerciseId: 'wx', assignmentId: 'as1' })).rejects.toThrow(/no prompt/);
+      await expect(makeSvc(makePrisma(writing, [])).start('student1', 'station1', { exerciseId: 'wx', assignmentId: 'as1' })).rejects.toThrow(/no prompt/);
     });
 
     it.each([
@@ -611,11 +683,11 @@ describe('AttemptsService — writing and listening tests', () => {
 
   describe('listening test', () => {
     it('is one-shot, like every teacher-controlled test', async () => {
-      await expect(makeSvc(makePrisma(listening, questions)).start('student1', { exerciseId: 'lx' })).rejects.toBeInstanceOf(BadRequestException);
+      await expect(makeSvc(makePrisma(listening, questions)).start('student1', 'station1', { exerciseId: 'lx' })).rejects.toBeInstanceOf(BadRequestException);
     });
 
     it('serves questions in authored order with the answer key stripped', async () => {
-      const result = await makeSvc(makePrisma(listening, questions)).start('student1', { exerciseId: 'lx', assignmentId: 'as1' });
+      const result = await makeSvc(makePrisma(listening, questions)).start('student1', 'station1', { exerciseId: 'lx', assignmentId: 'as1' });
 
       expect(result.items!.map((i) => i.id)).toEqual(['q1', 'q2']);
       for (const item of result.items!) expect(item).not.toHaveProperty('answer');
@@ -628,7 +700,7 @@ describe('AttemptsService — writing and listening tests', () => {
       // "Paris" first and this would fail.
       const random = vi.spyOn(Math, 'random').mockReturnValue(0);
       try {
-        const result = await makeSvc(makePrisma(listening, questions)).start('student1', { exerciseId: 'lx', assignmentId: 'as1' });
+        const result = await makeSvc(makePrisma(listening, questions)).start('student1', 'station1', { exerciseId: 'lx', assignmentId: 'as1' });
         const choices = result.items![0]!.choices;
         expect([...choices].sort()).toEqual(['Berlin', 'London', 'Paris', 'Rome']);
         expect(choices[0]).not.toBe('Paris');
@@ -672,13 +744,302 @@ describe('AttemptsService — vocabulary test bank mode', () => {
 
     const random = vi.spyOn(Math, 'random').mockReturnValue(0);
     try {
-      const result = await makeService(prisma, makeFakeAudit()).start('student1', { exerciseId: 'vx' });
+      const result = await makeService(prisma, makeFakeAudit()).start('student1', 'station1', { exerciseId: 'vx' });
       const choices = result.items![0]!.choices;
       expect([...choices].sort()).toEqual(['fast', 'large', 'red', 'tiny']);
       expect(choices[0]).not.toBe('large');
     } finally {
       random.mockRestore();
     }
+  });
+});
+
+/**
+ * SPEC-mcq-test-timed-reveal.md — GF-4/GF-5/GF-6 at the service layer:
+ * the served payload never carries an answer outside `choices` (GF-6), a
+ * submit after the deadline is rejected (the Guard acceptance test), and
+ * getResult shows WAITING vs RELEASED per the reveal policy (GF-4/GF-5).
+ */
+describe('AttemptsService — timed reveal (individual/assignment mode)', () => {
+  const timedExercise = {
+    id: 'tx',
+    type: ActivityType.VOCABULARY_TEST,
+    dictionaryEnabled: null,
+    config: {
+      shuffleItems: false,
+      timeLimitSec: 600,
+      revealMode: 'ON_TIME_EXPIRY',
+      revealDetail: 'FULL_ANSWERS',
+      items: [{ prompt: 'Capital of France?', answer: 'Paris', choices: ['Paris', 'Lyon', 'Nice'], explanation: 'Paris is the capital.' }],
+    },
+  };
+
+  it('GF-6: the served wire payload contains no answer string outside choices, and no explanation text', async () => {
+    const prisma = makeFakePrisma({
+      assignment: { findUnique: vi.fn().mockResolvedValue({ id: 'as1', studentId: 'student1', exerciseId: 'tx' }) },
+    });
+    prisma.exercise.findUnique.mockResolvedValue(timedExercise);
+    prisma.attempt.findFirst = vi.fn().mockResolvedValue(null);
+    prisma.attempt.create.mockResolvedValue({ id: 'att1' });
+
+    const result = await makeService(prisma, makeFakeAudit()).start('student1', 'station1', { exerciseId: 'tx', assignmentId: 'as1' });
+
+    expect(findAnswerLeaks(result, { answers: ['Paris'], explanations: ['Paris is the capital.'] })).toEqual([]);
+    expect(result.timing).toMatchObject({ revealMode: 'ON_TIME_EXPIRY', revealDetail: 'FULL_ANSWERS', allowReview: true });
+    expect(result.timing!.closesAt).toBeGreaterThan(Date.now());
+  });
+
+  it('a real timed test cannot be opened as a bare self-study exercise (no assignment, no live instance)', async () => {
+    const prisma = makeFakePrisma();
+    prisma.exercise.findUnique.mockResolvedValue(timedExercise);
+
+    await expect(makeService(prisma, makeFakeAudit()).start('student1', 'station1', { exerciseId: 'tx' })).rejects.toThrow(
+      /only be started from your assignments or a live session/,
+    );
+    expect(prisma.attempt.create).not.toHaveBeenCalled();
+  });
+
+  it('Guard: a submit after the attempt\'s own closesAt is rejected with TEST_CLOSED, and grades nothing', async () => {
+    const prisma = makeFakePrisma();
+    const attempt = makeMutableAttempt({
+      id: 'att1',
+      studentId: 'student1',
+      status: AttemptStatus.IN_PROGRESS,
+      itemOrder: ['inline:0'],
+      exercise: timedExercise,
+      closesAt: new Date(Date.now() - 1000), // already passed
+      maxScore: 100,
+      answers: {},
+      served: [{ id: 'inline:0', prompt: 'Capital of France?', choices: ['Paris', 'Lyon', 'Nice'] }],
+    });
+    prisma.attempt.findUnique = attempt.findUnique;
+    prisma.attempt.updateMany = attempt.updateMany;
+
+    await expect(
+      makeService(prisma, makeFakeAudit()).submit('att1', 'student1', {
+        response: { answers: [], score: null },
+        itemResponses: [{ itemId: 'inline:0', given: 'Paris' }],
+      }),
+    ).rejects.toMatchObject({ response: { code: 'TEST_CLOSED' } });
+    expect(prisma.itemResponse?.createMany).not.toHaveBeenCalled();
+  });
+
+  it('a draft save after closesAt is also rejected with TEST_CLOSED', async () => {
+    const prisma = makeFakePrisma();
+    const attempt = makeMutableAttempt({
+      id: 'att1',
+      studentId: 'student1',
+      status: AttemptStatus.IN_PROGRESS,
+      closesAt: new Date(Date.now() - 1000),
+      answers: {},
+    });
+    prisma.attempt.findUnique = attempt.findUnique;
+    prisma.attempt.updateMany = attempt.updateMany;
+
+    await expect(
+      makeService(prisma, makeFakeAudit()).saveDraft('att1', 'student1', { answers: [{ itemId: 'inline:0', given: 'Paris' }] }),
+    ).rejects.toMatchObject({ response: { code: 'TEST_CLOSED' } });
+  });
+
+  it('getResult: before closesAt, an IN_PROGRESS attempt reports OPEN (no waiting-room leak of anything)', async () => {
+    const prisma = makeFakePrisma();
+    prisma.attempt.findUnique = vi.fn().mockResolvedValue({
+      id: 'att1',
+      studentId: 'student1',
+      status: AttemptStatus.IN_PROGRESS,
+      exercise: timedExercise,
+      closesAt: new Date(Date.now() + 600_000),
+    });
+
+    const result = await makeService(prisma, makeFakeAudit()).getResult('att1', 'student1');
+    expect(result).toEqual({ status: 'OPEN' });
+  });
+
+  it('getResult: a SCORED attempt waiting on ON_TEACHER_RELEASE shows WAITING(awaiting: TEACHER), never the key', async () => {
+    const releaseExercise = { ...timedExercise, config: { ...timedExercise.config, revealMode: 'ON_TEACHER_RELEASE' } };
+    const prisma = makeFakePrisma();
+    prisma.attempt.findUnique = vi.fn().mockResolvedValue({
+      id: 'att1',
+      studentId: 'student1',
+      status: AttemptStatus.SCORED,
+      exercise: releaseExercise,
+      closesAt: new Date(Date.now() - 1000),
+      revealAt: null,
+      rawScore: 100,
+      maxScore: 100,
+    });
+
+    const result = await makeService(prisma, makeFakeAudit()).getResult('att1', 'student1');
+    expect(result).toMatchObject({ status: 'WAITING', awaiting: 'TEACHER' });
+    expect(JSON.stringify(result)).not.toContain('Paris');
+  });
+
+  it('getResult: reveals full answers + explanation once revealAt has passed (FULL_ANSWERS)', async () => {
+    const prisma = makeFakePrisma();
+    prisma.attempt.findUnique = vi.fn().mockResolvedValue({
+      id: 'att1',
+      studentId: 'student1',
+      status: AttemptStatus.SCORED,
+      itemOrder: ['inline:0'],
+      exercise: timedExercise,
+      closesAt: new Date(Date.now() - 1000),
+      revealAt: new Date(Date.now() - 500),
+      rawScore: 100,
+      maxScore: 100,
+      served: [{ id: 'inline:0', prompt: 'Capital of France?', choices: ['Lyon', 'Paris', 'Nice'] }],
+      answers: { 'inline:0': 'Paris' },
+    });
+
+    const result = await makeService(prisma, makeFakeAudit()).getResult('att1', 'student1');
+    expect(result).toMatchObject({
+      status: 'RELEASED',
+      rawScore: 100,
+      items: [{ itemId: 'inline:0', given: 'Paris', correct: true, correctAnswer: 'Paris', explanation: 'Paris is the capital.' }],
+    });
+  });
+
+  it('getResult refuses to show someone else\'s attempt — 403, never a WAITING/RELEASED body', async () => {
+    const prisma = makeFakePrisma();
+    prisma.attempt.findUnique = vi.fn().mockResolvedValue({ id: 'att1', studentId: 'someone-else', status: AttemptStatus.SCORED, exercise: timedExercise });
+
+    await expect(makeService(prisma, makeFakeAudit()).getResult('att1', 'student1')).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('getResult lazily finalizes an attempt whose closesAt has passed but was never swept (Offline acceptance test)', async () => {
+    const prisma = makeFakePrisma();
+    const attempt = makeMutableAttempt({
+      id: 'att1',
+      studentId: 'student1',
+      status: AttemptStatus.IN_PROGRESS,
+      itemOrder: ['inline:0'],
+      exercise: timedExercise,
+      closesAt: new Date(Date.now() - 1000),
+      maxScore: 100,
+      answers: { 'inline:0': 'Paris' },
+      served: [{ id: 'inline:0', prompt: 'Capital of France?', choices: ['Lyon', 'Paris', 'Nice'] }],
+    });
+    prisma.attempt.findUnique = attempt.findUnique;
+    prisma.attempt.updateMany = attempt.updateMany;
+
+    const result = await makeService(prisma, makeFakeAudit()).getResult('att1', 'student1');
+    // ON_TIME_EXPIRY reveals at closesAt, which has already passed.
+    expect(result).toMatchObject({ status: 'RELEASED', rawScore: 100 });
+  });
+});
+
+/** SPEC-mcq-test-timed-reveal.md §6.1 — "Launch in lab": a cohort test's
+ * attempt is authorized by the station's own membership in the launched
+ * group, not an Assignment row. */
+describe('AttemptsService — live/cohort tests ("Launch in lab")', () => {
+  const timedExercise = {
+    id: 'tx',
+    type: ActivityType.VOCABULARY_TEST,
+    dictionaryEnabled: null,
+    config: {
+      shuffleItems: false,
+      timeLimitSec: 600,
+      revealMode: 'ON_TIME_EXPIRY',
+      revealDetail: 'FULL_ANSWERS',
+      items: [{ prompt: 'Capital of France?', answer: 'Paris', choices: ['Paris', 'Lyon', 'Nice'], explanation: 'Paris is the capital.' }],
+    },
+  };
+  const instanceClosesAt = new Date(Date.now() + 600_000);
+  const instance = {
+    id: 'inst1',
+    groupId: 'grp1',
+    exerciseId: 'tx',
+    closesAt: instanceClosesAt,
+    closedAt: null,
+    group: { id: 'grp1', session: { state: 'RUNNING' } },
+  };
+
+  function makeLivePrisma() {
+    return {
+      activityInstance: { findUnique: vi.fn(), findUniqueOrThrow: vi.fn() },
+      sessionMember: { findUnique: vi.fn() },
+      exercise: { findUniqueOrThrow: vi.fn() },
+      attempt: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({ id: 'att1' }) },
+    };
+  }
+  function svc(prisma: ReturnType<typeof makeLivePrisma>): AttemptsService {
+    return new AttemptsService(prisma as unknown as PrismaService, makeFakeAudit() as unknown as AuditService);
+  }
+
+  it('refuses a station that is not a member of the launched group', async () => {
+    const prisma = makeLivePrisma();
+    prisma.activityInstance.findUnique.mockResolvedValue(instance);
+    prisma.sessionMember.findUnique.mockResolvedValue(null);
+
+    await expect(svc(prisma).start('student1', 'other-station', { activityInstanceId: 'inst1' })).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.attempt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses to start before the session has actually started (still ARMED)', async () => {
+    const prisma = makeLivePrisma();
+    prisma.activityInstance.findUnique.mockResolvedValue({ ...instance, group: { id: 'grp1', session: { state: 'ARMED' } } });
+
+    await expect(svc(prisma).start('student1', 'station1', { activityInstanceId: 'inst1' })).rejects.toMatchObject({
+      response: { code: 'TEST_NOT_STARTED' },
+    });
+  });
+
+  it('Late: refuses to open a closed live test, and creates no attempt row', async () => {
+    const prisma = makeLivePrisma();
+    prisma.activityInstance.findUnique.mockResolvedValue(instance);
+    prisma.sessionMember.findUnique.mockResolvedValue({ id: 'm1' });
+    prisma.activityInstance.findUniqueOrThrow.mockResolvedValue({ closedAt: new Date(), closesAt: instanceClosesAt });
+
+    await expect(svc(prisma).start('student1', 'station1', { activityInstanceId: 'inst1' })).rejects.toMatchObject({
+      response: { code: 'TEST_CLOSED' },
+    });
+    expect(prisma.attempt.create).not.toHaveBeenCalled();
+  });
+
+  it('resumes an existing IN_PROGRESS attempt rather than creating a second one', async () => {
+    const prisma = makeLivePrisma();
+    prisma.activityInstance.findUnique.mockResolvedValue(instance);
+    prisma.sessionMember.findUnique.mockResolvedValue({ id: 'm1' });
+    prisma.exercise.findUniqueOrThrow.mockResolvedValue(timedExercise);
+    prisma.attempt.findFirst.mockResolvedValue({
+      id: 'att1',
+      status: AttemptStatus.IN_PROGRESS,
+      closesAt: instanceClosesAt,
+      served: [{ id: 'inline:0', prompt: 'Capital of France?', choices: ['Paris', 'Lyon', 'Nice'] }],
+      answers: { 'inline:0': 'Par' },
+    });
+
+    const result = await svc(prisma).start('student1', 'station1', { activityInstanceId: 'inst1' });
+
+    expect(result.attemptId).toBe('att1');
+    expect(result.answers).toEqual({ 'inline:0': 'Par' });
+    expect(prisma.attempt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a second start once the student already submitted, naming the finished attemptId', async () => {
+    const prisma = makeLivePrisma();
+    prisma.activityInstance.findUnique.mockResolvedValue(instance);
+    prisma.sessionMember.findUnique.mockResolvedValue({ id: 'm1' });
+    prisma.attempt.findFirst.mockResolvedValue({ id: 'att1', status: AttemptStatus.SCORED });
+
+    await expect(svc(prisma).start('student1', 'station1', { activityInstanceId: 'inst1' })).rejects.toMatchObject({
+      response: { code: 'ALREADY_SUBMITTED', attemptId: 'att1' },
+    });
+  });
+
+  it('creates a fresh attempt bound to the instance\'s own deadline, with a leak-free wire payload (GF-6)', async () => {
+    const prisma = makeLivePrisma();
+    prisma.activityInstance.findUnique.mockResolvedValue(instance);
+    prisma.sessionMember.findUnique.mockResolvedValue({ id: 'm1' });
+    prisma.activityInstance.findUniqueOrThrow.mockResolvedValue({ closedAt: null, closesAt: instanceClosesAt });
+    prisma.exercise.findUniqueOrThrow.mockResolvedValue(timedExercise);
+
+    const result = await svc(prisma).start('student1', 'station1', { activityInstanceId: 'inst1' });
+
+    expect(result.timing!.closesAt).toBe(instanceClosesAt.getTime());
+    expect(prisma.attempt.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ activityInstanceId: 'inst1', closesAt: instanceClosesAt }),
+    });
+    expect(findAnswerLeaks(result, { answers: ['Paris'], explanations: ['Paris is the capital.'] })).toEqual([]);
   });
 });
 

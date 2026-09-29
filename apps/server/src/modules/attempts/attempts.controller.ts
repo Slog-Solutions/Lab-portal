@@ -1,5 +1,12 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
-import { zStartAttemptDto, zSubmitAttemptDto, type StartAttemptDto, type SubmitAttemptDto } from '@lab/shared';
+import { BadRequestException, Body, Controller, Get, Param, Post, Put, Query, UseGuards } from '@nestjs/common';
+import {
+  zSaveDraftAnswersDto,
+  zStartAttemptDto,
+  zSubmitAttemptDto,
+  type SaveDraftAnswersDto,
+  type StartAttemptDto,
+  type SubmitAttemptDto,
+} from '@lab/shared';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentStation } from '../../common/decorators/current-station.decorator';
 import { StationAuthGuard } from '../../common/guards/station-auth.guard';
@@ -22,7 +29,17 @@ export class AttemptsController {
   @Post('start')
   async start(@Body(new ZodValidationPipe(zStartAttemptDto)) dto: StartAttemptDto, @CurrentStation() station: { id: string }) {
     const studentId = await this.requireClaimedStudent(station.id);
-    return this.attempts.start(studentId, dto);
+    return this.attempts.start(studentId, station.id, dto);
+  }
+
+  @Put(':id/answers')
+  async saveAnswers(
+    @Param('id') id: string,
+    @Body(new ZodValidationPipe(zSaveDraftAnswersDto)) dto: SaveDraftAnswersDto,
+    @CurrentStation() station: { id: string },
+  ) {
+    const studentId = await this.requireClaimedStudent(station.id);
+    return this.attempts.saveDraft(id, studentId, dto);
   }
 
   @Post(':id/submit')
@@ -35,10 +52,16 @@ export class AttemptsController {
     return this.attempts.submit(id, studentId, dto);
   }
 
-  @Get('mine')
-  async mine(@CurrentStation() station: { id: string }) {
+  @Get(':id/result')
+  async result(@Param('id') id: string, @CurrentStation() station: { id: string }) {
     const studentId = await this.requireClaimedStudent(station.id);
-    return this.attempts.listForStudent(studentId);
+    return this.attempts.getResult(id, studentId);
+  }
+
+  @Get('mine')
+  async mine(@Query('exerciseId') exerciseId: string | undefined, @CurrentStation() station: { id: string }) {
+    const studentId = await this.requireClaimedStudent(station.id);
+    return this.attempts.listForStudent(studentId, exerciseId);
   }
 
   @Get('assignments/mine')

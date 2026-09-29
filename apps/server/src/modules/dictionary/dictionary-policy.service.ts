@@ -72,8 +72,20 @@ export class DictionaryPolicyService {
     if (station?.currentUserId) {
       const windowMin = this.config.get('DICTIONARY_TEST_WINDOW_MIN', { infer: true });
       const cutoff = new Date(Date.now() - windowMin * 60_000);
+      const now = new Date();
       const attempt = await this.prisma.attempt.findFirst({
-        where: { studentId: station.currentUserId, status: AttemptStatus.IN_PROGRESS, startedAt: { gte: cutoff } },
+        where: {
+          studentId: station.currentUserId,
+          status: AttemptStatus.IN_PROGRESS,
+          // SPEC-mcq-test-timed-reveal.md — a real timed test's own
+          // closesAt is the authority on "still in progress" once it has
+          // one; the fixed window below is only a fallback for an
+          // untimed/legacy attempt, which has no closesAt to check
+          // instead. Without this, a test longer than the window (default
+          // 60 min) would start allowing dictionary lookups partway
+          // through its own time limit.
+          OR: [{ closesAt: { gt: now } }, { closesAt: null, startedAt: { gte: cutoff } }],
+        },
         include: { exercise: true },
         orderBy: { startedAt: 'desc' },
       });

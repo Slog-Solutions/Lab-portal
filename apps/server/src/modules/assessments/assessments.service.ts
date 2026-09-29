@@ -1,8 +1,8 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   ActivityType,
-  AssetKind,
   AttemptStatus,
+  AssetKind,
   ItemType,
   MediaAssetScope,
   NO_WRITTEN_FEEDBACK,
@@ -10,6 +10,9 @@ import {
   type CreateAssessmentDto,
   type GradeAssessmentDto,
   type ItemDto,
+  type UpdateVocabTestDto,
+  type VocabQuestionInput,
+  type VocabularyTestConfig,
 } from '@lab/shared';
 import { getActivity } from '@lab/shared/activities';
 import type { Prisma } from '../../../generated/prisma';
@@ -49,6 +52,14 @@ type Requester = { id: string; role: string };
  *     stored as ItemResponse.given and the attempt waits in SUBMITTED until
  *     a teacher grades it, through GradebookService.override() like every
  *     other teacher-assessed score (so it is audited the same way).
+ *
+ * SPEC-mcq-test-timed-reveal.md (§7.1) adds the form-style builder for
+ * VOCABULARY_TEST — `dto.questions` alongside the original `wordListText`
+ * import — plus `update()` (blocked once any attempt or lab run exists),
+ * `releaseResults()` (the ON_TEACHER_RELEASE manual step for the
+ * assignment/individual path — a launched lab run's own release goes
+ * through TimedTestsService/TestCloseService.release instead), and
+ * `get()`'s `settings`/`editable`/`labRuns` additions.
  */
 @Injectable()
 export class AssessmentsService {
@@ -79,7 +90,18 @@ export class AssessmentsService {
     // without its assignments, is unusable and confusing to clean up by hand.
     const exercise = await this.prisma.$transaction(async (tx) => {
       const created = await tx.exercise.create({
-        data: { teacherId, type: dto.type, title: dto.title, config: {}, dictionaryEnabled: dto.dictionaryEnabled },
+        data: {
+          teacherId,
+          type: dto.type,
+          title: dto.title,
+          config: {},
+          dictionaryEnabled: dto.dictionaryEnabled,
+          // SPEC-mcq-test-timed-reveal.md §6.1 "save without assigning" —
+          // true regardless of studentIds.length, so a test saved with no
+          // students yet (meant for "Launch in lab" later) still shows up
+          // in list().
+          isAssessment: true,
+        },
       });
       const bank = await tx.itemBank.create({ data: { exerciseId: created.id } });
       await tx.item.createMany({
@@ -91,6 +113,7 @@ export class AssessmentsService {
           answer: item.answer,
           choices: item.choices ?? [],
           mediaAssetId: item.mediaAssetId ?? null,
+          explanation: item.explanation ?? null,
         })),
       });
       // Vocabulary tests point at their bank by id, so the config can only
@@ -98,9 +121,11 @@ export class AssessmentsService {
       // transaction, so a rejected config rolls the whole thing back.
       const finalConfig = this.validateConfig(dto.type, dto.type === ActivityType.VOCABULARY_TEST ? { ...config, itemBankId: bank.id } : config);
       await tx.exercise.update({ where: { id: created.id }, data: { config: finalConfig as Prisma.InputJsonValue } });
-      await tx.assignment.createMany({
-        data: studentIds.map((studentId) => ({ teacherId, studentId, exerciseId: created.id, dueAt: dto.dueAt, batchId: dto.batchId })),
-      });
+      if (studentIds.length > 0) {
+        await tx.assignment.createMany({
+          data: studentIds.map((studentId) => ({ teacherId, studentId, exerciseId: created.id, dueAt: dto.dueAt, batchId: dto.batchId })),
+        });
+      }
       return created;
     });
 
@@ -124,15 +149,15 @@ export class AssessmentsService {
   }
 
   /** The requester's own assignments of one type (an admin sees everyone's),
-   * newest first, with progress. Only exercises that were actually assigned
-   * to someone — an unassigned vocabulary exercise from the Exercises page is
-   * not an assignment yet. */
+   * newest first, with progress. Includes a VOCABULARY_TEST saved with no
+   * students yet (isAssessment, §6.1 "save without assigning") alongside
+   * every exercise that has real assignments. */
   async list(requester: Requester, type: ActivityType) {
     if (!ASSESSMENT_TYPES.includes(type)) throw new BadRequestException(`${type} is not an assignment type`);
     const exercises = await this.prisma.exercise.findMany({
       where: {
         type,
-        assignments: { some: {} },
+        OR: [{ assignments: { some: {} } }, { isAssessment: true }],
         ...(requester.role === UserRole.ADMIN ? {} : { teacherId: requester.id }),
       },
       orderBy: { createdAt: 'desc' },
@@ -145,6 +170,7 @@ export class AssessmentsService {
             attempts: { select: { status: true, rawScore: true, maxScore: true }, orderBy: { startedAt: 'desc' } },
           },
         },
+        _count: { select: { activityInstances: true } },
       },
     });
 
@@ -168,6 +194,7 @@ export class AssessmentsService {
           (a) => a.attempts.some((t) => t.status === AttemptStatus.SUBMITTED) && !a.attempts.some((t) => t.status === AttemptStatus.SCORED),
         ).length,
         averageScore: percents.length ? Math.round(percents.reduce((sum, p) => sum + p, 0) / percents.length) : null,
+        labRunCount: ex._count.activityInstances,
       };
     });
   }
@@ -175,13 +202,19 @@ export class AssessmentsService {
   /** Everything the results page needs in one round trip: the questions
    * (with the answer key — this is the teacher's view) and, per assigned
    * student, their submitted attempt (or latest attempt) with what they
-   * gave. For a writing test `given` is the essay itself. */
+   * gave. For a writing test `given` is the essay itself. Also: this
+   * test's builder settings, whether it's still `editable` (§7.1's edit
+   * mode, blocked once any real attempt or lab run exists — same hazard
+   * as ExercisesService.setItems's own guard), and every "Launch in lab"
+   * run (`labRuns`), which the assignment-keyed `assignments[]` below
+   * never surfaces (a lab attempt has no assignmentId). */
   async get(id: string, requester: Requester) {
     const exercise = await this.prisma.exercise.findUnique({
       where: { id },
       include: {
         teacher: { select: { fullName: true } },
         itemBank: { include: { items: { orderBy: { order: 'asc' } } } },
+        _count: { select: { attempts: true, activityInstances: true } },
       },
     });
     if (!exercise || !ASSESSMENT_TYPES.includes(exercise.type)) throw new NotFoundException('Assignment not found');
@@ -203,6 +236,9 @@ export class AssessmentsService {
 
     // Neither a writing prompt nor a reading passage has a key.
     const hasNoAnswerKey = exercise.type === ActivityType.WRITING_TEST || exercise.type === ActivityType.READING_TEST;
+    const isVocab = exercise.type === ActivityType.VOCABULARY_TEST;
+    const vocabConfig = isVocab ? (exercise.config as VocabularyTestConfig) : null;
+
     return {
       id: exercise.id,
       type: exercise.type,
@@ -216,6 +252,20 @@ export class AssessmentsService {
         audioAssetId?: string;
         voice?: 'en_US' | 'en_GB';
       },
+      settings: vocabConfig
+        ? {
+            timeLimitSec: vocabConfig.timeLimitSec,
+            revealMode: vocabConfig.revealMode,
+            revealDetail: vocabConfig.revealDetail,
+            allowReview: vocabConfig.allowReview,
+            sampleSize: vocabConfig.sampleSize,
+          }
+        : undefined,
+      // §7.1's builder can only re-edit a test that has no real attempts
+      // and was never launched — editing the item bank underneath would
+      // otherwise orphan a past attempt's itemOrder/ItemResponse rows
+      // (same hazard ExercisesService.setItems guards against).
+      editable: exercise._count.attempts === 0 && exercise._count.activityInstances === 0,
       questions: (exercise.itemBank?.items ?? []).map((i) => ({
         id: i.id,
         prompt: i.prompt,
@@ -224,6 +274,11 @@ export class AssessmentsService {
         choices: i.choices,
         // Set only for a reading test whose teacher uploaded a PDF instead of (or alongside) typing a passage.
         mediaAssetId: i.mediaAssetId ?? undefined,
+        explanation: i.explanation ?? undefined,
+        // The builder's own shape (options[correctIndex]) — derived, not
+        // stored: `choices` is authored order, so the correct answer's
+        // position in it IS correctIndex.
+        correctIndex: !hasNoAnswerKey && i.choices.length > 0 ? i.choices.indexOf(i.answer) : undefined,
       })),
       assignments: assignments.map((a) => {
         const mine = attempts.filter((t) => t.assignmentId === a.id);
@@ -240,12 +295,123 @@ export class AssessmentsService {
             rawScore: attempt.rawScore,
             maxScore: attempt.maxScore,
             submittedAt: attempt.submittedAt,
+            revealAt: attempt.revealAt,
             responses: attempt.itemResponses.map((r) => ({ itemId: r.itemId, given: r.given, correct: r.correct })),
             override: attempt.scoreOverride,
           },
         };
       }),
+      labRuns: isVocab ? await this.labRunsFor(id) : [],
     };
+  }
+
+  /** "Launch in lab" runs of this test — keyed by ActivityInstance, not
+   * Assignment (a lab attempt has no assignmentId), so assignments[]
+   * above never shows them. Teacher view: full detail regardless of
+   * reveal state (§6.4), same as AttemptsService.getResult's staff mode. */
+  private async labRunsFor(exerciseId: string) {
+    const instances = await this.prisma.activityInstance.findMany({
+      where: { exerciseId },
+      include: {
+        group: { select: { sessionId: true, session: { select: { title: true, state: true } } } },
+        attempts: { include: { student: { select: { id: true, fullName: true } } } },
+      },
+      orderBy: { startedAt: 'desc' },
+    });
+    return instances.map((instance) => ({
+      activityInstanceId: instance.id,
+      sessionId: instance.group.sessionId,
+      sessionTitle: instance.group.session.title,
+      startedAt: instance.startedAt,
+      status: instance.closedAt ? ('CLOSED' as const) : instance.group.session.state === 'ARMED' ? ('READY' as const) : ('OPEN' as const),
+      closesAt: instance.closesAt,
+      revealedAt: instance.revealedAt,
+      attempts: instance.attempts.map((a) => ({
+        student: a.student,
+        status: a.status,
+        rawScore: a.rawScore,
+        maxScore: a.maxScore,
+        revealAt: a.revealAt,
+        answers: (a.answers as Record<string, string> | null) ?? {},
+      })),
+    }));
+  }
+
+  /** SPEC-mcq-test-timed-reveal.md §7.1 — re-edit a saved test's questions
+   * and/or settings. Refused once editable is false (see get()'s own
+   * comment). Questions and settings are independent: a settings-only
+   * patch (e.g. just raising the time limit) leaves the item bank alone. */
+  async update(id: string, dto: UpdateVocabTestDto, requester: Requester) {
+    const exercise = await this.prisma.exercise.findUnique({
+      where: { id },
+      include: { _count: { select: { attempts: true, activityInstances: true } } },
+    });
+    if (!exercise || exercise.type !== ActivityType.VOCABULARY_TEST) throw new NotFoundException('Test not found');
+    this.assertOwnerOrAdmin(exercise, requester);
+    if (exercise._count.attempts > 0 || exercise._count.activityInstances > 0) {
+      throw new ConflictException('This test already has attempts or a lab run, so it can no longer be edited — duplicate it instead');
+    }
+    if (dto.wordListText && dto.questions?.length) {
+      throw new BadRequestException('Provide either wordListText or questions, not both');
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      if (dto.questions?.length || dto.wordListText) {
+        const items = dto.questions?.length ? this.questionsToItems(dto.questions) : this.parseQuestions(dto.wordListText!);
+        const bank = await tx.itemBank.upsert({ where: { exerciseId: id }, create: { exerciseId: id }, update: {} });
+        await tx.item.deleteMany({ where: { itemBankId: bank.id } });
+        await tx.item.createMany({
+          data: items.map((item, order) => ({
+            itemBankId: bank.id,
+            order,
+            type: item.type,
+            prompt: item.prompt,
+            answer: item.answer,
+            choices: item.choices ?? [],
+            mediaAssetId: item.mediaAssetId ?? null,
+            explanation: item.explanation ?? null,
+          })),
+        });
+      }
+
+      const current = exercise.config as VocabularyTestConfig;
+      const nextConfig = this.validateConfig(ActivityType.VOCABULARY_TEST, {
+        ...current,
+        sampleSize: dto.sampleSize ?? current.sampleSize,
+        timeLimitSec: dto.timeLimitSec ?? current.timeLimitSec,
+        revealMode: dto.revealMode ?? current.revealMode,
+        revealDetail: dto.revealDetail ?? current.revealDetail,
+        allowReview: dto.allowReview ?? current.allowReview,
+      });
+      await tx.exercise.update({
+        where: { id },
+        data: {
+          title: dto.title,
+          config: nextConfig as Prisma.InputJsonValue,
+          dictionaryEnabled: dto.dictionaryEnabled,
+        },
+      });
+    });
+
+    await this.audit.log({ actorId: requester.id, action: 'assessment.update', detail: { exerciseId: id } });
+    return this.get(id, requester);
+  }
+
+  /** The ON_TEACHER_RELEASE manual step for the assignment/individual path
+   * only — a launched lab run's release goes through
+   * TimedTestsService/TestCloseService.release instead (it also has to
+   * republish snapshots and emit test:revealed, which this service has no
+   * business doing). Idempotent: only SCORED-and-unrevealed rows match. */
+  async releaseResults(id: string, requester: Requester): Promise<{ ok: true; released: number }> {
+    const exercise = await this.prisma.exercise.findUnique({ where: { id } });
+    if (!exercise || exercise.type !== ActivityType.VOCABULARY_TEST) throw new NotFoundException('Test not found');
+    this.assertOwnerOrAdmin(exercise, requester);
+    const result = await this.prisma.attempt.updateMany({
+      where: { exerciseId: id, activityInstanceId: null, status: AttemptStatus.SCORED, revealAt: null },
+      data: { revealAt: new Date() },
+    });
+    await this.audit.log({ actorId: requester.id, action: 'assessment.release', detail: { exerciseId: id, released: result.count } });
+    return { ok: true, released: result.count };
   }
 
   /** Marks one submitted writing or reading test. Re-grading is allowed (the
@@ -274,11 +440,27 @@ export class AssessmentsService {
   private async build(dto: CreateAssessmentDto): Promise<{ items: ItemDto[]; config: Record<string, unknown> }> {
     switch (dto.type) {
       case ActivityType.VOCABULARY_TEST: {
-        const items = this.parseQuestions(dto.wordListText);
+        // Exactly one of these is required — a discriminated union branch
+        // can't carry a cross-field .refine() (see the READING_TEST branch
+        // below for the same pattern).
+        if (!dto.wordListText && !dto.questions?.length) {
+          throw new BadRequestException('Add at least one question, either typed in the builder or imported as a word list');
+        }
+        const items = dto.questions?.length ? this.questionsToItems(dto.questions) : this.parseQuestions(dto.wordListText!);
+        if (dto.questions?.length && items.length > MAX_QUESTIONS) {
+          throw new BadRequestException(`At most ${MAX_QUESTIONS} questions per assignment (you have ${items.length})`);
+        }
         return {
           items,
-          // A sample as large as the bank is just "all of it" — don't store it.
-          config: { shuffleItems: true, ...(dto.sampleSize && dto.sampleSize < items.length ? { sampleSize: dto.sampleSize } : {}) },
+          config: {
+            shuffleItems: true,
+            // A sample as large as the bank is just "all of it" — don't store it.
+            ...(dto.sampleSize && dto.sampleSize < items.length ? { sampleSize: dto.sampleSize } : {}),
+            ...(dto.timeLimitSec ? { timeLimitSec: dto.timeLimitSec } : {}),
+            revealMode: dto.revealMode,
+            revealDetail: dto.revealDetail,
+            allowReview: dto.allowReview,
+          },
         };
       }
       case ActivityType.WRITING_TEST: {
@@ -314,6 +496,23 @@ export class AssessmentsService {
         };
       }
     }
+  }
+
+  /** The form-builder's question shape (§7.1: prompt/options/correctIndex)
+   * -> the item-bank's storage shape (prompt/answer/choices) — the correct
+   * option becomes `answer`, every option (in authored order, including
+   * the correct one) becomes `choices`, matching the same "MCQ choices
+   * include the answer" shape the word-list importer already produces
+   * (see parseWordListText / prepareServe's per-attempt shuffle). */
+  private questionsToItems(questions: VocabQuestionInput[]): ItemDto[] {
+    return questions.map((q) => ({
+      type: ItemType.MCQ,
+      prompt: q.prompt,
+      answer: q.options[q.correctIndex]!,
+      choices: q.options,
+      explanation: q.explanation,
+      mediaAssetId: q.mediaAssetId,
+    }));
   }
 
   private parseQuestions(text: string): ItemDto[] {

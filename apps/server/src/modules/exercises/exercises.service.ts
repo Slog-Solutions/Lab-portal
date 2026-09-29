@@ -1,4 +1,4 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { UserRole, type ActivityType, type CreateExerciseDto, type ItemDto } from '@lab/shared';
 import type { Prisma } from '../../../generated/prisma';
 // Importing from the activities subpath (rather than the root) is
@@ -85,10 +85,17 @@ export class ExercisesService {
     await this.audit.log({ actorId: requester.id, action: 'exercise.delete', detail: { exerciseId: id } });
   }
 
-  /** Bulk-replaces the exercise's item bank — the manual authoring path. */
+  /** Bulk-replaces the exercise's item bank — the manual authoring path.
+   * Pre-existing bug closed here: ItemResponse.itemId has a real FK to
+   * Item with no cascade, so deleting an item a real attempt already
+   * answered throws a raw constraint violation, not a clean 409. Once any
+   * Attempt exists for this exercise, refuse instead — this is also what
+   * SPEC-mcq-test-timed-reveal.md's builder needs ("editable" only before
+   * the first attempt; see AssessmentsService.update's own guard). */
   async setItems(exerciseId: string, items: ItemDto[], requester: { id: string; role: string }) {
     const exercise = await this.get(exerciseId);
     this.assertOwnerOrAdmin(exercise, requester);
+    await this.assertNoAttempts(exerciseId);
     const bank = await this.ensureItemBank(exerciseId);
     await this.prisma.item.deleteMany({ where: { itemBankId: bank.id } });
     await this.prisma.item.createMany({
@@ -103,6 +110,9 @@ export class ExercisesService {
   async importItems(exerciseId: string, items: ItemDto[], append: boolean, requester: { id: string; role: string }) {
     const exercise = await this.get(exerciseId);
     this.assertOwnerOrAdmin(exercise, requester);
+    // Appending only adds rows — safe regardless of existing attempts.
+    // Replacing deletes them — same hazard and guard as setItems above.
+    if (!append) await this.assertNoAttempts(exerciseId);
     const bank = await this.ensureItemBank(exerciseId);
     const startOrder = append ? await this.prisma.item.count({ where: { itemBankId: bank.id } }) : 0;
     if (!append) await this.prisma.item.deleteMany({ where: { itemBankId: bank.id } });
@@ -122,6 +132,13 @@ export class ExercisesService {
     this.assertOwnerOrAdmin(exercise, requester);
     if (!exercise.itemBank) return [];
     return this.prisma.item.findMany({ where: { itemBankId: exercise.itemBank.id }, orderBy: { order: 'asc' } });
+  }
+
+  private async assertNoAttempts(exerciseId: string): Promise<void> {
+    const count = await this.prisma.attempt.count({ where: { exerciseId } });
+    if (count > 0) {
+      throw new ConflictException('This exercise already has student attempts — its item bank can no longer be replaced wholesale');
+    }
   }
 
   private async ensureItemBank(exerciseId: string) {
