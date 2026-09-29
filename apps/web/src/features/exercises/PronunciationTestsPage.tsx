@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Textarea } from '@/components/ui/textarea';
+import { NativeSelect } from '@/components/ui/native-select';
 
 const MAX_WORDS = 50;
 const MAX_WORD_LENGTH = 100;
@@ -145,15 +146,15 @@ export function PronunciationTestsPage() {
                   <Label htmlFor="pt-voice" className="text-xs text-muted-foreground">
                     Voice
                   </Label>
-                  <select
+                  <NativeSelect
                     id="pt-voice"
                     value={voice}
                     onChange={(e) => setVoice(e.target.value as PronunciationVoice)}
-                    className="h-8 rounded-md border border-input bg-transparent px-2 text-sm"
+                    compact
                   >
                     <option value="en_GB">British</option>
                     <option value="en_US">American</option>
-                  </select>
+                  </NativeSelect>
                 </div>
               )}
             </div>

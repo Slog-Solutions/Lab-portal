@@ -145,13 +145,18 @@ declared. Never inline an `<img>` or re-create the mark in markup.
 
 | Token | Value | Use |
 |---|---|---|
-| `--radius-card` | `24px` | Panels, cards, dialogs, the sidebar |
-| `--radius-control` | `12px` | Buttons, inputs, selects, nav items |
+| `--radius-card` | `14px` | Panels, cards, dialogs |
+| `--radius-control` | `12px` | Buttons, tiles, nav items |
+| `--radius-field` | `6px` | Text fields, selects, textareas (rectangular) |
 | `--radius-pill` | `999px` | Badges, chips, status pills |
 
 Use `rounded-card` / `rounded-control` / `rounded-pill` — not `rounded-md`,
 `rounded-lg` or `rounded-[28px]`. Most separation is **spacing, not lines**;
 reach for a `border-hairline` only when spacing alone fails.
+
+**Flat — no shadows.** Surfaces are separated by a hairline border and
+spacing, never `shadow-*` (the `components/ui` primitives carry none).
+Overlays (dialog, sheet, select menu) rely on their border and the scrim.
 
 `--spacing-card-padding` (24px) and `--spacing-grid-gap` (16px) are in
 `@theme`, so `p-card-padding` and `gap-grid-gap` are real utilities.
@@ -169,13 +174,53 @@ manage them; edit them directly.
 > keyframes. Pasted-in shadcn markup relying on `animate-in`, `fade-in-0` or
 > `data-[state=open]:animate-in` will silently not animate.
 
+**Form fields share one look.** `fieldClass` (exported from `ui/input.tsx`)
+is used by `Input`, `Textarea`, `NativeSelect` and the Radix `SelectTrigger`:
+40px tall, `rounded-field`, hairline input border, and a brand-green border on
+focus. Default buttons are 40px too, so a field and a button line up in a row;
+for toolbar rows use `<NativeSelect compact>` beside `size="sm"` buttons. Never
+hand-style a raw `<input>` / `<select>` — use the component, or `fieldClass`
+when a raw element is unavoidable.
+
 `Card` supplies `p-6`; `CardHeader` / `CardContent` / `CardFooter` contribute
 vertical rhythm only. Don't re-add padding to the sub-parts — that was the
 original double-inset bug.
 
-`components/bento/` is the editorial card set (`BentoCard`, `HeroCard`,
-`DarkStatCard`, `BigNumberCard`, `CalendarStripCard`, `ProgressListCard`,
-`DateBadge`), currently consumed by `features/admin/StatusBoardPage.tsx`.
+### Console shell and page anatomy
+
+`app/TeacherLayout.tsx` is an admin-console shell: a fixed 260px green
+sidebar (grouped menu under small uppercase section titles; the topbar toggle
+condenses it to a 72px icon rail on `lg+` and opens it as a drawer below
+`lg`), a 70px flat topbar (live-class chip, user, sign out), the content area
+(`p-6`) and a footer.
+
+A page inside it is built from `components/layout/`:
+
+- `PageTitle` — title + subtitle left, breadcrumb + page actions right.
+- `StatWidget` — KPI tile: uppercase label, large figure, soft icon square
+  top-right, and a footer with a tinted highlight figure + muted caption.
+  Tones map to `brand` / `status-*` only.
+- `Panel` — the card: header (title, description, actions) over a body.
+
+Rows follow a 12-column rhythm: a row of four `StatWidget`s, then an
+8 + 4 split, then full-width content, with `gap-grid-gap` between everything.
+`features/lab/LabOverviewPage.tsx` (Lab control) is the reference page;
+`features/lab/ClassControlPage.tsx` (Class control) is the reference for an
+operating console: select in a grid, act from a contextual bar, inspect in a
+side panel, confirm consequential actions in a `Dialog` (never
+`window.confirm` / `window.prompt`).
+
+### Charts
+
+`components/charts/charts.tsx` — dependency-free SVG `LineChart`, `RadarChart`, `RadialRings`, `SparkLine`, `SparkBars`,
+`ColumnChart`, `BarList`, `DonutChart` and `ChartLegend`. Series colours are
+`--color-chart-1…3`, assigned in that order and never cycled (validated for
+colour-blind separation and contrast on the card surface); state charts use
+the `status-*` tokens instead. There is no fourth series colour on purpose: every candidate failed the all-pairs check against the orange, so a chart with more than three series needs a different form. Every chart has an explicit empty state, and
+plotted forms have a hover tooltip.
+
+`components/bento/` (`BentoCard`, `HeroCard`, `DarkStatCard`, …) is the
+previous editorial card set and is no longer used by any page.
 
 ---
 

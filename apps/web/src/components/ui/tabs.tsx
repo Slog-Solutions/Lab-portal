@@ -27,7 +27,7 @@ export const TabsTrigger = React.forwardRef<
       // (#F2EADA) and the canvas is #FDF6E9 — two near-identical creams, so an
       // active tab on bg-background would be all but invisible. bg-card
       // (#FFFDF8) is the lightest surface and separates cleanly.
-      'inline-flex items-center justify-center whitespace-nowrap rounded-[8px] px-3 py-1 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-card data-[state=active]:text-brand data-[state=active]:shadow-sm',
+      'inline-flex items-center justify-center whitespace-nowrap rounded-[8px] px-3 py-1 text-sm font-medium transition-colors disabled:pointer-events-none disabled:opacity-50 data-[state=active]:bg-card data-[state=active]:text-brand',
       className,
     )}
     {...props}

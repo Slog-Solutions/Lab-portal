@@ -60,6 +60,16 @@
   --color-status-pending: #C98A2B;
   --color-status-info: #1F6F8B;
 
+  /* ---- Chart series ----------------------------------------------- */
+  /* Categorical, assigned in this fixed order — never cycled. Validated
+   * (dataviz validate_palette, light, surface #FFFDF8): lightness band,
+   * chroma floor, CVD ΔE ≥ 9, normal-vision ΔE ≥ 23, ≥ 3:1 contrast.
+   * Status colours stay reserved for station/session state. */
+  --color-chart-1: #0F8062;
+  --color-chart-2: #C0501F;
+  --color-chart-3: #3566C9;
+  --color-chart-grid: rgba(11, 46, 34, 0.08);
+
   /* ---- Aliases (pre-existing names, kept so components/bento/* and
    * ui/card.tsx re-skin without being edited) ------------------------ */
   --color-canvas: #FDF6E9;
@@ -73,8 +83,9 @@
   --color-hairline-on-dark: rgba(248, 231, 201, 0.16);
 
   /* ---- Radii ------------------------------------------------------ */
-  --radius-card: 24px;
+  --radius-card: 14px;           /* flat console cards; see DESIGN_SYSTEM.md §5 */
   --radius-control: 12px;
+  --radius-field: 6px;               /* text fields, selects, textareas — rectangular */
   --radius-pill: 999px;
 
   /* ---- Spacing ---------------------------------------------------- */
@@ -184,6 +195,40 @@ body {
 
 .sheet-content[data-state='open'] {
   animation: sheet-in-left 180ms ease-out;
+}
+
+/*
+ * Sidebar menu scrollbar: no track, and the thumb only shows while the
+ * pointer is over the sidebar. The width stays reserved (only the colour
+ * changes), so nothing shifts when it appears. `scrollbar-color` is the
+ * standard property (Chromium 121+ ignores ::-webkit-scrollbar when it is
+ * set); the -webkit rules cover older engines.
+ */
+.sidebar-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+
+.sidebar-scroll:hover {
+  scrollbar-color: color-mix(in srgb, var(--color-cream) 32%, transparent) transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar {
+  width: 6px;
+}
+
+.sidebar-scroll::-webkit-scrollbar-track,
+.sidebar-scroll::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+.sidebar-scroll::-webkit-scrollbar-thumb {
+  background: transparent;
+  border-radius: var(--radius-pill);
+}
+
+.sidebar-scroll:hover::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, var(--color-cream) 32%, transparent);
 }
 
 /* Offline dictionary IPA text — Noto Sans now genuinely covers IPA

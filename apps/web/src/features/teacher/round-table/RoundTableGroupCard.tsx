@@ -6,6 +6,7 @@ import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { mmss, useNow } from '../../../lib/use-now';
 import type { RoundTableGroupOverview } from '../../../lib/round-table-api';
+import { NativeSelect } from '@/components/ui/native-select';
 
 type Member = RoundTableGroupOverview['members'][number];
 
@@ -173,14 +174,14 @@ export function RoundTableGroupCard({
 
         {running && (
           <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
-            <select aria-label="Give floor to" value={grantTo} onChange={(e) => setGrantTo(e.target.value)} className="h-8 rounded-md border border-input bg-background px-2 text-sm">
+            <NativeSelect aria-label="Give floor to" value={grantTo} onChange={(e) => setGrantTo(e.target.value)} compact>
               <option value="">Give floor to…</option>
               {nonChair.map((m) => (
                 <option key={m.stationId} value={m.stationId}>
                   {who(m)}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
             <Button
               size="sm"
               disabled={busy || !grantTo}
@@ -201,14 +202,14 @@ export function RoundTableGroupCard({
         )}
         {live && (
           <div className="flex flex-wrap items-center gap-2">
-            <select aria-label="Change chairman" value={newChair} onChange={(e) => setNewChair(e.target.value)} className="h-8 rounded-md border border-input bg-background px-2 text-sm">
+            <NativeSelect aria-label="Change chairman" value={newChair} onChange={(e) => setNewChair(e.target.value)} compact>
               <option value="">Change chairman…</option>
               {nonChair.map((m) => (
                 <option key={m.stationId} value={m.stationId}>
                   {who(m)}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
             <Button
               size="sm"
               variant="outline"

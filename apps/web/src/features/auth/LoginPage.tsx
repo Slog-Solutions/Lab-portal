@@ -61,7 +61,7 @@ export function LoginPage() {
       <div className="flex min-h-dvh flex-col px-6 sm:px-12 lg:min-h-0">
         <main className="flex flex-1 items-center py-8">
           <div className="mx-auto w-full max-w-[400px]">
-            <BrandLogo variant="small" className="mb-8 w-20" />
+            <BrandLogo variant="full" className="mx-auto mb-8 w-48" />
             <h1 className="text-[28px] font-semibold leading-tight tracking-tight">Sign in to your console</h1>
             <p className="mt-2 text-sm text-muted-foreground">
               Enter your service number and password to continue.

@@ -1,4 +1,8 @@
 import { useQuery } from '@tanstack/react-query';
+import { ArrowLeft } from 'lucide-react';
+import { PageTitle } from '@/components/layout/PageTitle';
+import { Panel } from '@/components/layout/Panel';
+import { Button } from '@/components/ui/button';
 import { Link, useLocation } from 'react-router-dom';
 import { seatLabel, type StationStatusRow } from '@lab/shared';
 import { apiFetch } from '../../lib/api-client';
@@ -42,22 +46,29 @@ export function SessionBuilderPage() {
     // <Outlet>, so a full-bleed dark background painted a black box in the
     // middle of the layout.
     <div className="text-foreground">
-      <header className="mb-6 flex items-center justify-between">
-        <h1 className="text-lg font-semibold">Session Builder</h1>
-        <Link to="/dashboard" className="text-sm text-brand hover:underline">
-          ← Lab Control Console
-        </Link>
-      </header>
+      <PageTitle
+        title="Sessions"
+        subtitle="Run up to six group activities side by side — pick the seats, then arm and start"
+        breadcrumbs={[{ label: 'Lab control', to: '/dashboard' }, { label: 'Sessions' }]}
+        actions={
+          <Button asChild variant="outline" size="sm">
+            <Link to="/dashboard">
+              <ArrowLeft />
+              Lab control
+            </Link>
+          </Button>
+        }
+      />
 
-      <section className="mb-8 rounded-card border border-hairline bg-card p-4">
-        <h2 className="mb-3 text-sm font-semibold text-muted-foreground">New Session</h2>
-        <SessionComposer batches={batches} candidates={candidates} emptyText="No stations online yet." initialGroups={initialGroups} />
-      </section>
+      <div className="space-y-grid-gap">
+        <Panel title="New session" description="Name it, choose the class, then set up each group">
+          <SessionComposer batches={batches} candidates={candidates} emptyText="No stations online yet." initialGroups={initialGroups} />
+        </Panel>
 
-      <section>
-        <h2 className="mb-3 text-sm font-semibold text-muted-foreground">Sessions</h2>
-        <SessionList />
-      </section>
+        <Panel title="All sessions" description="Arm, start, pause and end sessions; listen in on any group">
+          <SessionList />
+        </Panel>
+      </div>
     </div>
   );
 }

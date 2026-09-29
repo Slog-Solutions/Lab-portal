@@ -7,7 +7,7 @@ import { getLiveKitUrl } from '../../lib/runtime-config';
 /**
  * Teacher-side preview of a spotlighted student's screen (Ser 1 "broadcast
  * any student's screen to others"). By the time this renders,
- * StatusBoardPage has already called POST /control/promote-screen — the
+ * ClassControlPage has already called POST /control/promote-screen — the
  * student's screen is already live in `room` — so this component only
  * WATCHES it with a hidden, subscribe-only viewer token, the same
  * hidden-token pattern GroupMonitorButton uses for audio, rendering video
