@@ -2,15 +2,19 @@ import * as React from 'react';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { cn } from '@/lib/utils';
 
-const badgeVariants = cva('inline-flex items-center rounded-md border px-2 py-0.5 text-xs font-medium transition-colors', {
+const badgeVariants = cva('inline-flex items-center rounded-pill border px-2 py-0.5 text-xs font-medium transition-colors', {
   variants: {
     variant: {
-      default: 'border-transparent bg-primary text-primary-foreground',
-      secondary: 'border-transparent bg-secondary text-secondary-foreground',
+      default: 'border-transparent bg-brand text-brand-ink',
+      secondary: 'border-transparent bg-cream text-brand',
       destructive: 'border-transparent bg-destructive text-destructive-foreground',
       outline: 'border-border text-foreground',
-      success: 'border-transparent bg-emerald-600 text-white',
-      warning: 'border-transparent bg-amber-600 text-white',
+      // Status variants route through the status-* tokens rather than the
+      // stock emerald/amber palette, so a badge and a status dot elsewhere on
+      // the same screen are guaranteed to be the same colour.
+      success: 'border-transparent bg-status-online text-white',
+      warning: 'border-transparent bg-status-pending text-white',
+      info: 'border-transparent bg-status-info text-white',
     },
   },
   defaultVariants: { variant: 'default' },

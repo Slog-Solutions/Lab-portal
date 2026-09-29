@@ -1,118 +1,169 @@
 @import 'tailwindcss';
 
 /*
- * Design System — Lime Bento Dashboard
- * Follows DESIGN_SYSTEM_LIME_BENTO.md exact color tokens, typography,
- * radiuses, and bento grid foundations.
+ * Design System — Digital Language Lab
+ * See DESIGN_SYSTEM.md. Tokens are derived from the logo: deep green
+ * #064E3B and cream #F8E7C9.
+ *
+ * Tailwind v4: this @theme block IS the config. There is no
+ * tailwind.config.ts and no postcss.config.* in this repo — every token
+ * below is declared here and nowhere else, and v4 emits them onto :root
+ * automatically (so do not hand-write a duplicate :root block).
  */
 @theme {
-  /* Canvas */
-  --color-canvas: #A9AF98;
+  /* ---- Brand ------------------------------------------------------ */
+  --color-brand: #064E3B;            /* logo green — chrome, primary CTAs */
+  --color-brand-hover: #053D2E;      /* hover/pressed on green fills */
+  --color-brand-muted: #0A6B51;      /* icons + secondary marks on green */
+  --color-brand-ink: #F8E7C9;        /* cream — text/icons ON green */
+  --color-brand-ink-muted: #AFC6B8;  /* de-emphasised text on green */
+  --color-brand-soft: #E7EFEA;       /* green-tinted chip bg on light */
 
-  /* Accent (use sparingly — active states, primary CTAs, key metrics only) */
-  --color-accent: #D7F83C;
-  --color-accent-ink: #14150F;
+  --color-cream: #F8E7C9;            /* logo cream — highlight chips */
+  --color-cream-deep: #F1DCB8;       /* hover on cream fills */
 
-  /* Dark surface (stat cards, high-emphasis panels) */
-  --color-surface-dark: #17181A;
-  --color-surface-dark-ink: #F5F5F0;
-  --color-surface-dark-ink-muted: #9A9C97;
+  /* ---- Semantic --------------------------------------------------- */
+  /* Never pure black or pure white — both are softened toward the brand. */
+  --color-background: #FDF6E9;       /* cream canvas */
+  --color-foreground: #0B2E22;       /* green-black ink */
+  --color-card: #FFFDF8;
+  --color-card-foreground: #0B2E22;
+  --color-popover: #FFFDF8;
+  --color-popover-foreground: #0B2E22;
+  --color-primary: #064E3B;
+  --color-primary-foreground: #F8E7C9;
+  --color-secondary: #F8E7C9;
+  --color-secondary-foreground: #064E3B;
+  --color-muted: #F2EADA;
+  --color-muted-foreground: #5C6B63;
+  --color-destructive: #B3402E;
+  --color-destructive-foreground: #FDF6E9;
+  --color-border: rgba(11, 46, 34, 0.10);
+  --color-input: rgba(11, 46, 34, 0.16);
+  --color-ring: #064E3B;
 
-  /* Light surface (default cards) */
-  --color-surface-light: #F4F4EF;
-  --color-surface-light-ink: #14150F;
-  --color-surface-light-ink-muted: #6E7066;
+  /*
+   * `accent` is a HOVER/FOCUS SURFACE, not a shout. Every one of its ~19
+   * uses in this codebase is `hover:bg-accent` / `focus:bg-accent`
+   * (ui/button.tsx, ui/select.tsx, StudentDrawer, DictionaryPanel, ...).
+   * accent-foreground was referenced in 4 places but never defined, which
+   * left those elements rendering unstyled text on the old acid lime.
+   */
+  --color-accent: #F1E3CB;
+  --color-accent-foreground: #064E3B;
 
-  /* Borders / dividers — used sparingly, most separation is spacing not lines */
-  --color-hairline: rgba(20, 21, 15, 0.08);
-  --color-hairline-on-dark: rgba(245, 245, 240, 0.12);
+  /* ---- Status ----------------------------------------------------- */
+  /* `online` is deliberately brighter/more saturated than --color-brand
+   * so a status dot still reads when placed on the green chrome. */
+  --color-status-online: #15803D;
+  --color-status-offline: #B3402E;
+  --color-status-pending: #C98A2B;
+  --color-status-info: #1F6F8B;
 
-  /* Status */
-  --color-status-online: #6FCF6F;
-  --color-status-offline: #C9503F;
-  --color-status-pending: #E0B84A;
+  /* ---- Aliases (pre-existing names, kept so components/bento/* and
+   * ui/card.tsx re-skin without being edited) ------------------------ */
+  --color-canvas: #FDF6E9;
+  --color-surface-light: #FFFDF8;
+  --color-surface-light-ink: #0B2E22;
+  --color-surface-light-ink-muted: #5C6B63;
+  --color-surface-dark: #064E3B;     /* green is now the "dark" surface */
+  --color-surface-dark-ink: #F8E7C9;
+  --color-surface-dark-ink-muted: #AFC6B8;
+  --color-hairline: rgba(11, 46, 34, 0.10);
+  --color-hairline-on-dark: rgba(248, 231, 201, 0.16);
 
-  /* Radii */
-  --radius-card: 28px;
+  /* ---- Radii ------------------------------------------------------ */
+  --radius-card: 24px;
+  --radius-control: 12px;
   --radius-pill: 999px;
-  --radius-control: 16px;
 
-  /* Typography */
-  --font-sans: 'General Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  /* ---- Spacing ---------------------------------------------------- */
+  /* In @theme (not :root) so these generate named spacing utilities. */
+  --spacing-card-padding: 24px;
+  --spacing-grid-gap: 16px;
 
-  /* Semantic theme tokens */
-  --color-background: #A9AF98;
-  --color-foreground: #14150F;
-  --color-card: #F4F4EF;
-  --color-card-foreground: #14150F;
-  --color-popover: #F4F4EF;
-  --color-popover-foreground: #14150F;
-  --color-primary: #17181A;
-  --color-primary-foreground: #F5F5F0;
-  --color-secondary: #E5E8DC;
-  --color-secondary-foreground: #14150F;
-  --color-muted: #DFE2D6;
-  --color-muted-foreground: #6E7066;
-  --color-destructive: #C9503F;
-  --color-destructive-foreground: #F5F5F0;
-  --color-border: rgba(20, 21, 15, 0.08);
-  --color-input: rgba(20, 21, 15, 0.14);
-  --color-ring: #17181A;
+  /* ---- Typography ------------------------------------------------- */
+  --font-sans: 'Noto Sans', 'Segoe UI', system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
 }
 
 :root {
-  --color-canvas: #A9AF98;
-  --color-accent: #D7F83C;
-  --color-accent-ink: #14150F;
-  --color-surface-dark: #17181A;
-  --color-surface-dark-ink: #F5F5F0;
-  --color-surface-dark-ink-muted: #9A9C97;
-  --color-surface-light: #F4F4EF;
-  --color-surface-light-ink: #14150F;
-  --color-surface-light-ink-muted: #6E7066;
-  --color-hairline: rgba(20, 21, 15, 0.08);
-  --color-hairline-on-dark: rgba(245, 245, 240, 0.12);
-  --color-status-online: #6FCF6F;
-  --color-status-offline: #C9503F;
-  --color-status-pending: #E0B84A;
-
-  --radius-card: 28px;
-  --radius-pill: 999px;
-  --radius-control: 16px;
-  --space-card-padding: 24px;
-  --space-grid-gap: 16px;
-
   color-scheme: light;
 }
 
+/*
+ * Noto Sans — vendored, NOT loaded from a CDN. This deployment is
+ * air-gapped; see DESIGN_SYSTEM.md §3.
+ *
+ * Paths are RELATIVE on purpose. vite.config.ts sets `base: './'` so the
+ * same build works over Electron's app:// scheme, and Vite only rewrites
+ * relative url() in CSS — a root-absolute `/fonts/...` is left untouched
+ * and 404s under app://.
+ *
+ * latin-ext covers U+0100–02BA, which includes IPA Extensions
+ * (U+0250–02AF) needed by .font-ipa in the offline dictionary.
+ */
 @font-face {
-  font-family: 'General Sans';
-  src: url('/assets/fonts/GeneralSans-Variable.woff2') format('woff2-variations');
-  font-weight: 200 700;
+  font-family: 'Noto Sans';
+  font-style: normal;
+  font-weight: 100 900;
   font-display: swap;
+  src: url('../assets/fonts/NotoSans-Variable.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Noto Sans';
+  font-style: normal;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../assets/fonts/NotoSans-LatinExt-Variable.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
+}
+
+@font-face {
+  font-family: 'Noto Sans';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../assets/fonts/NotoSans-Italic-Variable.woff2') format('woff2');
+  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+@font-face {
+  font-family: 'Noto Sans';
+  font-style: italic;
+  font-weight: 100 900;
+  font-display: swap;
+  src: url('../assets/fonts/NotoSans-Italic-LatinExt-Variable.woff2') format('woff2');
+  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
 }
 
 body {
   margin: 0;
   background-color: var(--color-canvas);
-  color: var(--color-surface-light-ink);
-  font-family: 'General Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color: var(--color-foreground);
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
 }
 
-/* Hero number & typography helpers per DESIGN_SYSTEM_LIME_BENTO.md §3 */
+/*
+ * Typography helpers — DESIGN_SYSTEM.md §3.
+ * Tracking is looser than the previous (General Sans) values: Noto Sans is
+ * a humanist sans with a large x-height and wider letterforms, and the old
+ * -0.025em collapsed its numerals.
+ */
 .text-hero-num {
   font-size: clamp(2.25rem, 3.2vw, 3rem);
   line-height: 1.05;
-  font-weight: 600;
-  letter-spacing: -0.025em;
+  font-weight: 700;
+  letter-spacing: -0.01em;
 }
 
 .text-card-title {
   font-size: 1.25rem;
   line-height: 1.2;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.005em;
 }
 
 .text-section-label {
@@ -135,7 +186,22 @@ body {
   animation: sheet-in-left 180ms ease-out;
 }
 
-/* Offline dictionary IPA text */
+/* Offline dictionary IPA text — Noto Sans now genuinely covers IPA
+ * Extensions via the latin-ext subset above, so it leads the stack. */
 .font-ipa {
-  font-family: 'Charis SIL', 'Doulos SIL', 'Segoe UI', 'Noto Sans', sans-serif;
+  font-family: 'Noto Sans', 'Charis SIL', 'Doulos SIL', 'Segoe UI', sans-serif;
+}
+
+/*
+ * Browser autofill paints saved credentials with its own pale-blue fill,
+ * which clashes with the cream palette. Delaying the background transition
+ * keeps our surface without the inset-box-shadow hack (that would clobber
+ * the Tailwind focus ring, which is also a box-shadow).
+ */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-text-fill-color: var(--color-foreground);
+  caret-color: var(--color-foreground);
+  transition: background-color 600000s 0s, color 600000s 0s;
 }

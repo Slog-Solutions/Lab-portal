@@ -93,7 +93,7 @@ export function LiveClassCard({ classId, batchName }: { classId: string; batchNa
         ) : (
           <>
             {isOtherClass && (
-              <p className="text-xs text-amber-600 dark:text-amber-400">
+              <p className="text-xs text-status-pending">
                 You have a different live session running (&quot;{currentClass!.title}&quot;). Starting this one extends it to also
                 auto-join {batchName} — students already in it stay connected.
               </p>

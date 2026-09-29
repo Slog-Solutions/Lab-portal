@@ -51,7 +51,7 @@ function TextView({ url, height }: { url: string; height: string }) {
 
   if (state.failed) {
     return (
-      <p className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+      <p className="flex items-center gap-1.5 text-xs text-status-pending">
         <AlertTriangle className="h-3.5 w-3.5" /> Could not read this file.
       </p>
     );

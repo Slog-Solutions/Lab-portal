@@ -38,21 +38,24 @@ export function SessionBuilderPage() {
     preselected && preselected.length > 0 ? [{ ...emptyGroup(1, 'ROUND_TABLE'), memberStationIds: preselected }] : undefined;
 
   return (
-    <div className="min-h-screen bg-slate-950 p-8 text-slate-50">
+    // No min-h-screen / dark wrapper: this page renders inside TeacherLayout's
+    // <Outlet>, so a full-bleed dark background painted a black box in the
+    // middle of the layout.
+    <div className="text-foreground">
       <header className="mb-6 flex items-center justify-between">
         <h1 className="text-lg font-semibold">Session Builder</h1>
-        <Link to="/dashboard" className="text-sm text-sky-400 hover:underline">
+        <Link to="/dashboard" className="text-sm text-brand hover:underline">
           ← Lab Control Console
         </Link>
       </header>
 
-      <section className="mb-8 rounded-lg border border-slate-800 bg-slate-900 p-4">
-        <h2 className="mb-3 text-sm font-semibold text-slate-300">New Session</h2>
+      <section className="mb-8 rounded-card border border-hairline bg-card p-4">
+        <h2 className="mb-3 text-sm font-semibold text-muted-foreground">New Session</h2>
         <SessionComposer batches={batches} candidates={candidates} emptyText="No stations online yet." initialGroups={initialGroups} />
       </section>
 
       <section>
-        <h2 className="mb-3 text-sm font-semibold text-slate-300">Sessions</h2>
+        <h2 className="mb-3 text-sm font-semibold text-muted-foreground">Sessions</h2>
         <SessionList />
       </section>
     </div>

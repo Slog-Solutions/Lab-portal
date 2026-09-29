@@ -83,7 +83,7 @@ export function StudentDrawer({
                 onOpenChange(false);
               }}
               className={cn(
-                'flex w-full items-center gap-2 rounded-md px-3 py-2 text-left text-sm font-medium transition-colors',
+                'flex w-full items-center gap-2 rounded-control px-3 py-2 text-left text-sm font-medium transition-colors',
                 item === section
                   ? 'bg-accent text-accent-foreground'
                   : 'text-muted-foreground hover:bg-accent/50 hover:text-foreground',
@@ -92,8 +92,8 @@ export function StudentDrawer({
               <Icon className="h-4 w-4" />
               <span className="flex-1">{SECTION_TITLES[item]}</span>
               {item === 'class' && inLiveClass && (
-                <span className="flex items-center gap-1 text-xs font-semibold text-emerald-400">
-                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-400" />
+                <span className="flex items-center gap-1 text-xs font-semibold text-status-online">
+                  <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-status-online" />
                   Live
                 </span>
               )}

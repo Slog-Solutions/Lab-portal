@@ -39,7 +39,7 @@ export function DocumentPreview({ assetId }: { assetId: string }) {
   if (state.url) return <AssetViewer kind="pdf" url={state.url} title="Document" height="20rem" />;
   if (state.failed) {
     return (
-      <p className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+      <p className="flex items-center gap-1.5 text-xs text-status-pending">
         <AlertTriangle className="h-3.5 w-3.5" /> Could not load the document.
       </p>
     );

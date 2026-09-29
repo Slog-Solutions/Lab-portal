@@ -34,7 +34,7 @@ export function AudioPreview({ assetId }: { assetId: string }) {
   if (state.url) return <audio controls src={state.url} className="h-9 w-full" />;
   if (state.failed) {
     return (
-      <p className="flex items-center gap-1.5 text-xs text-amber-600 dark:text-amber-400">
+      <p className="flex items-center gap-1.5 text-xs text-status-pending">
         <AlertTriangle className="h-3.5 w-3.5" /> Could not load the audio.
       </p>
     );

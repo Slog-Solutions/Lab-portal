@@ -498,7 +498,7 @@ function CreateAssignmentForm({ kind }: { kind: AssignmentKind }) {
 
             {create.isError && <p className="text-sm text-destructive">{create.error instanceof Error ? create.error.message : 'Could not create the assignment'}</p>}
             {created && (
-              <p className="flex flex-wrap items-center gap-1.5 text-sm text-emerald-600 dark:text-emerald-400">
+              <p className="flex flex-wrap items-center gap-1.5 text-sm text-status-online">
                 <CheckCircle2 className="h-4 w-4" />
                 Sent to {created.assigned} {created.assigned === 1 ? 'student' : 'students'}.
                 <Link to={`/assignments/${kind.slug}/${created.exerciseId}`} className="font-medium underline">
