@@ -1,11 +1,13 @@
-import { BadRequestException, Body, Controller, Get, Param, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Post, Put, Query } from '@nestjs/common';
 import {
   ActivityType,
   UserRole,
   zCreateAssessmentDto,
   zGradeAssessmentDto,
+  zUpdateVocabTestDto,
   type CreateAssessmentDto,
   type GradeAssessmentDto,
+  type UpdateVocabTestDto,
 } from '@lab/shared';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -37,6 +39,20 @@ export class AssessmentsController {
   @Get(':id')
   get(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
     return this.assessments.get(id, { id: user.sub, role: user.role });
+  }
+
+  /** SPEC-mcq-test-timed-reveal.md §7.1 — re-edit a saved vocabulary test.
+   * Refused (409) once it is no longer `editable` (see get()'s own doc
+   * comment). */
+  @Put(':id')
+  update(@Param('id') id: string, @Body(new ZodValidationPipe(zUpdateVocabTestDto)) dto: UpdateVocabTestDto, @CurrentUser() user: JwtPayload) {
+    return this.assessments.update(id, dto, { id: user.sub, role: user.role });
+  }
+
+  /** The ON_TEACHER_RELEASE manual step for the assignment/individual path. */
+  @Post(':id/release')
+  release(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    return this.assessments.releaseResults(id, { id: user.sub, role: user.role });
   }
 
   @Post('attempts/:attemptId/grade')

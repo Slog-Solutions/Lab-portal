@@ -128,6 +128,15 @@ export interface ServerToStationEvents {
   'rt:floor': (payload: RoundTableFloor) => void;
   /** A rejected Round Table action (not your turn, not chairman, ...). */
   'rt:error': (payload: { groupId: string; message: string }) => void;
+  /** SPEC-mcq-test-timed-reveal.md §5.4 — the teacher moved `closesAt`
+   * (Extend, or the close scheduler just closed it). A hint only: the
+   * authoritative value is always the next `session:snapshot`'s
+   * `activity.timedTest.closesAt` — a station that missed this event (or
+   * reconnected after it) still converges correctly. */
+  'test:closing': (payload: { activityInstanceId: string; closesAt: number; serverNow: number }) => void;
+  /** The close sequence finished revealing this instance's results —
+   * fetch/refetch `GET /attempts/:id/result` now. */
+  'test:revealed': (payload: { activityInstanceId: string }) => void;
 }
 
 // ---- Server -> Teacher / Admin dashboards -----------------------------------------

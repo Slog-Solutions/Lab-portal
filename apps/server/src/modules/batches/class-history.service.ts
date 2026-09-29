@@ -1,10 +1,10 @@
 import { ForbiddenException, Injectable } from '@nestjs/common';
 import {
+  ActivityType,
+  AttemptStatus,
   NO_WRITTEN_FEEDBACK,
   RecordingKind,
   SessionState,
-  type ActivityType,
-  type AttemptStatus,
   type ClassActivityEntry,
   type ClassAssignmentEntry,
   type ClassHistoryView,
@@ -200,14 +200,31 @@ export class ClassHistoryService {
         attempts: {
           orderBy: { startedAt: 'desc' },
           take: 1,
-          select: { status: true, rawScore: true, maxScore: true, submittedAt: true, scoreOverride: { select: { reason: true } } },
+          select: {
+            status: true,
+            rawScore: true,
+            maxScore: true,
+            submittedAt: true,
+            revealAt: true,
+            scoreOverride: { select: { reason: true } },
+          },
         },
       },
       orderBy: { createdAt: 'desc' },
     });
+    const now = new Date();
     return rows.map((a) => {
       const latest = a.attempts[0];
       const reason = latest?.scoreOverride?.reason;
+      // SPEC-mcq-test-timed-reveal.md — a class-history entry is the same
+      // "must never carry the answer key/score before reveal" wire the
+      // student's own AssignmentsPanel is, so it gets the same mask:
+      // SCORED but not yet revealed reads as SUBMITTED with no score.
+      const pending =
+        latest &&
+        a.exercise.type === ActivityType.VOCABULARY_TEST &&
+        latest.status === AttemptStatus.SCORED &&
+        (latest.revealAt === null || latest.revealAt > now);
       return {
         assignmentId: a.id,
         title: a.exercise.title,
@@ -217,11 +234,13 @@ export class ClassHistoryService {
         createdAt: a.createdAt.toISOString(),
         latestAttempt: latest
           ? {
-              status: latest.status as AttemptStatus,
+              status: pending ? AttemptStatus.SUBMITTED : (latest.status as AttemptStatus),
               percent:
-                latest.rawScore !== null && latest.maxScore ? Math.round((latest.rawScore / latest.maxScore) * 100) : null,
+                !pending && latest.rawScore !== null && latest.maxScore
+                  ? Math.round((latest.rawScore / latest.maxScore) * 100)
+                  : null,
               submittedAt: latest.submittedAt?.toISOString() ?? null,
-              feedback: reason && reason !== NO_WRITTEN_FEEDBACK ? reason : null,
+              feedback: !pending && reason && reason !== NO_WRITTEN_FEEDBACK ? reason : null,
             }
           : null,
       };

@@ -31,28 +31,28 @@ model User {
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
 
-  enrollments      Enrollment[]
-  taughtSessions    ClassSession[]     @relation("SessionTeacher")
-  mediaAssets       MediaAsset[]
-  contentPackages   ContentPackage[]
-  curricula         Curriculum[]
-  exercisesAuthored Exercise[]         @relation("ExerciseTeacher")
-  assignmentsGiven  Assignment[]       @relation("AssignmentTeacher")
+  enrollments         Enrollment[]
+  taughtSessions      ClassSession[]   @relation("SessionTeacher")
+  mediaAssets         MediaAsset[]
+  contentPackages     ContentPackage[]
+  curricula           Curriculum[]
+  exercisesAuthored   Exercise[]       @relation("ExerciseTeacher")
+  assignmentsGiven    Assignment[]     @relation("AssignmentTeacher")
   assignmentsReceived Assignment[]     @relation("AssignmentStudent")
-  attempts          Attempt[]
-  scoreOverrides    ScoreOverride[]
-  auditLogs         AuditLog[]
-  claimedStation    Station?
-  studyProgress     SkillProgress[]
-  batchesTaught     BatchTeacher[]     @relation("BatchTeacher")
-  liveClasses       LiveClass[]        @relation("LiveClassTeacher")
+  attempts            Attempt[]
+  scoreOverrides      ScoreOverride[]
+  auditLogs           AuditLog[]
+  claimedStation      Station?
+  studyProgress       SkillProgress[]
+  batchesTaught       BatchTeacher[]   @relation("BatchTeacher")
+  liveClasses         LiveClass[]      @relation("LiveClassTeacher")
   // A lock persisted against the student themself — follows them to
   // whatever seat they sign into (see LockGrant's doc comment).
-  lockGrant         LockGrant?         @relation("LockSubject")
-  locksIssued       LockGrant[]        @relation("LockIssuer")
-  sessionMemberships SessionMember[]   @relation("SessionMemberStudent")
+  lockGrant           LockGrant?       @relation("LockSubject")
+  locksIssued         LockGrant[]      @relation("LockIssuer")
+  sessionMemberships  SessionMember[]  @relation("SessionMemberStudent")
   // CLASS_BROADCAST recordings this user (teacher/admin) started.
-  createdRecordings  Recording[]       @relation("RecordingCreatedBy")
+  createdRecordings   Recording[]      @relation("RecordingCreatedBy")
 
   @@index([role])
 }
@@ -123,29 +123,29 @@ enum StationLifecycle {
 // Identity is machineGuid (HKLM MachineGuid — stable across rename/NIC
 // swap, see design doc §3.7), NOT hostname or MAC. Seat 1 = teacher.
 model Station {
-  id           String            @id @default(cuid())
-  machineGuid  String            @unique
-  hostname     String
-  macs         String[]
-  seatNo       Int?              @unique
-  lifecycle    StationLifecycle  @default(UNCLAIMED)
-  appVersion   String?
-  osBuild      String?
-  lastIp       String?
-  lastSeenAt   DateTime?
+  id            String           @id @default(cuid())
+  machineGuid   String           @unique
+  hostname      String
+  macs          String[]
+  seatNo        Int?             @unique
+  lifecycle     StationLifecycle @default(UNCLAIMED)
+  appVersion    String?
+  osBuild       String?
+  lastIp        String?
+  lastSeenAt    DateTime?
   currentUserId String?          @unique
-  currentUser  User?             @relation(fields: [currentUserId], references: [id])
+  currentUser   User?            @relation(fields: [currentUserId], references: [id])
   // Cleared together with currentUserId. Signing in needs no classroom code:
   // a claimed station may have no class at all until its student attaches it
   // to a teacher's live class (StationsService.attachToLiveClass). SetNull
   // rather than Cascade: a deleted LiveClass must not delete the Station row
   // it happened to seat.
-  liveClassId  String?
-  liveClass    LiveClass?        @relation(fields: [liveClassId], references: [id], onDelete: SetNull)
-  enabled      Boolean           @default(true)
-  archivedAt   DateTime?         // set when "replace station" supersedes this row
-  createdAt    DateTime          @default(now())
-  updatedAt    DateTime          @updatedAt
+  liveClassId   String?
+  liveClass     LiveClass?       @relation(fields: [liveClassId], references: [id], onDelete: SetNull)
+  enabled       Boolean          @default(true)
+  archivedAt    DateTime? // set when "replace station" supersedes this row
+  createdAt     DateTime         @default(now())
+  updatedAt     DateTime         @updatedAt
 
   sessionMembers SessionMember[]
   recordings     Recording[]
@@ -171,13 +171,13 @@ enum LiveClassState {
 // plan) — LiveClass is the lighter-weight "who's in the room right now"
 // grouping that gates classroom-control scope and sign-in itself.
 model LiveClass {
-  id        String          @id @default(cuid())
-  code      String          @unique
+  id        String         @id @default(cuid())
+  code      String         @unique
   title     String
   teacherId String
-  teacher   User            @relation("LiveClassTeacher", fields: [teacherId], references: [id])
-  state     LiveClassState  @default(ACTIVE)
-  startedAt DateTime        @default(now())
+  teacher   User           @relation("LiveClassTeacher", fields: [teacherId], references: [id])
+  state     LiveClassState @default(ACTIVE)
+  startedAt DateTime       @default(now())
   endedAt   DateTime?
   // Set when a teacher starts this live class FROM a specific My Classes
   // roster ("Start Live Class" on ClassDetailPage) rather than ad hoc from
@@ -189,9 +189,9 @@ model LiveClass {
   // still needs a typed code). SetNull rather than Cascade — deleting a
   // Batch must not delete a LiveClass row a station may still reference.
   batchId   String?
-  batch     Batch?          @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  batch     Batch?         @relation(fields: [batchId], references: [id], onDelete: SetNull)
 
-  stations Station[]
+  stations   Station[]
   // CLASS_BROADCAST recordings made while this class was live.
   recordings Recording[]
 
@@ -283,12 +283,12 @@ model ClassSession {
 }
 
 model SessionGroup {
-  id          String   @id @default(cuid())
-  sessionId   String
-  session     ClassSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
-  index       Int      // 1-6, position within the session
-  chairmanId  String?  // SessionMember.id of the designated chairman (Ser 3)
-  createdAt   DateTime @default(now())
+  id         String       @id @default(cuid())
+  sessionId  String
+  session    ClassSession @relation(fields: [sessionId], references: [id], onDelete: Cascade)
+  index      Int // 1-6, position within the session
+  chairmanId String? // SessionMember.id of the designated chairman (Ser 3)
+  createdAt  DateTime     @default(now())
 
   members  SessionMember[]
   activity ActivityInstance?
@@ -318,14 +318,14 @@ model SessionMember {
 // JSON validated at the boundary against that ActivityType's zod schema
 // in packages/shared/src/activities (Activity Type Registry).
 model ActivityInstance {
-  id        String       @id @default(cuid())
-  groupId   String       @unique
-  group     SessionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
-  type      ActivityType
-  config    Json
-  state     Json         @default("{}")
-  startedAt DateTime?
-  endedAt   DateTime?
+  id                String       @id @default(cuid())
+  groupId           String       @unique
+  group             SessionGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  type              ActivityType
+  config            Json
+  state             Json         @default("{}")
+  startedAt         DateTime?
+  endedAt           DateTime?
   // Offline dictionary (SPEC-offline-dictionary.md §7) — null means "use
   // the activity type's own default" (see resolveDictionaryEnabled in
   // @lab/shared, which defaults VOCABULARY_TEST to false and everything
@@ -334,9 +334,35 @@ model ActivityInstance {
   // config schemas (Activity Type Registry) validate away unknown keys.
   dictionaryEnabled Boolean?
 
-  attempts       Attempt[]
-  recordings     Recording[]
+  // SPEC-mcq-test-timed-reveal.md — set only for a VOCABULARY_TEST group
+  // launched via "Launch in lab" (TimedTestsService.launch), linking this
+  // one-shot live instance back to the saved Exercise it was built from
+  // (SetNull on delete: deleting the exercise must not cascade into a
+  // live/historical session). Null for every other activity, and for a
+  // vocab test built through the generic Session Builder (no longer
+  // possible going forward — see session-draft.ts — but old rows exist).
+  exerciseId  String?
+  exercise    Exercise? @relation(fields: [exerciseId], references: [id], onDelete: SetNull)
+  // Absolute epoch-ms deadline (design §4.1), persisted rather than held
+  // only in a timer — see TestCloseService's own doc comment on why.
+  closesAt    DateTime?
+  // Set once (idempotently) by TestClockService.claimClose — the single
+  // "has the close sequence for this instance already been claimed" gate
+  // every closer (sweep, Reveal now, Extend's own expiry, session end)
+  // shares, so running it twice is a no-op past this point.
+  closedAt    DateTime?
+  closeKind   String? // EXPIRED | REVEAL_NOW | NO_REVEAL | SESSION_ENDED
+  revealedAt  DateTime?
+  // Set once the reveal side effects (attempt grading + reveal + pushes)
+  // have actually run — distinct from closedAt, which only marks that no
+  // further answers are accepted. See TestCloseService.finalizeInstance.
+  finalizedAt DateTime?
+
+  attempts        Attempt[]
+  recordings      Recording[]
   roundTableTurns RoundTableTurn[]
+
+  @@index([finalizedAt, closesAt])
 }
 
 // Ser 3 Round Table: one stretch of speech, timed by the SERVER clock (ms
@@ -370,29 +396,29 @@ enum MediaAssetScope {
 // Ser 1: "media library... multi teacher access facility for sharing and
 // collaborating content resources remotely across the campus."
 model MediaAsset {
-  id          String          @id @default(cuid())
-  ownerId     String
-  owner       User            @relation(fields: [ownerId], references: [id])
-  scope       MediaAssetScope @default(PRIVATE)
-  kind        String          // 'audio' | 'video' | 'text' | 'image'
-  title       String?         // display name; falls back to filename
-  filename    String
-  path        String          // relative to LabData root — see storage.ts buildAssetPath()
-  sizeBytes   Int
-  mimeType    String
-  durationMs  Int?
+  id             String          @id @default(cuid())
+  ownerId        String
+  owner          User            @relation(fields: [ownerId], references: [id])
+  scope          MediaAssetScope @default(PRIVATE)
+  kind           String // 'audio' | 'video' | 'text' | 'image'
+  title          String? // display name; falls back to filename
+  filename       String
+  path           String // relative to LabData root — see storage.ts buildAssetPath()
+  sizeBytes      Int
+  mimeType       String
+  durationMs     Int?
   // Teacher opted this file into every student's Study Material (a loose file,
   // not attached to a module). Off by default: assets also land in the library
   // automatically (listening-test audio, generated model voice / IPA) and
   // must not leak to students. Never true for a PRIVATE asset.
-  studentVisible Boolean      @default(false)
+  studentVisible Boolean         @default(false)
   // Classes (Batch ids) the file is shown to while studentVisible is on. Empty
   // means every student. A plain list rather than a relation on purpose: a
   // relation would cascade a deleted class out of the list, and an emptied list
   // reads as "everyone" — the one exposure this must never fall into. A dangling
   // id simply matches nobody.
-  sharedBatchIds String[]      @default([])
-  createdAt   DateTime        @default(now())
+  sharedBatchIds String[]        @default([])
+  createdAt      DateTime        @default(now())
 
   items Item[]
 
@@ -407,9 +433,9 @@ model ContentPackage {
   owner      User            @relation(fields: [ownerId], references: [id])
   scope      MediaAssetScope @default(INSTITUTION)
   title      String
-  format     String          // 'SCORM12' | 'SCORM2004' | 'XAPI' | 'HTML'
-  entryPoint String          // path of the launch file, relative to `path`
-  path       String          // extracted package root, relative to LabData root
+  format     String // 'SCORM12' | 'SCORM2004' | 'XAPI' | 'HTML'
+  entryPoint String // path of the launch file, relative to `path`
+  path       String // extracted package root, relative to LabData root
   sizeBytes  Int             @default(0)
   importedAt DateTime        @default(now())
 
@@ -419,7 +445,7 @@ model ContentPackage {
 model Curriculum {
   id        String   @id @default(cuid())
   title     String
-  cefrLevel String?  // A1-C1, per Ser 10 "should follow CEFR"
+  cefrLevel String? // A1-C1, per Ser 10 "should follow CEFR"
   ownerId   String
   owner     User     @relation(fields: [ownerId], references: [id])
   createdAt DateTime @default(now())
@@ -452,18 +478,18 @@ model Lesson {
 // Self-study (Ser 1: "session modules for students... self-study even
 // when teacher not present")
 model StudyModule {
-  id          String   @id @default(cuid())
-  title       String
+  id               String   @id @default(cuid())
+  title            String
   // The teacher's own guidance on how a student should use this module to
   // prepare (what to read first, what to practise, how long to spend).
-  description String?
-  exerciseIds String[]
+  description      String?
+  exerciseIds      String[]
   // Uploaded reference files (worksheets, PDFs, audio, video, images) a
   // teacher attaches next to the practice exercises — MediaAsset ids, kept
   // as a plain list for the same reason as exerciseIds (no relation: a
   // deleted asset just drops out of the module).
   materialAssetIds String[] @default([])
-  createdAt   DateTime @default(now())
+  createdAt        DateTime @default(now())
 }
 
 // ========================================================= Assessment ===
@@ -471,25 +497,31 @@ model StudyModule {
 // Polymorphic by ActivityType; `config` validated against that type's
 // configSchema from the Activity Type Registry.
 model Exercise {
-  id        String       @id @default(cuid())
-  teacherId String
-  teacher   User         @relation("ExerciseTeacher", fields: [teacherId], references: [id])
-  lessonId  String?
-  lesson    Lesson?      @relation(fields: [lessonId], references: [id])
-  type      ActivityType
-  title     String
-  config    Json
-  createdAt DateTime     @default(now())
+  id                String       @id @default(cuid())
+  teacherId         String
+  teacher           User         @relation("ExerciseTeacher", fields: [teacherId], references: [id])
+  lessonId          String?
+  lesson            Lesson?      @relation(fields: [lessonId], references: [id])
+  type              ActivityType
+  title             String
+  config            Json
+  createdAt         DateTime     @default(now())
   // Offline dictionary (SPEC-offline-dictionary.md §7) — same
   // null-means-default convention as ActivityInstance.dictionaryEnabled,
   // for the assignment-based (self-paced) path: a VOCABULARY_TEST
   // Exercise defaults the dictionary off during an attempt at it, same as
   // a live-session VOCABULARY_TEST group.
   dictionaryEnabled Boolean?
+  // SPEC-mcq-test-timed-reveal.md §6.1 — "save without assigning": a test
+  // built in the form builder and saved, but not yet sent to anyone via
+  // Assignment (it may still be launched live via "Launch in lab"). Lets
+  // AssessmentsService.list() show it even though `assignments` is empty.
+  isAssessment      Boolean      @default(false)
 
-  itemBank    ItemBank?
-  assignments Assignment[]
-  attempts    Attempt[]
+  itemBank          ItemBank?
+  assignments       Assignment[]
+  attempts          Attempt[]
+  activityInstances ActivityInstance[]
 
   @@index([teacherId])
   @@index([type])
@@ -497,25 +529,28 @@ model Exercise {
 
 // Ser 10 "Large Test Bank": a different set of questions each attempt.
 model ItemBank {
-  id         String @id @default(cuid())
-  exerciseId String @unique
+  id         String   @id @default(cuid())
+  exerciseId String   @unique
   exercise   Exercise @relation(fields: [exerciseId], references: [id], onDelete: Cascade)
 
   items Item[]
 }
 
 model Item {
-  id          String   @id @default(cuid())
-  itemBankId  String
-  itemBank    ItemBank @relation(fields: [itemBankId], references: [id], onDelete: Cascade)
-  order       Int      @default(0) // authored order; randomization happens at serve time, not storage
-  type        String   @default("SHORT_ANSWER") // 'MCQ' | 'SHORT_ANSWER'
-  prompt      String
-  answer      String
-  choices     String[]
-  cefrTag     String?
+  id           String      @id @default(cuid())
+  itemBankId   String
+  itemBank     ItemBank    @relation(fields: [itemBankId], references: [id], onDelete: Cascade)
+  order        Int         @default(0) // authored order; randomization happens at serve time, not storage
+  type         String      @default("SHORT_ANSWER") // 'MCQ' | 'SHORT_ANSWER'
+  prompt       String
+  answer       String
+  choices      String[]
+  cefrTag      String?
   mediaAssetId String?
-  mediaAsset  MediaAsset? @relation(fields: [mediaAssetId], references: [id])
+  mediaAsset   MediaAsset? @relation(fields: [mediaAssetId], references: [id])
+  // SPEC-mcq-test-timed-reveal.md §5.2 — shown on the results screen after
+  // reveal, never before (see projectConfigForStation / getResult).
+  explanation  String?
 
   responses ItemResponse[]
 
@@ -572,13 +607,39 @@ model Attempt {
   startedAt          DateTime          @default(now())
   submittedAt        DateTime?
 
-  itemResponses  ItemResponse[]
-  scoreOverride  ScoreOverride?
-  recordings     Recording[]
+  // SPEC-mcq-test-timed-reveal.md — a copy of the deadline this attempt is
+  // bound by: the launched instance's ActivityInstance.closesAt for a
+  // cohort attempt, or `startedAt + timeLimitSec*1000` for an individual
+  // (assignment/self-study) one. Null for an untimed test. Copied rather
+  // than looked up through activityInstanceId so a single conditional
+  // `updateMany` on THIS row (see AttemptsService.saveDraft/finalizeVocabAttempt)
+  // is enough to enforce the guard — no join needed on every answer.
+  closesAt DateTime?
+  // "Results visible from this instant" — a future timestamp, not a
+  // boolean, so an individual ON_TIME_EXPIRY attempt can set this to its
+  // own closesAt at submit time with no separate release sweep. Null
+  // means "not released yet" (cohort test still running, or
+  // ON_TEACHER_RELEASE awaiting the teacher). See resolveTestPolicy.
+  revealAt DateTime?
+  // Per-attempt ServedItem[] snapshot (prompt/choices in THIS attempt's
+  // shuffled order/mediaAssetId — never the answer), so results can be
+  // shown in the order the student actually saw them without re-deriving
+  // from the exercise's current (possibly since-edited) config/bank.
+  served   Json?
+  // itemId -> given, both the in-progress draft (saveDraft) and the final
+  // submitted answers — buffered here so a disconnect never loses them
+  // (§8.1) and so an auto-submit at closesAt has something to grade.
+  answers  Json?
+
+  itemResponses ItemResponse[]
+  scoreOverride ScoreOverride?
+  recordings    Recording[]
 
   @@index([studentId])
   @@index([exerciseId])
   @@index([assignmentId])
+  @@index([activityInstanceId])
+  @@index([status, closesAt])
 }
 
 model ItemResponse {
@@ -620,12 +681,12 @@ model Recording {
   stationId          String?
   station            Station?          @relation(fields: [stationId], references: [id])
   studentIds         String[]
-  path               String?           // null until finalized
+  path               String? // null until finalized
   durationMs         Int?
   sizeBytes          Int?
   status             String            @default("pending") // pending | recording | finalizing | ready | failed
   createdAt          DateTime          @default(now())
-  finalizedAt         DateTime?
+  finalizedAt        DateTime?
 
   // CLASS_BROADCAST only, below — a teacher/admin recording, not a station one.
   liveClassId String?
@@ -644,11 +705,11 @@ model Recording {
 }
 
 model SkillProgress {
-  id        String   @id @default(cuid())
-  studentId String
-  student   User     @relation(fields: [studentId], references: [id])
-  skill     String   // 'pronunciation' | 'listening' | 'reading' | 'grammar' | ...
-  score     Float
+  id         String   @id @default(cuid())
+  studentId  String
+  student    User     @relation(fields: [studentId], references: [id])
+  skill      String // 'pronunciation' | 'listening' | 'reading' | 'grammar' | ...
+  score      Float
   recordedAt DateTime @default(now())
 
   @@index([studentId, skill])
@@ -677,14 +738,14 @@ model ScoreOverride {
 // bounded-retention telemetry table (see DICTIONARY_LOG_RETENTION_DAYS)
 // is exactly the kind of row that should degrade gracefully, not cascade.
 model DictionaryLookup {
-  id                String   @id @default(cuid())
-  stationId         String?
-  studentId         String?
-  sessionId         String?
-  word              String
-  resolvedHeadword  String?
-  found             Boolean
-  at                DateTime @default(now())
+  id               String   @id @default(cuid())
+  stationId        String?
+  studentId        String?
+  sessionId        String?
+  word             String
+  resolvedHeadword String?
+  found            Boolean
+  at               DateTime @default(now())
 
   @@index([at])
   @@index([studentId, at])

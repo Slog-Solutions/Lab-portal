@@ -10,6 +10,12 @@ export class ApiError extends Error {
      * sent one (e.g. 'BATCH_JOIN_INVALID') — lets a caller pick its own
      * wording instead of showing the server's prose. */
     public code?: string,
+    /** The rest of the response body, when the server put anything extra on
+     * it (e.g. TEST_ERROR_CODES.ALREADY_SUBMITTED's `attemptId` — see
+     * AttemptsService.startLiveTest) — a caller that needs more than
+     * message/code reads it from here rather than every failure mode
+     * growing its own ApiError subclass. */
+    public details?: Record<string, unknown>,
   ) {
     super(message);
   }
@@ -54,7 +60,7 @@ export async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> 
     // the session died, so it must not sign the student out. A bare 401 is
     // still an expired/invalid token and clears whichever store supplied it.
     if (res.status === 401 && !code) clearSource();
-    throw new ApiError(res.status, body.message ?? res.statusText, code);
+    throw new ApiError(res.status, body.message ?? res.statusText, code, body);
   }
 
   if (res.status === 204) return undefined as T;

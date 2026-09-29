@@ -81,6 +81,14 @@ export function ActivityPlayer(props: ActivityPlayerProps) {
           config={activity.config as Parameters<typeof ModelImitationActivity>[0]['config']}
         />
       );
+    case 'VOCABULARY_TEST':
+      // SPEC-mcq-test-timed-reveal.md — a launched vocabulary test is
+      // rendered by StudentConsole itself (LiveVocabularyTest, from its own
+      // `heldTest` state), not through this switch: it must keep showing
+      // the waiting/results screen even after the session ends and
+      // `snapshot.activity` goes back to null, which this switch's
+      // "only rendered while activity is truthy" contract can't do.
+      return null;
     case 'CONFERENCE_INTERPRETING':
       return (
         <ConferenceInterpretingActivity

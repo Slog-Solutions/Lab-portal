@@ -4,15 +4,20 @@ import {
   SessionRole,
   emptyDesiredState,
   resolveDictionaryEnabled,
+  resolveTestPolicy,
   seatLabel,
   type DesiredStationState,
   type RoundTableView,
+  type TimedTestState,
+  type VocabularyTestConfig,
 } from '@lab/shared';
+import { getActivity, hasActivity } from '@lab/shared/activities';
 import { BROADCAST_ROOM, classBroadcastRoom, mediaRoomForActivity } from '@lab/shared/events';
 import { PrismaService } from '../../prisma/prisma.service';
 import { MediaService } from '../media/media.service';
 import { LockService } from './lock.service';
 import { RoundTableFloorStore } from './round-table-floor.store';
+import { projectConfigForStation } from '../../common/served-config';
 
 const LOCK_HEARTBEAT_TTL_MS = 30_000; // design doc §3.3 — 30s without renewal auto-unlocks
 
@@ -90,7 +95,18 @@ export class SessionStateService {
 
     const member = await this.prisma.sessionMember.findFirst({
       where: { stationId, group: { session: { state: { in: ['ARMED', 'RUNNING', 'PAUSED'] } } } },
-      include: { group: { include: { session: true, activity: true } } },
+      include: {
+        group: {
+          include: {
+            session: true,
+            // exercise.config is what TimedTestState's reveal policy is
+            // read from (title, for the intro dialog) — this join costs
+            // nothing extra for every OTHER activity type, since
+            // exerciseId is null and Prisma just returns exercise: null.
+            activity: { include: { exercise: { select: { title: true, config: true } } } },
+          },
+        },
+      },
     });
 
     if (!member) {
@@ -122,6 +138,15 @@ export class SessionStateService {
 
     const activityType = member.group.activity?.type as ActivityType | undefined;
     const groupRoomName = mediaRoomForActivity(member.group.sessionId, member.groupId, activityType ?? '');
+    // SPEC-mcq-test-timed-reveal.md — a launched vocabulary test group has
+    // NO group room at all (registered `mediaRoom: 'none'` — see
+    // SessionsService.arm's matching skip on room creation): minting a
+    // mic-publish token into a room shared with the rest of the test's
+    // own students would open a real audio channel between them during a
+    // test, which is worse than merely cosmetic. `mediaRoomKind` mirrors
+    // SessionsService's own helper (kept local — this class has no
+    // dependency on SessionsService, and the logic is three lines).
+    const mediaRoomKind = activityType && hasActivity(activityType) ? getActivity(activityType).realtimeRequirements.mediaRoom : 'default';
     // Ser 8 Conference Interpreting (Phase 5): the shared interpreting
     // room needs per-role publish grants (interpreter/delegate publish
     // their own channel, observer is subscribe-only) — every other
@@ -131,27 +156,30 @@ export class SessionStateService {
     // floor service grants the right in place (RoundTableService), so a
     // reconnect with a fresh token can never briefly hand a member an open mic.
     const roundTable = activityType === ActivityType.ROUND_TABLE ? await this.roundTableView(member.groupId, stationId) : null;
-    const groupToken = roundTable
-      ? await this.media.mintMicGatedToken({
-          stationId,
-          displayName,
-          room: groupRoomName,
-          canPublishMic: false,
-          role: isTeacher ? 'TEACHER' : 'STUDENT',
-        })
-      : activityType === ActivityType.CONFERENCE_INTERPRETING
-        ? await this.media.mintInterpretingToken({
-            stationId,
-            displayName,
-            room: groupRoomName,
-            canPublishMic: isTeacher || member.role === SessionRole.INTERPRETER || member.role === SessionRole.DELEGATE,
-          })
-        : await this.media.mintToken({
-            stationId,
-            displayName,
-            room: groupRoomName,
-            role: isTeacher ? 'TEACHER' : 'STUDENT',
-          });
+    const groupToken =
+      mediaRoomKind === 'none'
+        ? null
+        : roundTable
+          ? await this.media.mintMicGatedToken({
+              stationId,
+              displayName,
+              room: groupRoomName,
+              canPublishMic: false,
+              role: isTeacher ? 'TEACHER' : 'STUDENT',
+            })
+          : activityType === ActivityType.CONFERENCE_INTERPRETING
+            ? await this.media.mintInterpretingToken({
+                stationId,
+                displayName,
+                room: groupRoomName,
+                canPublishMic: isTeacher || member.role === SessionRole.INTERPRETER || member.role === SessionRole.DELEGATE,
+              })
+            : await this.media.mintToken({
+                stationId,
+                displayName,
+                room: groupRoomName,
+                role: isTeacher ? 'TEACHER' : 'STUDENT',
+              });
 
     // Read right here, after the last await above (groupToken) — same
     // reasoning as the no-member branch.
@@ -165,7 +193,8 @@ export class SessionStateService {
         ? {
             type: member.group.activity.type as ActivityType,
             instanceId: member.group.activity.id,
-            config: this.sanitizeConfigForWire(member.group.activity.type as ActivityType, member.group.activity.config),
+            config: projectConfigForStation(member.group.activity.type as ActivityType, member.group.activity.config),
+            timedTest: this.timedTestState(member.group.activity, member.group.session.state),
           }
         : null,
       lock: lock ? { id: lock.id, mode: lock.mode, screen: lock.screen, input: lock.input, message: lock.message, expiresAt: Date.now() + LOCK_HEARTBEAT_TTL_MS } : null,
@@ -173,18 +202,22 @@ export class SessionStateService {
         rooms: [
           { room: BROADCAST_ROOM, token: broadcastToken, publish: { mic: true, screen: isTeacher } },
           ...(classRoomGrant ? [classRoomGrant] : []),
-          {
-            room: groupRoomName,
-            token: groupToken,
-            publish: {
-              mic: roundTable
-                ? roundTable.micAllowed
-                : activityType === ActivityType.CONFERENCE_INTERPRETING
-                  ? member.role !== SessionRole.OBSERVER
-                  : true,
-              screen: false,
-            },
-          },
+          ...(groupToken
+            ? [
+                {
+                  room: groupRoomName,
+                  token: groupToken,
+                  publish: {
+                    mic: roundTable
+                      ? roundTable.micAllowed
+                      : activityType === ActivityType.CONFERENCE_INTERPRETING
+                        ? member.role !== SessionRole.OBSERVER
+                        : true,
+                    screen: false,
+                  },
+                },
+              ]
+            : []),
         ],
       },
       stationEnabled: true,
@@ -198,6 +231,37 @@ export class SessionStateService {
       // snapshot says.
       dictionaryEnabled: resolveDictionaryEnabled(activityType ?? null, member.group.activity?.dictionaryEnabled),
       ...(roundTable ? { roundTable: roundTable.view } : {}),
+    };
+  }
+
+  /** SPEC-mcq-test-timed-reveal.md §5.3 — set only for a VOCABULARY_TEST
+   * instance launched via "Launch in lab" (exerciseId is set). */
+  private timedTestState(
+    activity: {
+      id: string;
+      exerciseId: string | null;
+      exercise: { title: string; config: unknown } | null;
+      startedAt: Date | null;
+      closesAt: Date | null;
+      closedAt: Date | null;
+      revealedAt: Date | null;
+    },
+    sessionState: string,
+  ): TimedTestState | null {
+    if (!activity.exerciseId || !activity.exercise) return null;
+    const policy = resolveTestPolicy(activity.exercise.config as VocabularyTestConfig);
+    const status: TimedTestState['status'] = activity.closedAt ? 'CLOSED' : sessionState === 'ARMED' ? 'READY' : 'OPEN';
+    return {
+      activityInstanceId: activity.id,
+      title: activity.exercise.title,
+      status,
+      startedAt: activity.startedAt ? activity.startedAt.getTime() : null,
+      closesAt: activity.closesAt ? activity.closesAt.getTime() : null,
+      serverNow: Date.now(),
+      revealed: activity.revealedAt !== null,
+      revealMode: policy.revealMode,
+      revealDetail: policy.revealDetail,
+      allowReview: policy.allowReview,
     };
   }
 
@@ -227,31 +291,4 @@ export class SessionStateService {
     };
   }
 
-  /**
-   * Phase 3 finding: ActivityInstance.config was forwarded to the
-   * student's own snapshot unmodified. That was harmless while nothing
-   * consumed VOCABULARY_TEST's inline-items config shape (dead code, per
-   * the Phase 3 recon), but the moment a real player exists, an inline
-   * vocabulary item's `answer` field would be sitting in plain sight in
-   * the student's own DesiredStationState — the exact question it's
-   * about to be tested on. Strip answer keys here, at the one choke point
-   * every live-session activity config passes through, rather than
-   * trusting every future player to remember not to render `config.answer`.
-   */
-  private sanitizeConfigForWire(type: ActivityType, config: unknown): unknown {
-    if (type === ActivityType.VOCABULARY_TEST && config && typeof config === 'object' && !Array.isArray(config)) {
-      const cfg = config as { items?: unknown };
-      if (Array.isArray(cfg.items)) {
-        return {
-          ...cfg,
-          items: cfg.items.map((item) => {
-            if (!item || typeof item !== 'object') return item;
-            const { answer: _answer, ...rest } = item as { answer?: unknown };
-            return rest;
-          }),
-        };
-      }
-    }
-    return config;
-  }
 }

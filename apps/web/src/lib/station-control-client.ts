@@ -38,6 +38,14 @@ export interface StationControlEvents {
   onRoundTableFloor?: (floor: RoundTableFloor) => void;
   /** A Round Table action was refused (not your turn, not the chairman...). */
   onRoundTableError?: (payload: { groupId: string; message: string }) => void;
+  /** SPEC-mcq-test-timed-reveal.md §5.4 — the teacher moved this test's
+   * closesAt (Extend, or the close scheduler closing it). A hint only: the
+   * next session:snapshot's activity.timedTest is always authoritative —
+   * see LiveVocabularyTest's own doc comment. */
+  onTestClosing?: (payload: { activityInstanceId: string; closesAt: number; serverNow: number }) => void;
+  /** The close sequence finished revealing this instance — fetch the
+   * result now instead of waiting for the fallback poll. */
+  onTestRevealed?: (payload: { activityInstanceId: string }) => void;
 }
 
 /**
@@ -96,6 +104,10 @@ export class StationControlClient {
     this.socket.on('screen-share:set', (payload: { room: string; screen: boolean; mic: boolean }) => this.events.onScreenShareSet?.(payload));
     this.socket.on('activity:event', (payload: ActivityEventPayload & { fromStationId: string }) => this.events.onActivityEvent?.(payload));
     this.socket.on('student:signed-out', (payload: { reason: 'released' }) => this.events.onSignedOut?.(payload));
+    this.socket.on('test:closing', (payload: { activityInstanceId: string; closesAt: number; serverNow: number }) =>
+      this.events.onTestClosing?.(payload),
+    );
+    this.socket.on('test:revealed', (payload: { activityInstanceId: string }) => this.events.onTestRevealed?.(payload));
 
     this.heartbeatTimer = setInterval(() => this.sendHeartbeat(), HEARTBEAT_INTERVAL_MS);
   }

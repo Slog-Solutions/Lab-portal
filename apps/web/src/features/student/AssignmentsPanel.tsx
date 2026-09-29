@@ -1,9 +1,11 @@
 import { useEffect, useState } from 'react';
-import { NO_WRITTEN_FEEDBACK } from '@lab/shared';
+import { NO_WRITTEN_FEEDBACK, type AttemptResultView } from '@lab/shared';
 import type { StationControlClient } from '../../lib/station-control-client';
 import { stationApi, type StartedAttempt } from '../../lib/station-api';
+import { ApiError } from '../../lib/api-client';
 import { useDictionaryStore } from '../../stores/dictionary-store';
 import { VocabularyTestPlayer } from '../activities/VocabularyTestPlayer';
+import { TestResultView } from '../activities/vocab/TestResultView';
 import { ContentExercisePlayer } from '../activities/ContentExercisePlayer';
 import { PronunciationPlayer } from '../activities/PronunciationPlayer';
 import { PronunciationTestPlayer } from '../activities/PronunciationTestPlayer';
@@ -27,10 +29,6 @@ const TYPE_LABEL: Record<string, string> = {
   PRONUNCIATION_TEST: 'Pronunciation test',
 };
 
-// Teacher-controlled tests, mirroring the server's ONE_SHOT_TYPES: a single
-// submission each, so a finished one shows its state instead of a Start button.
-const ONE_SHOT_TYPES = new Set(['PRONUNCIATION_TEST', 'WRITING_TEST', 'LISTENING_TEST', 'READING_TEST']);
-
 /**
  * Self-paced assessment (Ser 10 "teacher-tailored courses" — targetScore/
  * allocatedHours/dueAt) — deliberately independent of live session state,
@@ -46,10 +44,18 @@ const ONE_SHOT_TYPES = new Set(['PRONUNCIATION_TEST', 'WRITING_TEST', 'LISTENING
  * POLL_MS while it is showing (paused while an exercise is open — a
  * refetch there would only churn state under an in-progress recording)
  * and on demand via the Refresh button.
+ *
+ * SPEC-mcq-test-timed-reveal.md: `row.oneShot`/`row.resultsPending` are
+ * server-computed (see AttemptsService.listAssignmentsForStudent) rather
+ * than reproduced here — a real timed/teacher-released vocabulary test is
+ * one-shot the same way a writing test always was, and its `latestAttempt`
+ * is masked to SUBMITTED (no score) until AttemptsService.getResult says
+ * it's revealed, same server-side gate the live "Launch in lab" path uses.
  */
 export function AssignmentsPanel({ control }: { control: StationControlClient }) {
   const [assignments, setAssignments] = useState<AssignmentRow[] | null>(null);
   const [started, setStarted] = useState<StartedAttempt | null>(null);
+  const [viewingResult, setViewingResult] = useState<{ title: string; result: AttemptResultView } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   // /attempts/* is still StationAuthGuard-only (see attempts.controller.ts's
@@ -67,7 +73,7 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
   }, [control]);
 
   useEffect(() => {
-    if (started) return;
+    if (started || viewingResult) return;
     const timer = setInterval(() => {
       // Background refresh failures stay silent — the manual Refresh button
       // reports them, and a flaky moment shouldn't flash an error at a
@@ -78,7 +84,7 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
         .catch(() => void 0);
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [control, started]);
+  }, [control, started, viewingResult]);
 
   async function refresh(): Promise<void> {
     setError(null);
@@ -98,7 +104,24 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
       });
       setStarted(res);
     } catch (err) {
+      // A one-shot vocabulary test already submitted (e.g. the list was
+      // stale, or a second tab) — open its result directly rather than
+      // showing a raw error for what the student experiences as normal.
+      const attemptId = err instanceof ApiError && typeof err.details?.attemptId === 'string' ? err.details.attemptId : null;
+      if (err instanceof ApiError && err.code === 'ALREADY_SUBMITTED' && attemptId) {
+        await viewResult(attemptId, row.exercise.title);
+        return;
+      }
       setError(err instanceof Error ? err.message : 'Failed to start attempt');
+    }
+  }
+
+  async function viewResult(attemptId: string, title: string): Promise<void> {
+    setError(null);
+    try {
+      setViewingResult({ title, result: await stationApi.attemptResult(control.getToken(), attemptId) });
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load result');
     }
   }
 
@@ -118,6 +141,11 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
     useDictionaryStore.getState().setDisabledReason(started && !started.exercise.dictionaryEnabled ? 'test' : null);
     return () => useDictionaryStore.getState().setDisabledReason(null);
   }, [started]);
+
+  if (viewingResult) {
+    if (viewingResult.result.status === 'OPEN') return null; // shouldn't happen — reached only for a finished attempt
+    return <TestResultView result={viewingResult.result} title={viewingResult.title} onDismiss={() => setViewingResult(null)} />;
+  }
 
   if (started) {
     switch (started.exercise.type) {
@@ -157,11 +185,20 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
             ? Math.round((latest.rawScore / latest.maxScore) * 100)
             : null;
           // A test is a one-shot assessment (the server rejects a second
-          // start — AttemptsService.assertTestStartable), so once submitted
-          // the row shows its state instead of a Start/Retry button.
-          const isTest = ONE_SHOT_TYPES.has(row.exercise.type);
-          const locked = isTest && (latest?.status === 'SUBMITTED' || latest?.status === 'SCORED');
-          const badgeText = locked && latest?.status === 'SUBMITTED' ? 'Awaiting review' : pct !== null ? `${pct}%` : latest?.status;
+          // start — AttemptsService.assertTestStartable/startSelfPaced), so
+          // once submitted the row shows its state instead of a Start/Retry
+          // button. A vocabulary test can be one-shot too now (a real
+          // timed/teacher-released test) — row.oneShot already reflects that.
+          const finished = latest?.status === 'SUBMITTED' || latest?.status === 'SCORED';
+          const locked = row.oneShot && finished;
+          const isVocabWithResult = row.exercise.type === 'VOCABULARY_TEST' && finished;
+          const badgeText = row.resultsPending
+            ? 'Waiting for results'
+            : locked && latest?.status === 'SUBMITTED'
+              ? 'Awaiting review'
+              : pct !== null
+                ? `${pct}%`
+                : latest?.status;
           return (
             <div key={row.assignment.id} className="flex items-center justify-between gap-3 rounded-md border border-border p-2.5">
               <div className="min-w-0">
@@ -178,10 +215,15 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
                 )}
               </div>
               <div className="flex shrink-0 items-center gap-2">
-                {latest && <Badge variant={latest.status === 'SCORED' ? 'success' : 'secondary'}>{badgeText}</Badge>}
+                {latest && <Badge variant={row.resultsPending ? 'secondary' : latest.status === 'SCORED' ? 'success' : 'secondary'}>{badgeText}</Badge>}
+                {isVocabWithResult && (
+                  <Button size="sm" variant="outline" onClick={() => void viewResult(latest!.id, row.exercise.title)}>
+                    View result
+                  </Button>
+                )}
                 {!locked && (
                   <Button size="sm" onClick={() => void startAssignment(row)}>
-                    {isTest ? 'Start test' : latest ? 'Retry' : 'Start'}
+                    {latest?.status === 'IN_PROGRESS' ? 'Resume' : row.oneShot ? 'Start test' : latest ? 'Retry' : 'Start'}
                   </Button>
                 )}
               </div>

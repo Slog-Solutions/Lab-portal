@@ -335,6 +335,16 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
     this.server.to(stationRoom(stationId)).emit(event, payload as never);
   }
 
+  /** SPEC-mcq-test-timed-reveal.md §5.4/§6.2 — every station in a launched
+   * test's group is already in `groupRoom(groupId)` (joined at
+   * station:hello and re-joined on every pushSnapshot above), so this is
+   * the one call TestCloseService/TimedTestsService need to reach all of
+   * them for 'test:closing'/'test:revealed' without looking up each
+   * SessionMember individually. */
+  emitToGroup(groupId: string, event: 'test:closing' | 'test:revealed', payload: unknown): void {
+    this.server.to(groupRoom(groupId)).emit(event, payload as never);
+  }
+
   /** Used by ClassroomService to tell a station it was force-released (an
    * admin/teacher released the seat, or the student released themselves)
    * — the student console reacts by clearing its local session (see

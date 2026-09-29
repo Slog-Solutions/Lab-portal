@@ -23,6 +23,12 @@ function makeRig(seated: Array<{ id: string; seatNo: number; currentUserId: stri
   };
   const sessionState = { getDesiredState: vi.fn().mockResolvedValue({}) };
   const gateway = { pushSnapshot: vi.fn() };
+  const testClock = {
+    onSessionStarted: vi.fn(),
+    hasOpenTimedTest: vi.fn().mockResolvedValue(false),
+    claimClose: vi.fn().mockResolvedValue(true),
+    claimCloseForSession: vi.fn().mockResolvedValue([]),
+  };
   const svc = new SessionsService(
     prisma as never,
     { ensureBroadcastRoom: vi.fn(), ensureRoom: vi.fn(), deleteRoom: vi.fn() } as never,
@@ -33,8 +39,9 @@ function makeRig(seated: Array<{ id: string; seatNo: number; currentUserId: stri
     {} as never,
     { filterControllable: vi.fn() } as never,
     { prepareOnArm: vi.fn(), onSessionState: vi.fn() } as never,
+    testClock as never,
   );
-  return { svc, prisma, sessionState, gateway };
+  return { svc, prisma, sessionState, gateway, testClock };
 }
 
 const dto = (over: Partial<CreateSessionDto> = {}): CreateSessionDto => ({
@@ -168,5 +175,47 @@ describe('SessionsService.setGroupDictionary', () => {
     const { svc, prisma } = makeRig([]);
     prisma.classSession.findUnique.mockResolvedValue({ ...sessionWithGroup(), groups: [{ id: 'g1', activity: null, members: [] }] });
     await expect(svc.setGroupDictionary('s1', 'g1', true, ADMIN)).rejects.toThrow(BadRequestException);
+  });
+});
+
+/** SPEC-mcq-test-timed-reveal.md — the "Launch in lab" plumbing inside
+ * SessionsService: a public POST /sessions must never create an unlinked,
+ * answer-bearing VOCABULARY_TEST group; only TimedTestsService.launch's
+ * internal `opts.exerciseIdByGroupIndex` may; and a session with an open
+ * timed test can't be paused, and gets closed-without-reveal on End. */
+describe('SessionsService — timed vocabulary test plumbing', () => {
+  it('the public create() path refuses a VOCABULARY_TEST group outright', async () => {
+    const { svc } = makeRig([{ id: ST_A, seatNo: 1, currentUserId: 'stu1' }]);
+    await expect(
+      svc.create(dto({ groups: [{ index: 1, activityType: 'VOCABULARY_TEST', activityConfig: {}, memberStationIds: [ST_A] }] }), ADMIN),
+    ).rejects.toThrow(/Launch in lab/);
+  });
+
+  it('create() links the ActivityInstance to the given exerciseId only when opts.exerciseIdByGroupIndex is passed (the internal "Launch in lab" path)', async () => {
+    const { svc, prisma } = makeRig([{ id: ST_A, seatNo: 1, currentUserId: 'stu1' }]);
+    await svc.create(
+      dto({ groups: [{ index: 1, activityType: 'VOCABULARY_TEST', activityConfig: { items: [{ prompt: 'q', answer: 'a' }] }, memberStationIds: [ST_A] }] }),
+      ADMIN,
+      { exerciseIdByGroupIndex: { 1: 'ex1' } },
+    );
+    const createArgs = prisma.classSession.create.mock.calls[0]![0] as {
+      data: { groups: { create: Array<{ activity: { create: { exerciseId?: string } } }> } };
+    };
+    expect(createArgs.data.groups.create[0]!.activity.create.exerciseId).toBe('ex1');
+  });
+
+  it('pause() is refused while the session has an open timed test', async () => {
+    const { svc, prisma, testClock } = makeRig([]);
+    testClock.hasOpenTimedTest.mockResolvedValue(true);
+    prisma.classSession.findUnique.mockResolvedValue({ id: 's1', batchId: BATCH, state: 'RUNNING', groups: [] });
+    await expect(svc.pause('s1', ADMIN)).rejects.toThrow(/still running/);
+    expect(prisma.classSession.update).not.toHaveBeenCalled();
+  });
+
+  it('end() claims a close-without-reveal for every open timed instance before pushing snapshots', async () => {
+    const { svc, prisma, testClock } = makeRig([]);
+    prisma.classSession.findUnique.mockResolvedValue({ id: 's1', batchId: BATCH, state: 'RUNNING', groups: [] });
+    await svc.end('s1', ADMIN);
+    expect(testClock.claimCloseForSession).toHaveBeenCalledWith('s1', 'SESSION_ENDED', expect.any(Date));
   });
 });

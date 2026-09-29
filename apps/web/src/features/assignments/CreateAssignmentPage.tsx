@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link, Navigate, useParams, useSearchParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { UserRole } from '@lab/shared';
-import { CheckCircle2, ChevronRight, Loader2, School, X } from 'lucide-react';
-import { assessmentsApi, type AssessmentSummary, type CreateAssessmentInput } from '../../lib/assessments-api';
+import { CheckCircle2, ChevronRight, Loader2, School, Upload, X } from 'lucide-react';
+import { assessmentsApi, type AssessmentSummary, type CreateAssessmentInput, type VocabQuestionInput } from '../../lib/assessments-api';
 import { batchesApi } from '../../lib/batches-api';
 import type { MediaAsset } from '../../lib/media-assets-api';
 import { usersApi, type UserRow } from '../../lib/users-api';
@@ -11,6 +11,9 @@ import { queryKeys } from '../../lib/query-keys';
 import { StudentPicker } from '../exercises/StudentPicker';
 import { AudioPicker } from './AudioPicker';
 import { DocumentPicker } from './DocumentPicker';
+import { ImportQuestionsDialog } from './ImportQuestionsDialog';
+import { VocabularyTestBuilder, validateQuestion } from './VocabularyTestBuilder';
+import { DEFAULT_SETTINGS_DRAFT, TestSettingsPanel, settingsDraftToApi, settingsDraftValid, type TestSettingsDraft } from './TestSettingsPanel';
 import { kindBySlug, type AssignmentKind } from './assignment-kinds';
 import { analyseQuestionList, MAX_QUESTIONS } from './question-list';
 import { Badge } from '@/components/ui/badge';
@@ -28,10 +31,11 @@ const TITLE_PLACEHOLDER: Record<AssignmentKind['type'], string> = {
   READING_TEST: 'e.g. "Read aloud — paragraph 4"',
 };
 
-// One example per type, in the same "question = answer | wrong | wrong" syntax.
-const QUESTION_HINT: Record<'VOCABULARY_TEST' | 'LISTENING_TEST', string> = {
-  VOCABULARY_TEST: `big = large                → the student types the answer
-big = large | small | red  → multiple choice (the first one is correct)`,
+// A listening test's question list still uses the same word-list syntax
+// directly (it has no form builder of its own — SPEC-mcq-test-timed-reveal.md
+// only extends the vocabulary test's authoring); vocabulary's own hint now
+// lives in ImportQuestionsDialog.
+const QUESTION_HINT: Record<'LISTENING_TEST', string> = {
   LISTENING_TEST: `What time does it depart? = 9:30      → the student types the answer
 Which gate? = B12 | A4 | C9            → multiple choice (the first one is correct)`,
 };
@@ -45,9 +49,6 @@ function positiveInt(text: string): number | undefined {
 interface Draft {
   title: string;
   instructions: string;
-  // vocabulary
-  wordList: string;
-  sampleSize: string;
   // writing
   prompt: string;
   minWords: string;
@@ -60,8 +61,6 @@ interface Draft {
 const EMPTY_DRAFT: Draft = {
   title: '',
   instructions: '',
-  wordList: '',
-  sampleSize: '',
   prompt: '',
   minWords: '',
   maxWords: '',
@@ -80,10 +79,16 @@ function buildInput(
     document: MediaAsset | null;
     batchId?: string;
     dictionaryEnabled: boolean | null;
+    questions: VocabQuestionInput[];
+    settings: TestSettingsDraft;
   },
 ): CreateAssessmentInput | null {
   const title = d.title.trim();
-  if (!title || ctx.studentIds.length === 0) return null;
+  if (!title) return null;
+  // SPEC-mcq-test-timed-reveal.md §6.1 "save without assigning" — a
+  // vocabulary test alone may have zero students (it can be launched in
+  // the lab later instead); every other kind still needs at least one.
+  if (kind.type !== 'VOCABULARY_TEST' && ctx.studentIds.length === 0) return null;
   const common = {
     title,
     studentIds: ctx.studentIds,
@@ -95,9 +100,10 @@ function buildInput(
 
   switch (kind.type) {
     case 'VOCABULARY_TEST': {
-      const list = analyseQuestionList(d.wordList);
-      if (list.count === 0 || list.badLine || list.count > MAX_QUESTIONS) return null;
-      return { ...common, type: kind.type, wordListText: d.wordList, sampleSize: positiveInt(d.sampleSize) };
+      if (ctx.questions.length === 0 || ctx.questions.length > MAX_QUESTIONS) return null;
+      if (ctx.questions.some((q) => validateQuestion(q).length > 0)) return null;
+      if (!settingsDraftValid(ctx.settings)) return null;
+      return { ...common, type: kind.type, questions: ctx.questions, ...settingsDraftToApi(ctx.settings) };
     }
     case 'WRITING_TEST': {
       const prompt = d.prompt.trim();
@@ -259,6 +265,9 @@ function CreateAssignmentForm({ kind }: { kind: AssignmentKind }) {
   const linkedClass = myClasses?.find((c) => c.id === classId);
 
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT);
+  const [questions, setQuestions] = useState<VocabQuestionInput[]>([]);
+  const [settingsDraft, setSettingsDraft] = useState<TestSettingsDraft>(DEFAULT_SETTINGS_DRAFT);
+  const [showImport, setShowImport] = useState(false);
   const [audio, setAudio] = useState<MediaAsset | null>(null);
   const [documentAsset, setDocumentAsset] = useState<MediaAsset | null>(null);
   const [selected, setSelected] = useState<string[]>([]);
@@ -271,7 +280,11 @@ function CreateAssignmentForm({ kind }: { kind: AssignmentKind }) {
   // explicitly picks a value. Reset on a kind switch so an explicit choice
   // for one test type doesn't silently carry over to a different one.
   const [dictionaryEnabled, setDictionaryEnabled] = useState<boolean | null>(null);
-  useEffect(() => setDictionaryEnabled(null), [kind.type]);
+  useEffect(() => {
+    setDictionaryEnabled(null);
+    setQuestions([]);
+    setSettingsDraft(DEFAULT_SETTINGS_DRAFT);
+  }, [kind.type]);
 
   const set = <K extends keyof Draft>(key: K, value: Draft[K]) => setDraft((prev) => ({ ...prev, [key]: value }));
 
@@ -301,6 +314,8 @@ function CreateAssignmentForm({ kind }: { kind: AssignmentKind }) {
     document: documentAsset,
     batchId: classId ?? undefined,
     dictionaryEnabled,
+    questions,
+    settings: settingsDraft,
   });
   const minWords = positiveInt(draft.minWords);
   const maxWords = positiveInt(draft.maxWords);
@@ -313,6 +328,8 @@ function CreateAssignmentForm({ kind }: { kind: AssignmentKind }) {
       void queryClient.invalidateQueries({ queryKey: queryKeys.exercises });
       setCreated(res);
       setDraft(EMPTY_DRAFT);
+      setQuestions([]);
+      setSettingsDraft(DEFAULT_SETTINGS_DRAFT);
       setAudio(null);
       setDocumentAsset(null);
       setSelected([]);
@@ -376,19 +393,15 @@ function CreateAssignmentForm({ kind }: { kind: AssignmentKind }) {
 
             {kind.type === 'VOCABULARY_TEST' && (
               <>
-                <QuestionListField
-                  id="as-words"
-                  label="Words (one per line)"
-                  value={draft.wordList}
-                  onChange={(v) => set('wordList', v)}
-                  placeholder={'cat = gato\ndog = perro | gato | pez'}
-                  hint={QUESTION_HINT.VOCABULARY_TEST}
-                />
-                <div className="space-y-1.5">
-                  <Label htmlFor="as-sample">Questions per student (optional)</Label>
-                  <Input id="as-sample" type="number" min={1} value={draft.sampleSize} onChange={(e) => set('sampleSize', e.target.value)} placeholder="All" className="w-32" />
-                  <p className="text-xs text-muted-foreground">Fewer than the list gives each student a different random selection.</p>
+                <div className="flex items-center justify-between">
+                  <Label>Questions</Label>
+                  <Button type="button" variant="outline" size="sm" onClick={() => setShowImport(true)} className="gap-1.5">
+                    <Upload className="h-3.5 w-3.5" /> Import from word list
+                  </Button>
                 </div>
+                <VocabularyTestBuilder questions={questions} onChange={setQuestions} />
+                <ImportQuestionsDialog open={showImport} onOpenChange={setShowImport} onImport={setQuestions} />
+                <TestSettingsPanel value={settingsDraft} onChange={setSettingsDraft} questionCount={questions.length} />
               </>
             )}
 
@@ -500,9 +513,9 @@ function CreateAssignmentForm({ kind }: { kind: AssignmentKind }) {
             {created && (
               <p className="flex flex-wrap items-center gap-1.5 text-sm text-status-online">
                 <CheckCircle2 className="h-4 w-4" />
-                Sent to {created.assigned} {created.assigned === 1 ? 'student' : 'students'}.
+                {created.assigned > 0 ? `Sent to ${created.assigned} ${created.assigned === 1 ? 'student' : 'students'}.` : 'Saved.'}
                 <Link to={`/assignments/${kind.slug}/${created.exerciseId}`} className="font-medium underline">
-                  View results
+                  {created.assigned > 0 ? 'View results' : 'Open it'}
                 </Link>
               </p>
             )}
@@ -515,7 +528,11 @@ function CreateAssignmentForm({ kind }: { kind: AssignmentKind }) {
                 create.mutate(input);
               }}
             >
-              {create.isPending ? 'Creating…' : `Create & send to ${selected.length} ${selected.length === 1 ? 'student' : 'students'}`}
+              {create.isPending
+                ? 'Creating…'
+                : selected.length === 0
+                  ? 'Save test'
+                  : `Create & send to ${selected.length} ${selected.length === 1 ? 'student' : 'students'}`}
             </Button>
           </CardContent>
         </Card>

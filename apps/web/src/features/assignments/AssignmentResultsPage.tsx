@@ -2,8 +2,8 @@ import { useEffect, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { countWords, NO_WRITTEN_FEEDBACK, UserRole } from '@lab/shared';
-import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Eye, Loader2, Mic, PenLine, Volume2, X } from 'lucide-react';
-import { assessmentsApi, type AssessmentDetail } from '../../lib/assessments-api';
+import { AlertTriangle, ArrowLeft, Check, CheckCircle2, Eye, Loader2, Mic, PenLine, Rocket, Send, Volume2, X } from 'lucide-react';
+import { assessmentsApi, type AssessmentDetail, type VocabQuestionInput } from '../../lib/assessments-api';
 import { gradebookApi } from '../../lib/gradebook-api';
 import { base64ToAudioUrl, pronunciationApi } from '../../lib/pronunciation-api';
 import { usersApi } from '../../lib/users-api';
@@ -11,6 +11,9 @@ import { queryKeys } from '../../lib/query-keys';
 import { StudentPicker } from '../exercises/StudentPicker';
 import { AudioPreview } from './AudioPreview';
 import { DocumentPreview } from './DocumentPreview';
+import { LaunchInLabDialog } from './LaunchInLabDialog';
+import { VocabularyTestBuilder, validateQuestion } from './VocabularyTestBuilder';
+import { DEFAULT_SETTINGS_DRAFT, TestSettingsPanel, settingsDraftToApi, settingsDraftValid, settingsToDraft, type TestSettingsDraft } from './TestSettingsPanel';
 import { kindBySlug, kindByType } from './assignment-kinds';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
@@ -370,6 +373,52 @@ export function AssignmentResultsPage() {
     },
   });
 
+  // SPEC-mcq-test-timed-reveal.md §7.4/§7.6 — vocabulary-test-only UI:
+  // launching in the lab, re-editing (only while `test.editable`), and
+  // releasing an ON_TEACHER_RELEASE test's results (only the
+  // assignment/individual path here — a lab run's own release is a button
+  // on its own live board, see LiveTestBoardPage).
+  const [showLaunch, setShowLaunch] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editTitle, setEditTitle] = useState('');
+  const [editQuestions, setEditQuestions] = useState<VocabQuestionInput[]>([]);
+  const [editSettings, setEditSettings] = useState<TestSettingsDraft>(DEFAULT_SETTINGS_DRAFT);
+
+  function invalidateTest(): void {
+    void queryClient.invalidateQueries({ queryKey: queryKeys.assessment(id!) });
+  }
+
+  function startEditing(current: AssessmentDetail): void {
+    setEditTitle(current.title);
+    setEditQuestions(
+      current.questions.map((q) => ({
+        prompt: q.prompt,
+        options: q.choices.length > 0 ? q.choices : [q.answer ?? '', ''],
+        correctIndex: q.correctIndex ?? 0,
+        explanation: q.explanation,
+        mediaAssetId: q.mediaAssetId,
+      })),
+    );
+    setEditSettings(settingsToDraft(current.settings));
+    setEditing(true);
+  }
+
+  const saveEdit = useMutation({
+    mutationFn: () =>
+      assessmentsApi.update(id!, {
+        title: editTitle.trim() || undefined,
+        questions: editQuestions,
+        ...settingsDraftToApi(editSettings),
+      }),
+    onSuccess: () => {
+      invalidateTest();
+      setEditing(false);
+    },
+  });
+  const editValid = editTitle.trim().length > 0 && editQuestions.length > 0 && editQuestions.every((q) => validateQuestion(q).length === 0) && settingsDraftValid(editSettings);
+
+  const release = useMutation({ mutationFn: () => assessmentsApi.release(id!), onSuccess: invalidateTest });
+
   // Back link goes to the assignment's real type, whatever the URL said.
   // kindByType can miss (the server's ASSESSMENT_TYPES and this page's
   // ASSIGNMENT_KINDS are maintained separately), so fall back to the slug
@@ -396,10 +445,15 @@ export function AssignmentResultsPage() {
   }
 
   const mode = modeOf(test.type);
+  const isVocab = test.type === 'VOCABULARY_TEST';
   const isWriting = test.type === 'WRITING_TEST'; // only the word-count badges below still need this specifically
   const isHandMarked = mode === 'writing' || mode === 'reading';
   const openRow = openId ? test.assignments.find((a) => a.assignmentId === openId) : undefined;
   const toMark = test.assignments.filter((a) => a.attempt?.status === 'SUBMITTED').length;
+  // §6.4 "Teacher/admin → always full detail" — get() never masks this
+  // page's own view, so a SCORED-but-not-yet-visible-to-the-student row is
+  // told apart by revealAt alone, not by status.
+  const pendingRelease = test.assignments.filter((a) => a.attempt?.status === 'SCORED' && a.attempt.revealAt === null).length;
   const tagFor = (studentId: string): string | null => {
     const mine = test.assignments.filter((a) => a.student.id === studentId);
     if (mine.length === 0) return null;
@@ -421,33 +475,105 @@ export function AssignmentResultsPage() {
           {isWriting && test.config.minWords && <Badge variant="outline">Min {test.config.minWords} words</Badge>}
           {isWriting && test.config.maxWords && <Badge variant="outline">Max {test.config.maxWords} words</Badge>}
           {toMark > 0 && <Badge variant="warning">{toMark} to mark</Badge>}
+          {isVocab && !editing && (
+            <>
+              {test.editable && (
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => startEditing(test)}>
+                  <PenLine className="h-3.5 w-3.5" /> Edit
+                </Button>
+              )}
+              {pendingRelease > 0 && (
+                <Button variant="outline" size="sm" className="gap-1.5" onClick={() => release.mutate()} disabled={release.isPending}>
+                  <Send className="h-3.5 w-3.5" /> {release.isPending ? 'Releasing…' : `Release results (${pendingRelease})`}
+                </Button>
+              )}
+              <Button size="sm" className="gap-1.5" onClick={() => setShowLaunch(true)}>
+                <Rocket className="h-3.5 w-3.5" /> Launch in lab
+              </Button>
+            </>
+          )}
         </div>
       </div>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle className="text-base">{mode === 'writing' ? 'Prompt' : mode === 'reading' ? 'Passage' : `Questions (${test.questions.length})`}</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-3">
-          {test.type === 'LISTENING_TEST' && test.config.audioAssetId && <AudioPreview assetId={test.config.audioAssetId} />}
-          {isHandMarked ? (
-            <>
-              {test.questions[0]?.prompt && <p className="whitespace-pre-wrap text-sm">{test.questions[0].prompt}</p>}
-              {mode === 'reading' && test.questions[0]?.mediaAssetId && <DocumentPreview assetId={test.questions[0].mediaAssetId} />}
-            </>
-          ) : (
-            <ol className="space-y-1.5 text-sm">
-              {test.questions.map((q, i) => (
-                <li key={q.id}>
-                  <span className="mr-1.5 text-xs text-muted-foreground">{i + 1}.</span>
-                  {q.prompt} <span className="text-muted-foreground">→</span> <span className="font-medium">{q.answer}</span>
-                  {q.choices.length > 1 && <span className="ml-1.5 text-xs text-muted-foreground">(choices: {q.choices.join(', ')})</span>}
-                </li>
-              ))}
-            </ol>
-          )}
-        </CardContent>
-      </Card>
+      {isVocab && editing ? (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Edit questions</CardTitle>
+            <CardDescription>Blocked automatically once this test has any attempt or lab run.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="edit-title">Title</Label>
+              <Input id="edit-title" value={editTitle} onChange={(e) => setEditTitle(e.target.value)} maxLength={200} />
+            </div>
+            <VocabularyTestBuilder questions={editQuestions} onChange={setEditQuestions} />
+            <TestSettingsPanel value={editSettings} onChange={setEditSettings} questionCount={editQuestions.length} />
+            {saveEdit.isError && <p className="text-sm text-destructive">{saveEdit.error instanceof Error ? saveEdit.error.message : 'Could not save'}</p>}
+            <div className="flex gap-2">
+              <Button variant="outline" onClick={() => setEditing(false)} disabled={saveEdit.isPending}>
+                Cancel
+              </Button>
+              <Button onClick={() => saveEdit.mutate()} disabled={!editValid || saveEdit.isPending}>
+                {saveEdit.isPending ? 'Saving…' : 'Save changes'}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      ) : (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">{mode === 'writing' ? 'Prompt' : mode === 'reading' ? 'Passage' : `Questions (${test.questions.length})`}</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            {test.type === 'LISTENING_TEST' && test.config.audioAssetId && <AudioPreview assetId={test.config.audioAssetId} />}
+            {isHandMarked ? (
+              <>
+                {test.questions[0]?.prompt && <p className="whitespace-pre-wrap text-sm">{test.questions[0].prompt}</p>}
+                {mode === 'reading' && test.questions[0]?.mediaAssetId && <DocumentPreview assetId={test.questions[0].mediaAssetId} />}
+              </>
+            ) : (
+              <ol className="space-y-1.5 text-sm">
+                {test.questions.map((q, i) => (
+                  <li key={q.id}>
+                    <span className="mr-1.5 text-xs text-muted-foreground">{i + 1}.</span>
+                    {q.prompt} <span className="text-muted-foreground">→</span> <span className="font-medium">{q.answer}</span>
+                    {q.choices.length > 1 && <span className="ml-1.5 text-xs text-muted-foreground">(choices: {q.choices.join(', ')})</span>}
+                    {q.explanation && <span className="ml-1.5 block text-xs text-muted-foreground">↳ {q.explanation}</span>}
+                  </li>
+                ))}
+              </ol>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {isVocab && test.labRuns.length > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">Lab runs</CardTitle>
+            <CardDescription>Every time this test was launched live in the lab.</CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            {test.labRuns.map((run) => {
+              const submitted = run.attempts.filter((a) => a.status === 'SUBMITTED' || a.status === 'SCORED').length;
+              return (
+                <div key={run.activityInstanceId} className="flex items-center justify-between rounded-md border border-border p-2.5 text-sm">
+                  <div>
+                    <p className="font-medium">{run.sessionTitle}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {submitted}/{run.attempts.length} submitted · {run.status === 'CLOSED' ? (run.revealedAt ? 'Revealed' : 'Closed') : run.status === 'READY' ? 'Not started' : 'Running'}
+                      {run.startedAt && ` · ${new Date(run.startedAt).toLocaleString()}`}
+                    </p>
+                  </div>
+                  <Link to={`/tests/live/${run.activityInstanceId}`} className="text-xs font-medium text-primary hover:underline">
+                    Open board
+                  </Link>
+                </div>
+              );
+            })}
+          </CardContent>
+        </Card>
+      )}
 
       <Card>
         <CardHeader className="flex-row items-start justify-between space-y-0">
@@ -513,7 +639,16 @@ export function AssignmentResultsPage() {
                       <TableCell>
                         <Badge variant={status.variant}>{status.label}</Badge>
                       </TableCell>
-                      <TableCell>{pct !== null ? <span className="font-medium">{pct}%</span> : <span className="text-xs text-muted-foreground">—</span>}</TableCell>
+                      <TableCell>
+                        {pct !== null ? (
+                          <span className="font-medium">{pct}%</span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
+                        {isVocab && row.attempt?.status === 'SCORED' && row.attempt.revealAt === null && (
+                          <span className="ml-1.5 text-xs text-muted-foreground">(hidden from student)</span>
+                        )}
+                      </TableCell>
                       <TableCell className="text-xs text-muted-foreground">{row.dueAt ? new Date(row.dueAt).toLocaleDateString() : '—'}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">{row.attempt?.submittedAt ? new Date(row.attempt.submittedAt).toLocaleString() : '—'}</TableCell>
                       <TableCell>
@@ -547,6 +682,7 @@ export function AssignmentResultsPage() {
       </Card>
 
       {openRow?.attempt && <AttemptDialog key={openRow.attempt.id} test={test} row={openRow} onClose={() => setOpenId(null)} />}
+      {isVocab && <LaunchInLabDialog open={showLaunch} onOpenChange={setShowLaunch} exerciseId={test.id} />}
     </div>
   );
 }
