@@ -297,14 +297,22 @@ export type ScoreOverrideDto = z.infer<typeof zScoreOverrideDto>;
 
 export const zPronunciationVoice = z.enum(['en_US', 'en_GB']);
 
+/** Shared ceiling for any pronunciation sourceText/speak text — zSpeakDto,
+ * zGenerateDto (pronunciation.controller.ts) and
+ * zCreatePronunciationExerciseDto all enforce the same number, since they
+ * all ultimately feed the same eSpeak-NG/Piper pipeline (PronunciationService).
+ * ~10,000 words at ~6 characters/word (average English word length plus a
+ * space) — a full passage, not just a sentence. Long passages still cost
+ * real synthesis time (see PIPER_TIMEOUT_MS in pronunciation.service.ts),
+ * they just aren't rejected outright. */
+export const PRONUNCIATION_TEXT_MAX_LENGTH = 60_000;
+
 /** On-demand model voice + IPA — student word practice, a test's "hear the
  * word" button, teacher playback while grading, and a PRONUNCIATION
  * exercise's "Listen to pronunciation" button when the teacher didn't (or
- * couldn't) pre-generate model audio at authoring time. The 2000 cap
- * matches zGenerateDto's — a full listen-and-repeat paragraph, not just a
- * word, can come through here. */
+ * couldn't) pre-generate model audio at authoring time. */
 export const zSpeakDto = z.object({
-  text: z.string().trim().min(1).max(2000),
+  text: z.string().trim().min(1).max(PRONUNCIATION_TEXT_MAX_LENGTH),
   voice: zPronunciationVoice.default('en_GB'),
 });
 export type SpeakDto = z.infer<typeof zSpeakDto>;
@@ -347,7 +355,7 @@ export type CreatePronunciationTestDto = z.infer<typeof zCreatePronunciationTest
  * exercise never blocks on the offline speech pipeline. */
 export const zCreatePronunciationExerciseDto = z.object({
   title: z.string().trim().min(1).max(200),
-  sourceText: z.string().trim().min(1).max(2000),
+  sourceText: z.string().trim().min(1).max(PRONUNCIATION_TEXT_MAX_LENGTH),
   voice: zPronunciationVoice.default('en_GB'),
   studentIds: z.array(z.string().cuid2()).min(1),
   dueAt: z.coerce.date().optional(),
@@ -435,9 +443,9 @@ export const zCreateAssessmentDto = z.discriminatedUnion('type', [
   zAssessmentCommon.extend({
     type: z.literal(ActivityType.READING_TEST),
     // A teacher gives students something to read either way: text typed
-    // here (2000 matches zSpeakDto's cap — a passage the model voice
-    // could never read back), or a PDF uploaded to the Media Library
-    // (documentAssetId). At least one is required — enforced in
+    // here (kept well under PRONUNCIATION_TEXT_MAX_LENGTH — a passage the
+    // model voice can read back in a reasonable time), or a PDF uploaded to
+    // the Media Library (documentAssetId). At least one is required — enforced in
     // AssessmentsService.build(), not here, since a discriminated union
     // branch can't carry a cross-field .refine().
     passage: z.string().trim().max(2000).optional(),

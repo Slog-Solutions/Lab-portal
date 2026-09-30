@@ -1,7 +1,7 @@
 import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { execFile, spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -28,6 +28,16 @@ const SPEAK_CACHE_MAX = 200;
  * of students each typing a different word must queue rather than spawn
  * one process apiece. */
 const MAX_CONCURRENT_SYNTHESIS = 3;
+/** eSpeak-NG's G2P pass is plain text processing (no audio rendering), so
+ * even a 10,000-word passage finishes in well under a minute — this just
+ * guards against a hung process. */
+const IPA_TIMEOUT_MS = 60_000;
+/** Piper renders actual audio, so its wall-clock cost scales with the text:
+ * a 10,000-word passage is a real book chapter's worth of speech, and on a
+ * modest CPU that can take several minutes to synthesize. Generous on
+ * purpose — a timeout here fails a long passage outright with no partial
+ * result. */
+const PIPER_TIMEOUT_MS = 20 * 60_000;
 
 /** child_process.execFile has no stdin-piping option (that's only on the
  * *Sync variants) — spawn + manually writing/ending stdin is the correct
@@ -271,7 +281,10 @@ export class PronunciationService {
     }));
   }
 
-  /** Grapheme-to-phoneme via eSpeak-NG, `--ipa` output. */
+  /** Grapheme-to-phoneme via eSpeak-NG, `--ipa` output. Text goes in through
+   * a temp file (`-f`), never as a CLI argument — Windows caps a whole
+   * command line (CreateProcess) at ~32K characters, which a multi-thousand-
+   * word passage can exceed on its own; a file path is always short. */
   async generateIpa(text: string): Promise<string> {
     const bin = this.config.get('ESPEAK_NG_BIN', { infer: true });
     if (!bin) {
@@ -279,14 +292,20 @@ export class PronunciationService {
         'eSpeak-NG is not configured (ESPEAK_NG_BIN) — pronunciation exercises can still record/play back, just without generated IPA',
       );
     }
+    const tempDir = await mkdtemp(path.join(os.tmpdir(), 'espeak-'));
+    const inPath = path.join(tempDir, 'in.txt');
     try {
-      const { stdout } = await execFileAsync(bin, ['-q', '--ipa', '-x', text], {
-        timeout: 10_000,
+      await writeFile(inPath, text, 'utf-8');
+      const { stdout } = await execFileAsync(bin, ['-q', '--ipa', '-x', '-f', inPath], {
+        timeout: IPA_TIMEOUT_MS,
+        maxBuffer: 64 * 1024 * 1024,
         env: this.espeakEnv(),
       });
       return stdout.trim();
     } catch (err) {
       throw new ServiceUnavailableException(`eSpeak-NG failed: ${(err as Error).message}`);
+    } finally {
+      await rm(tempDir, { recursive: true, force: true });
     }
   }
 
@@ -304,7 +323,7 @@ export class PronunciationService {
     const tempDir = await mkdtemp(path.join(os.tmpdir(), 'piper-'));
     const outPath = path.join(tempDir, 'out.wav');
     try {
-      await runWithStdin(bin, ['--model', modelPath, '--output_file', outPath], text, 20_000);
+      await runWithStdin(bin, ['--model', modelPath, '--output_file', outPath], text, PIPER_TIMEOUT_MS);
       return await readFile(outPath);
     } catch (err) {
       throw new ServiceUnavailableException(`Piper failed: ${(err as Error).message}`);

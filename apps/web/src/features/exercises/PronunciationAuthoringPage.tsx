@@ -1,7 +1,7 @@
 import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { UserRole } from '@lab/shared';
+import { PRONUNCIATION_TEXT_MAX_LENGTH, UserRole } from '@lab/shared';
 import { Mic, CheckCircle2, AlertTriangle, ChevronRight, Send } from 'lucide-react';
 import { pronunciationApi, type PronunciationVoice } from '../../lib/pronunciation-api';
 import { batchesApi } from '../../lib/batches-api';
@@ -156,7 +156,9 @@ export function PronunciationAuthoringPage() {
             <div className="space-y-1.5">
               <div className="flex items-center justify-between">
                 <Label htmlFor="pe-text">Text (a sentence, paragraph or word)</Label>
-                <span className="text-xs text-muted-foreground">{sourceText.length}/2000</span>
+                <span className="text-xs text-muted-foreground">
+                  {sourceText.length}/{PRONUNCIATION_TEXT_MAX_LENGTH}
+                </span>
               </div>
               <Textarea
                 id="pe-text"
@@ -164,7 +166,7 @@ export function PronunciationAuthoringPage() {
                 onChange={(e) => setSourceText(e.target.value)}
                 placeholder="The quick brown fox jumps over the lazy dog."
                 rows={5}
-                maxLength={2000}
+                maxLength={PRONUNCIATION_TEXT_MAX_LENGTH}
                 className="resize-none text-base leading-relaxed"
               />
             </div>
