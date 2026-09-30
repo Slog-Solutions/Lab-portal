@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   AssetKind,
   MediaAssetScope,
+  PRONUNCIATION_TEXT_MAX_LENGTH,
   UserRole,
   zCreatePronunciationExerciseDto,
   zSpeakDto,
@@ -23,7 +24,7 @@ import { MediaAssetsService } from '../media-assets/media-assets.service';
 import { PronunciationService } from './pronunciation.service';
 
 const zGenerateDto = z.object({
-  sourceText: z.string().min(1).max(2000),
+  sourceText: z.string().min(1).max(PRONUNCIATION_TEXT_MAX_LENGTH),
   voice: z.enum(['en_US', 'en_GB']).default('en_GB'),
 });
 

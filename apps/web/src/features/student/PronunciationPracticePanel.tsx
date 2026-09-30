@@ -1,12 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
+import { PRONUNCIATION_TEXT_MAX_LENGTH } from '@lab/shared';
 import type { StationControlClient } from '../../lib/station-control-client';
 import { stationApi, type StartedAttempt } from '../../lib/station-api';
 import { base64ToAudioUrl, type PronunciationVoice } from '../../lib/pronunciation-api';
 import { PronunciationPlayer } from '../activities/PronunciationPlayer';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
-import { Input } from '@/components/ui/input';
 import { NativeSelect } from '@/components/ui/native-select';
+import { Textarea } from '@/components/ui/textarea';
 
 interface Heard {
   text: string;
@@ -21,8 +22,9 @@ type PracticeExercise = Awaited<ReturnType<typeof stationApi.pronunciationExerci
  * Ser 7 student-side pronunciation practice — deliberately not tied to an
  * Assignment, the same open self-study posture as StudyLibraryPanel. Two
  * parts:
- *  1. "Practise any word": type a word or phrase, hear the model voice and
- *     see its IPA, record yourself and play the two back to back. The
+ *  1. "Practise any word": type a word, phrase or whole passage (up to
+ *     PRONUNCIATION_TEXT_MAX_LENGTH), hear the model voice and see its IPA,
+ *     record yourself and play the two back to back. The
  *     student's take stays in this browser (never uploaded) — it is
  *     private practice, not something a teacher will ever see or grade.
  *     Graded pronunciation is the separate teacher-set test
@@ -149,23 +151,31 @@ export function PronunciationPracticePanel({ control }: { control: StationContro
       </CardHeader>
       <CardContent className="space-y-5">
         <div className="space-y-3">
-          <p className="text-sm font-medium">Practise any word</p>
+          <div className="flex items-center justify-between">
+            <p className="text-sm font-medium">Practise any word, phrase or passage</p>
+            <span className="text-xs text-muted-foreground">
+              {text.length}/{PRONUNCIATION_TEXT_MAX_LENGTH}
+            </span>
+          </div>
+          <Textarea
+            value={text}
+            maxLength={PRONUNCIATION_TEXT_MAX_LENGTH}
+            placeholder="Type a word, phrase or passage, e.g. thorough"
+            onChange={(e) => setText(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter alone inserts a newline (needed for multi-sentence
+              // passages) — Ctrl/Cmd+Enter submits, same shortcut chat and
+              // comment boxes use.
+              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) void listen();
+            }}
+            rows={4}
+            className="resize-y text-base leading-relaxed"
+          />
           <div className="flex flex-wrap gap-2">
-            <Input
-              value={text}
-              maxLength={200}
-              placeholder="Type a word or phrase, e.g. thorough"
-              onChange={(e) => setText(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') void listen();
-              }}
-              className="min-w-48 flex-1"
-            />
             <NativeSelect
               value={voice}
               onChange={(e) => setVoice(e.target.value as PronunciationVoice)}
               aria-label="Voice"
-              
             >
               <option value="en_GB">British</option>
               <option value="en_US">American</option>
@@ -177,7 +187,7 @@ export function PronunciationPracticePanel({ control }: { control: StationContro
 
           {heard && (
             <div className="space-y-3 rounded-md border border-border p-3">
-              <p className="text-2xl font-semibold">{heard.text}</p>
+              <p className={heard.text.length > 60 ? 'text-base leading-relaxed' : 'text-2xl font-semibold'}>{heard.text}</p>
               {heard.ipa && <p className="font-mono text-sm text-muted-foreground">{heard.ipa}</p>}
               {heard.audioUrl ? (
                 <div>
