@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react';
 import {
   ArrowRight,
   ChevronUp,
+  AppWindow,
+  Globe,
   Keyboard,
   Loader2,
   Lock,
@@ -25,6 +27,8 @@ export type BulkAction =
   | 'lock-input'
   | 'unlock'
   | 'message'
+  | 'open-url'
+  | 'launch-program'
   | 'wake'
   | 'restart'
   | 'shutdown'
@@ -44,12 +48,16 @@ interface MenuItem {
 // stay one click away and a misclick can't power off a room.
 const MORE: MenuItem[][] = [
   [
+    { action: 'open-url', label: 'Open website', hint: 'Open a page in students’ browsers', icon: Globe },
+    { action: 'launch-program', label: 'Launch program', hint: 'Start an allowlisted app', icon: AppWindow },
+  ],
+  [
     { action: 'wake', label: 'Wake (Wake-on-LAN)', hint: 'Power on sleeping PCs', icon: Zap },
     { action: 'restart', label: 'Restart', hint: 'Reboot the PCs', icon: RotateCcw },
     { action: 'shutdown', label: 'Shut down', hint: 'Asks to confirm', icon: Power, danger: true },
   ],
   [
-    { action: 'windows-lock', label: 'Windows lock', hint: 'Only the student’s password releases it', icon: ShieldAlert },
+    { action: 'windows-lock', label: 'Windows lock', hint: 'Only the studentâ€™s password releases it', icon: ShieldAlert },
     { action: 'disable', label: 'Disable console', hint: 'Block the lab app', icon: ToggleLeft },
     { action: 'enable', label: 'Enable console', hint: 'Restore the lab app', icon: ToggleRight },
   ],
@@ -153,7 +161,7 @@ export function SelectionBar({
         variant="outline"
         size="sm"
         disabled={busy || studentCount === 0}
-        title="Blocks keyboard and mouse only — the screen stays visible"
+        title="Blocks keyboard and mouse only â€” the screen stays visible"
         onClick={() => onAction('lock-input')}
       >
         <Keyboard />

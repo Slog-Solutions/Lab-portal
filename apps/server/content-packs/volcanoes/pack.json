@@ -1,0 +1,41 @@
+{
+  "title": "How Volcanoes Work",
+  "gradeLevel": "Grade 11",
+  "cefrLevel": "B2",
+  "description": "An encyclopedia-style article on the causes, types and effects of volcanic eruptions.",
+  "image": { "file": "picture.svg", "caption": "Cross-section of a volcano: magma rises from the chamber through the vent." },
+  "sections": [
+    {
+      "paragraphs": [
+        "A volcano is an opening in the Earth's crust through which molten rock, gas and ash escape from deep underground. Beneath the surface, temperatures are high enough to melt rock, forming a liquid called magma. Because magma is less dense than the solid rock around it, it slowly rises and collects in a magma chamber.",
+        "When pressure in the chamber becomes too great, the magma forces its way up through a channel called the vent. Once it reaches the surface it is called lava."
+      ]
+    },
+    {
+      "heading": "Where and why volcanoes form",
+      "paragraphs": [
+        "Most volcanoes are found along the edges of the tectonic plates that make up the Earth's crust. Where one plate is pushed beneath another, the sinking rock melts and feeds volcanoes, as in the so-called Ring of Fire around the Pacific Ocean. Where plates move apart, magma rises to fill the gap, often under the sea.",
+        "A few volcanoes, such as those of Hawaii, form far from plate edges, above unusually hot areas of the mantle known as hotspots."
+      ]
+    },
+    {
+      "heading": "Gentle and explosive eruptions",
+      "paragraphs": [
+        "Not all eruptions are alike. Runny, low-gas magma produces gentle eruptions with rivers of lava. Thick, gas-rich magma traps pressure until it is released violently, throwing ash high into the atmosphere. Although eruptions can be destructive, volcanic ash eventually breaks down into some of the most fertile soil on Earth, which is why many farming communities live close to volcanoes."
+      ]
+    }
+  ],
+  "glossary": [
+    ["magma", "molten rock below the Earth's surface"],
+    ["tectonic plate", "one of the huge pieces that the Earth's crust is divided into"],
+    ["fertile", "able to produce good crops"]
+  ],
+  "questions": [
+    { "id": "q1", "type": "choice", "prompt": "Why does magma rise towards the surface?", "choices": ["It is less dense than the rock around it.", "It is pulled up by the Sun.", "It is cooler than the rock around it."], "answer": "It is less dense than the rock around it." },
+    { "id": "q2", "type": "text", "prompt": "What is magma called once it reaches the surface? (one word)", "answer": ["lava"] },
+    { "id": "q3", "type": "choice", "prompt": "Where are most volcanoes found?", "choices": ["in the middle of tectonic plates", "along the edges of tectonic plates", "only under the sea"], "answer": "along the edges of tectonic plates" },
+    { "id": "q4", "type": "text", "prompt": "Volcanoes that form far from plate edges sit above areas called ______.", "answer": ["hotspots", "hot spots", "hotspot"] },
+    { "id": "q5", "type": "choice", "prompt": "What kind of magma causes explosive eruptions?", "choices": ["runny, low-gas magma", "thick, gas-rich magma", "cool, solid magma"], "answer": "thick, gas-rich magma" },
+    { "id": "q6", "type": "choice", "prompt": "Why do many farmers live near volcanoes?", "choices": ["Volcanic ash becomes very fertile soil.", "The weather is always warm.", "Lava protects their crops."], "answer": "Volcanic ash becomes very fertile soil." }
+  ]
+}

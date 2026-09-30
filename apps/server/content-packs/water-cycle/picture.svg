@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 320" role="img" aria-label="Diagram of the water cycle">
+  <defs><marker id="a" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0 10 5 0 10z" fill="#1d3557"/></marker></defs>
+  <rect width="720" height="320" fill="#e8f4fd"/>
+  <circle cx="640" cy="60" r="34" fill="#ffd166"/>
+  <path d="M0 250 Q180 230 360 250 T720 245 V320 H0Z" fill="#48cae4"/>
+  <path d="M430 250 L520 150 L600 250Z" fill="#6c757d"/><path d="M500 172 L520 150 L540 172Z" fill="#fff"/>
+  <g fill="#fff" stroke="#adb5bd"><ellipse cx="200" cy="70" rx="70" ry="28"/><ellipse cx="250" cy="60" rx="55" ry="25"/><ellipse cx="420" cy="70" rx="70" ry="28"/><ellipse cx="470" cy="60" rx="50" ry="24"/></g>
+  <g stroke="#0077b6" stroke-width="2"><line x1="420" y1="105" x2="410" y2="130"/><line x1="440" y1="105" x2="430" y2="130"/><line x1="460" y1="105" x2="450" y2="130"/><line x1="480" y1="105" x2="470" y2="130"/></g>
+  <g fill="none" stroke="#1d3557" stroke-width="2.5" marker-end="url(#a)">
+    <path d="M160 235 C150 190 160 140 180 105"/>
+    <path d="M290 60 C330 45 350 45 365 55"/>
+    <path d="M470 110 C490 150 500 180 505 200"/>
+    <path d="M600 262 C520 290 350 290 250 262"/>
+  </g>
+  <g font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="600" fill="#1d3557">
+    <text x="40" y="170">1 Evaporation</text>
+    <text x="275" y="30">2 Condensation</text>
+    <text x="520" y="120">3 Precipitation</text>
+    <text x="330" y="305">4 Collection</text>
+  </g>
+</svg>

@@ -19,6 +19,8 @@ export const controlApi = {
   enable: (target: CommandTarget) => apiFetch('/control/enable', { method: 'POST', body: JSON.stringify({ target }) }),
   disable: (target: CommandTarget) => apiFetch('/control/disable', { method: 'POST', body: JSON.stringify({ target }) }),
   openUrl: (target: CommandTarget, url: string) => apiFetch('/control/open-url', { method: 'POST', body: JSON.stringify({ target, url }) }),
+  launchProgram: (target: CommandTarget, programId: string) =>
+    apiFetch('/control/launch-program', { method: 'POST', body: JSON.stringify({ target, programId }) }),
   pushFile: (target: CommandTarget, assetId: string, destinationHint: 'desktop' | 'downloads' = 'downloads') =>
     apiFetch('/control/push-file', { method: 'POST', body: JSON.stringify({ target, assetId, destinationHint }) }),
   /** Ser 1 "broadcast any student's screen to others" — spotlights one

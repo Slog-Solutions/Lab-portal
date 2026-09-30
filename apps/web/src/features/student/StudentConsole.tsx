@@ -26,6 +26,7 @@ import { LiveVocabularyTest } from '../activities/LiveVocabularyTest';
 import { AssignmentsPanel } from './AssignmentsPanel';
 import { StudyLibraryPanel } from './StudyLibraryPanel';
 import { PronunciationPracticePanel } from './PronunciationPracticePanel';
+import { EnglishCoursePanel } from '../course/EnglishCoursePanel';
 import { MyClassesSection } from './MyClassesSection';
 import { JoinLiveClassCard } from './JoinLiveClassCard';
 import { StudentSignInScreen } from './StudentSignInScreen';
@@ -164,6 +165,7 @@ export function StudentConsole() {
   // in progress lives in its panel's own state, and the screen-share/audio
   // containers must never move or unmount (see router.tsx's doc comment).
   const [section, setSection] = useState<StudentSection>('home');
+  const [openRequest, setOpenRequest] = useState<{ assignmentId: string; nonce: number } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
   const seatText = identity ? `System ${seatLabel(identity.seatNo)}` : null;
@@ -409,6 +411,16 @@ export function StudentConsole() {
       const payload = envelope.payload as { text: string; severity: 'info' | 'warning' };
       showToast(payload.text, payload.severity);
     }
+    // Ser 4: the teacher launched a content exercise "directly to students"
+    // — open the Assignments section and start it (only if someone is
+    // signed in; the assignment is theirs, so it waits there otherwise).
+    const opens = envelope.type === CommandType.OPEN_ASSIGNMENT && !!useStudentSession.getState().token;
+    if (opens) {
+      const payload = envelope.payload as { assignmentId: string; title: string };
+      setSection('assignments');
+      setOpenRequest({ assignmentId: payload.assignmentId, nonce: Date.now() });
+      showToast(`Your teacher opened "${payload.title}"`, 'info');
+    }
     // SHUTDOWN/RESTART/LAUNCH_PROGRAM/OPEN_URL have no meaning in a
     // browser tab — those only apply to the real Electron client
     // (apps/desktop/src/main/command-handler.ts). Ack as ignored rather
@@ -416,7 +428,7 @@ export function StudentConsole() {
     // forever for a browser-only test station.
     control.ackCommand({
       commandId: envelope.id,
-      status: envelope.type === CommandType.MESSAGE ? 'applied' : 'ignored',
+      status: envelope.type === CommandType.MESSAGE || opens ? 'applied' : 'ignored',
       appliedAt: Date.now(),
     });
   }
@@ -803,7 +815,14 @@ export function StudentConsole() {
                 state, matching Ser 1's "self-study even when teacher not
                 present". */}
             <div data-section="assignments" className={paneClass('assignments')}>
-              <AssignmentsPanel control={controlRef.current} />
+              <AssignmentsPanel control={controlRef.current} openRequest={openRequest} />
+            </div>
+
+            {/* Ser 10 English Course — the built-in skills course (pronunciation,
+                rhythm, listening, reading, grammar) with its own progress page.
+                Self-study like the library: no teacher or live class needed. */}
+            <div data-section="course" className={paneClass('course')}>
+              <EnglishCoursePanel control={controlRef.current} active={section === 'course'} />
             </div>
 
             {/* Ser 1 self-study library (Phase 4) — same "teacher absent"

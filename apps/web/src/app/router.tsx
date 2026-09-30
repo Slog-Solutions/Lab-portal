@@ -23,6 +23,8 @@ import { PronunciationTestResultsPage } from '../features/exercises/Pronunciatio
 import { CreateAssignmentPage } from '../features/assignments/CreateAssignmentPage';
 import { AssignmentResultsPage } from '../features/assignments/AssignmentResultsPage';
 import { LiveTestBoardPage } from '../features/teacher/tests/LiveTestBoardPage';
+import { ContentExercisesPage } from '../features/content/ContentExercisesPage';
+import { ContentExerciseReportPage } from '../features/content/ContentExerciseReportPage';
 import { ProtectedRoute } from './ProtectedRoute';
 import { TeacherLayout } from './TeacherLayout';
 import { getRuntimeConfig } from '../lib/runtime-config';
@@ -125,6 +127,9 @@ export const router = createHashRouter([
       // live board, keyed by the ActivityInstance id (not a session/group id).
       { path: '/tests/live/:instanceId', element: <LiveTestBoardPage /> },
       { path: '/study-library', element: <StudyLibraryPage /> },
+      // Ser 4 Content Exercise: ready-made + publisher content, grade/level-wise.
+      { path: '/content-exercises', element: <ContentExercisesPage /> },
+      { path: '/content-exercises/:id', element: <ContentExerciseReportPage /> },
       { path: '/gradebook', element: <GradebookPage /> },
       { path: '/reports', element: <ReportsPage /> },
       { path: '/recordings', element: <ClassRecordingsPage /> },

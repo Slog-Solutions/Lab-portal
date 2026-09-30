@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 240" role="img" aria-label="The Sun and eight planets in a row">
+  <rect width="720" height="240" fill="#0d1b2a"/>
+  <g fill="#fff" opacity="0.6"><circle cx="40" cy="30" r="1.2"/><circle cx="210" cy="200" r="1"/><circle cx="330" cy="25" r="1.4"/><circle cx="470" cy="210" r="1"/><circle cx="610" cy="35" r="1.3"/><circle cx="690" cy="190" r="1"/></g>
+  <circle cx="-10" cy="120" r="95" fill="#ffb703"/>
+  <circle cx="-10" cy="120" r="80" fill="#ffd166"/>
+  <g font-family="Segoe UI, Arial, sans-serif" font-size="12" fill="#e9ecef" text-anchor="middle">
+    <circle cx="120" cy="120" r="6" fill="#adb5bd"/><text x="120" y="150">Mercury</text>
+    <circle cx="170" cy="120" r="10" fill="#e9c46a"/><text x="170" y="150">Venus</text>
+    <circle cx="225" cy="120" r="11" fill="#4895ef"/><circle cx="222" cy="116" r="4" fill="#52b788"/><text x="225" y="150">Earth</text>
+    <circle cx="275" cy="120" r="8" fill="#e76f51"/><text x="275" y="150">Mars</text>
+    <circle cx="360" cy="120" r="36" fill="#d4a373"/><rect x="326" y="110" width="68" height="5" fill="#bc8a5f" opacity="0.7"/><text x="360" y="178">Jupiter</text>
+    <ellipse cx="470" cy="120" rx="52" ry="10" fill="none" stroke="#e9d8a6" stroke-width="4"/><circle cx="470" cy="120" r="28" fill="#e9d8a6"/><text x="470" y="170">Saturn</text>
+    <circle cx="570" cy="120" r="18" fill="#90e0ef"/><text x="570" y="160">Uranus</text>
+    <circle cx="650" cy="120" r="17" fill="#4361ee"/><text x="650" y="160">Neptune</text>
+  </g>
+  <text x="18" y="228" font-family="Segoe UI, Arial, sans-serif" font-size="13" fill="#ffd166">Sun</text>
+</svg>

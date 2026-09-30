@@ -1,6 +1,6 @@
 import { ROUND_TABLE_DEFAULTS, roundTableConfigFromForm, type RoundTableForm } from '../round-table/RoundTableAuthoring';
 
-/** Composable here without leaving the builder — every registered
+/** Composable here without leaving the builder â€” every registered
  * ActivityType now has either a player or (self-study) its own dedicated
  * browsing surface; see packages/shared/src/activities for the full
  * registry and StudyLibraryPanel for why SELF_STUDY isn't listed here
@@ -8,12 +8,12 @@ import { ROUND_TABLE_DEFAULTS, roundTableConfigFromForm, type RoundTableForm } f
  * session slot). */
 export type BuilderActivityType = 'VOCABULARY_TEST' | 'ROUND_TABLE' | 'TELEPHONE' | 'MODEL_IMITATION' | 'CONFERENCE_INTERPRETING';
 
-// SPEC-mcq-test-timed-reveal.md — VOCABULARY_TEST is deliberately absent
+// SPEC-mcq-test-timed-reveal.md â€” VOCABULARY_TEST is deliberately absent
 // here: the public POST /sessions now refuses that type outright
 // (SessionsService.create), because the generic builder below only ever
 // produced an unlinked, answer-bearing inline config (buildActivityConfig's
 // own VOCABULARY_TEST case, kept only so GroupDraft/buildActivityConfig's
-// switch stays exhaustive for any lingering caller — never reachable from
+// switch stays exhaustive for any lingering caller â€” never reachable from
 // this picker). A vocabulary test now launches only through a saved test's
 // own "Launch in lab" button (TimedTestsService.launch), which links the
 // live instance back to the real, answer-key-stripped Exercise.
@@ -34,15 +34,16 @@ export interface GroupDraft extends RoundTableForm {
   activityType: BuilderActivityType;
   wordPairs: string; // VOCABULARY_TEST raw textarea: "word=answer" per line
   masterTrackAssetId: string; // MODEL_IMITATION only
-  languages: string; // CONFERENCE_INTERPRETING only — comma-separated
-  // CONFERENCE_INTERPRETING only — per-member role + language, keyed by stationId.
+  pausePoints: string; // MODEL_IMITATION only — seconds into the track, comma-separated
+  languages: string; // CONFERENCE_INTERPRETING only â€” comma-separated
+  // CONFERENCE_INTERPRETING only â€” per-member role + language, keyed by stationId.
   interpretingRoles: Record<string, { role: InterpretingRoleChoice; lang: string }>;
-  // Offline dictionary (SPEC-offline-dictionary.md §7). `dictionaryEnabled`
+  // Offline dictionary (SPEC-offline-dictionary.md Â§7). `dictionaryEnabled`
   // tracks the checkbox's current value; `dictionaryEnabledTouched` is
   // false until the teacher actually clicks it, so switching the activity
   // type keeps following that type's own default (VOCABULARY_TEST off,
   // everything else on) right up until the teacher makes an explicit
-  // choice — see defaultDictionaryEnabled and its call sites.
+  // choice â€” see defaultDictionaryEnabled and its call sites.
   dictionaryEnabled: boolean;
   dictionaryEnabledTouched: boolean;
 }
@@ -63,6 +64,7 @@ export function emptyGroup(index: number, activityType: BuilderActivityType = 'R
     chairmanStationId: '',
     ...ROUND_TABLE_DEFAULTS,
     masterTrackAssetId: '',
+    pausePoints: '',
     languages: '',
     interpretingRoles: {},
     dictionaryEnabled: defaultDictionaryEnabled(activityType),
@@ -89,7 +91,7 @@ export function buildActivityConfig(group: GroupDraft): unknown {
     case 'TELEPHONE':
       return { scenario: group.topic || undefined, maxDurationSec: 600 };
     case 'MODEL_IMITATION':
-      return { masterTrackAssetId: group.masterTrackAssetId, pausePoints: [], allowManualPause: true };
+      return { masterTrackAssetId: group.masterTrackAssetId, pausePoints: parsePausePoints(group.pausePoints), allowManualPause: true };
     case 'CONFERENCE_INTERPRETING':
       return {
         topic: group.topic || 'Untitled conference',
@@ -139,4 +141,13 @@ export interface SessionSummary {
     activity?: { id: string; type: string; dictionaryEnabled: boolean | null; exerciseId?: string | null } | null;
     members?: Array<{ student: { id: string; fullName: string } | null }>;
   }>;
+}
+
+/** "12, 20.5" (seconds) -> sorted unique millisecond offsets; bad tokens are dropped. */
+export function parsePausePoints(raw: string): number[] {
+  const ms = raw
+    .split(/[,\s]+/)
+    .map((t) => Math.round(Number(t) * 1000))
+    .filter((n) => Number.isFinite(n) && n > 0);
+  return [...new Set(ms)].sort((a, b) => a - b);
 }

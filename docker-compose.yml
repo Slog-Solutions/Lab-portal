@@ -1,0 +1,126 @@
+# Full Lab Portal stack: nginx (web + reverse proxy) -> NestJS API,
+# with Postgres, Redis and LiveKit.  Usage:
+#   cp .env.docker.example .env   # then edit secrets + HOST_IP
+#   docker compose up -d --build
+# The infra-only dev stack is still in infra/docker-compose.yml.
+name: lab-portal-stack
+
+x-restart: &restart
+  restart: unless-stopped
+
+services:
+  postgres:
+    <<: *restart
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: labportal
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: labportal
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U labportal -d labportal']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks: [backend]
+
+  redis:
+    <<: *restart
+    image: redis:7-alpine
+    command: ['redis-server', '--appendonly', 'yes']
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    networks: [backend]
+
+  livekit:
+    <<: *restart
+    image: livekit/livekit-server:v1.13.6
+    environment:
+      # Config is inlined (no mounted file, no secrets on disk). Media UDP/TCP
+      # is published below; signalling is reached through nginx at /livekit.
+      LIVEKIT_CONFIG: |
+        port: 7880
+        bind_addresses: ['0.0.0.0']
+        rtc:
+          tcp_port: 7881
+          udp_port: 7882-7892
+          use_external_ip: false
+          node_ip: ${HOST_IP:?set HOST_IP in .env to the server's LAN IP}
+        redis:
+          address: redis:6379
+        room:
+          auto_create: false
+        keys:
+          ${LIVEKIT_API_KEY:-labkey}: ${LIVEKIT_API_SECRET:?set LIVEKIT_API_SECRET in .env}
+        logging:
+          level: info
+    ports:
+      - '7881:7881'
+      - '7882-7892:7882-7892/udp'
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks: [backend]
+
+  server:
+    <<: *restart
+    build:
+      context: .
+      dockerfile: apps/server/Dockerfile
+    image: lab-portal/server:latest
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      DATABASE_URL: postgresql://labportal:${POSTGRES_PASSWORD}@postgres:5432/labportal?schema=public
+      JWT_SECRET: ${JWT_SECRET:?set JWT_SECRET in .env (>= 32 chars)}
+      LIVEKIT_URL: ws://livekit:7880
+      LIVEKIT_API_KEY: ${LIVEKIT_API_KEY:-labkey}
+      LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-500}
+      RUN_SEED: ${RUN_SEED:-false}
+    volumes:
+      - lab-data:/data/LabData
+      - lab-updates:/data/updates
+    depends_on:
+      postgres:
+        condition: service_healthy
+      livekit:
+        condition: service_started
+    networks: [backend]
+
+  web:
+    <<: *restart
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    image: lab-portal/web:latest
+    environment:
+      API_UPSTREAM: server:3000
+      LIVEKIT_UPSTREAM: livekit:7880
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-500}
+      TLS_CN: ${TLS_CN:-lab.local}
+      TLS_EXTRA_SAN: IP:${HOST_IP}
+    ports:
+      - '${HTTP_PORT:-80}:80'
+      - '${HTTPS_PORT:-443}:443'
+    volumes:
+      - nginx-certs:/etc/nginx/certs # drop tls.crt / tls.key here to use your own CA cert
+    depends_on:
+      - server
+    networks: [backend]
+
+networks:
+  backend:
+
+volumes:
+  postgres-data:
+  redis-data:
+  lab-data:
+  lab-updates:
+  nginx-certs:

@@ -258,6 +258,10 @@ enum ActivityType {
   CONFERENCE_INTERPRETING
   PRESENTATION_RECORDING
   SELF_STUDY
+  // Ser 10 built-in English Course (original content catalog in
+  // apps/server/src/modules/english-course/catalog) — one Exercise row per
+  // catalog activity, keyed by Exercise.catalogKey.
+  ENGLISH_COURSE
 }
 
 // A teacher-defined set of stations partitioned into up to 6 groups
@@ -428,16 +432,25 @@ model MediaAsset {
 
 // SCORM/xAPI/HTML import (build plan "engine + import + seed pack" decision)
 model ContentPackage {
-  id         String          @id @default(cuid())
-  ownerId    String
-  owner      User            @relation(fields: [ownerId], references: [id])
-  scope      MediaAssetScope @default(INSTITUTION)
-  title      String
-  format     String // 'SCORM12' | 'SCORM2004' | 'XAPI' | 'HTML'
-  entryPoint String // path of the launch file, relative to `path`
-  path       String // extracted package root, relative to LabData root
-  sizeBytes  Int             @default(0)
-  importedAt DateTime        @default(now())
+  id          String          @id @default(cuid())
+  // Null only for a ready-made package that ships with the lab
+  // (apps/server/content-packs, see BuiltinContentService) — no teacher owns it.
+  ownerId     String?
+  owner       User?           @relation(fields: [ownerId], references: [id], onDelete: Restrict)
+  // Ready-made packages: the content-packs folder name, stable across restarts.
+  builtinKey  String?         @unique
+  // Ser 4 "content provided by reputed publisher" / "grade wise" / "level wise".
+  publisher   String?
+  gradeLevel  String?
+  cefrLevel   String?
+  description String?
+  scope       MediaAssetScope @default(INSTITUTION)
+  title       String
+  format      String // 'SCORM12' | 'SCORM2004' | 'XAPI' | 'HTML'
+  entryPoint  String // path of the launch file, relative to `path`
+  path        String // extracted package root, relative to LabData root
+  sizeBytes   Int             @default(0)
+  importedAt  DateTime        @default(now())
 
   lessons Lesson[]
 }
@@ -498,8 +511,13 @@ model StudyModule {
 // configSchema from the Activity Type Registry.
 model Exercise {
   id                String       @id @default(cuid())
-  teacherId         String
-  teacher           User         @relation("ExerciseTeacher", fields: [teacherId], references: [id])
+  // Null only for built-in ENGLISH_COURSE content, which no teacher owns
+  // (so no teacher can edit or delete it — the owner checks compare ids).
+  teacherId         String?
+  teacher           User?        @relation("ExerciseTeacher", fields: [teacherId], references: [id], onDelete: Restrict)
+  // ENGLISH_COURSE only: the catalog activity this row mirrors. Stable
+  // across restarts, so assignments and attempts survive a catalog resync.
+  catalogKey        String?      @unique
   lessonId          String?
   lesson            Lesson?      @relation(fields: [lessonId], references: [id])
   type              ActivityType

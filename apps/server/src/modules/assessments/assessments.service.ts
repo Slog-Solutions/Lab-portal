@@ -186,7 +186,7 @@ export class AssessmentsService {
         type: ex.type,
         title: ex.title,
         createdAt: ex.createdAt,
-        teacherName: ex.teacher.fullName,
+        teacherName: ex.teacher?.fullName ?? 'Built-in',
         questionCount: ex.itemBank?._count.items ?? 0,
         assigned: ex.assignments.length,
         submitted: ex.assignments.filter((a) => a.attempts.some((t) => done(t.status))).length,
@@ -244,7 +244,7 @@ export class AssessmentsService {
       type: exercise.type,
       title: exercise.title,
       createdAt: exercise.createdAt,
-      teacherName: exercise.teacher.fullName,
+      teacherName: exercise.teacher?.fullName ?? 'Built-in',
       config: exercise.config as {
         instructions?: string;
         minWords?: number;
@@ -561,7 +561,7 @@ export class AssessmentsService {
     return result.data;
   }
 
-  private assertOwnerOrAdmin(exercise: { teacherId: string }, requester: Requester): void {
+  private assertOwnerOrAdmin(exercise: { teacherId: string | null }, requester: Requester): void {
     if (requester.role === UserRole.ADMIN || exercise.teacherId === requester.id) return;
     throw new ForbiddenException('This assignment belongs to another teacher');
   }

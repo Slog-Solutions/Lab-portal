@@ -171,6 +171,11 @@ export async function executeCommand(envelope: CommandEnvelope, context: Command
         }
         return { status: 'applied' };
       }
+      case CommandType.OPEN_ASSIGNMENT: {
+        // Handled by the student console in the renderer (it opens the
+        // assignment); nothing for the main process to do.
+        return { status: 'applied' };
+      }
       case CommandType.PUSH_FILE: {
         const payload = envelope.payload as PushFilePayload;
         const token = context.getToken();

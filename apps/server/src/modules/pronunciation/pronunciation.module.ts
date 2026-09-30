@@ -13,5 +13,6 @@ import { PronunciationTestsService } from './pronunciation-tests.service';
   imports: [MediaAssetsModule, GradebookModule, BatchesModule],
   controllers: [PronunciationController, PronunciationTestsController],
   providers: [PronunciationService, PronunciationTestsService],
+  exports: [PronunciationService],
 })
 export class PronunciationModule {}

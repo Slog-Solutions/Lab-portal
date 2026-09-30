@@ -27,7 +27,7 @@ import {
  * activity with the members picked for it. Used twice:
  *  - the Session Builder (seats, any class chosen from a dropdown), and
  *  - a class's own page (that class fixed, its signed-in STUDENTS picked).
- * Either way a pick is a stationId underneath — the live engine delivers to
+ * Either way a pick is a stationId underneath â€” the live engine delivers to
  * seats. Picking students also sends `expectedStudents`, so the server can
  * refuse if someone moved or signed out between the pick and Create.
  */
@@ -46,7 +46,7 @@ export function SessionComposer({
   activityTypes?: BuilderActivityType[];
   /** Shown in the picker when there is nobody to pick. */
   emptyText: string;
-  /** Seeds group 1 (or more) instead of starting from a single empty group —
+  /** Seeds group 1 (or more) instead of starting from a single empty group â€”
    * e.g. seats a teacher already selected on the Lab Control Console. */
   initialGroups?: GroupDraft[];
 }) {
@@ -93,8 +93,8 @@ export function SessionComposer({
               chairmanStationId:
                 g.activityType === 'ROUND_TABLE' && g.chairmanAssignment === 'manual' && g.chairmanStationId ? g.chairmanStationId : undefined,
               // Omitted (not false) when the teacher never touched the
-              // checkbox — the server then applies the activity type's own
-              // default (spec §7) rather than freezing today's default in.
+              // checkbox â€” the server then applies the activity type's own
+              // default (spec Â§7) rather than freezing today's default in.
               dictionaryEnabled: g.dictionaryEnabledTouched ? g.dictionaryEnabled : undefined,
             })),
           expectedStudents: Object.keys(expected).length > 0 ? expected : undefined,
@@ -109,7 +109,7 @@ export function SessionComposer({
     },
     onError: (err) => {
       setError(err instanceof Error ? err.message : 'Failed to create session');
-      // Someone may have moved or signed out — show the current seats.
+      // Someone may have moved or signed out â€” show the current seats.
       void queryClient.invalidateQueries({ queryKey: queryKeys.stationsStatusBoard });
     },
   });
@@ -214,13 +214,13 @@ export function SessionComposer({
           <div className={cn('grid gap-4', !fixedBatchId && '@xl:grid-cols-[minmax(0,1fr)_240px]')}>
             <div>
               <FieldLabel htmlFor="session-title">Session title</FieldLabel>
-              <Input id="session-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Unit 4 — group discussion" />
+              <Input id="session-title" value={title} onChange={(e) => setTitle(e.target.value)} placeholder="e.g. Unit 4 â€” group discussion" />
             </div>
             {!fixedBatchId && (
               <div>
                 <FieldLabel htmlFor="session-batch">Class</FieldLabel>
                 <NativeSelect id="session-batch" className="w-full" value={chosenBatchId} onChange={(e) => setChosenBatchId(e.target.value)}>
-                  <option value="">Select batch…</option>
+                  <option value="">Select batchâ€¦</option>
                   {batches?.map((b) => (
                     <option key={b.id} value={b.id}>
                       {b.name}
@@ -292,7 +292,8 @@ export function SessionComposer({
                     />
                   </div>
                 ) : group.activityType === 'MODEL_IMITATION' ? (
-                  <div>
+                  <div className="space-y-3">
+                    <div>
                     <FieldLabel>Master track</FieldLabel>
                     <NativeSelect
                       className="w-full"
@@ -300,13 +301,23 @@ export function SessionComposer({
                       value={group.masterTrackAssetId}
                       onChange={(e) => updateGroup(group.index, { masterTrackAssetId: e.target.value })}
                     >
-                      <option value="">Select master track (audio)…</option>
+                      <option value="">Select master track (audio)â€¦</option>
                       {audioAssets.map((a) => (
                         <option key={a.id} value={a.id}>
                           {a.title ?? a.filename}
                         </option>
                       ))}
                     </NativeSelect>
+                    </div>
+                    <div>
+                      <FieldLabel>Pause points (seconds)</FieldLabel>
+                      <Input
+                        aria-label="Pause points in seconds"
+                        value={group.pausePoints}
+                        onChange={(e) => updateGroup(group.index, { pausePoints: e.target.value })}
+                        placeholder="e.g. 8, 15.5, 24 — the track pauses there so students can repeat"
+                      />
+                    </div>
                   </div>
                 ) : group.activityType === 'CONFERENCE_INTERPRETING' ? (
                   <div className="grid gap-4 @xl:grid-cols-2">
@@ -396,7 +407,7 @@ export function SessionComposer({
           </button>
         </div>
 
-        {/* Summary column — beside the form when there is room, below it otherwise. */}
+        {/* Summary column â€” beside the form when there is room, below it otherwise. */}
         <aside className="@4xl:sticky @4xl:top-[86px] @4xl:self-start">
           <div className="rounded-card border border-hairline bg-muted/40 p-4">
             <h3 className="text-sm font-semibold text-foreground">Summary</h3>
@@ -435,7 +446,7 @@ export function SessionComposer({
                 createSession.mutate();
               }}
             >
-              {createSession.isPending ? 'Creating…' : 'Create session'}
+              {createSession.isPending ? 'Creatingâ€¦' : 'Create session'}
             </Button>
             {error && (
               <p role="alert" className="mt-3 rounded-control bg-destructive/10 px-3 py-2 text-xs text-destructive">
@@ -526,11 +537,11 @@ function MemberPicker({
           key={`stale-${id}`}
           type="button"
           onClick={() => onToggle(id)}
-          title="No longer signed in at that computer — click to remove"
+          title="No longer signed in at that computer â€” click to remove"
           className="relative flex min-h-[52px] flex-col justify-center rounded-control border border-status-pending/50 bg-status-pending/10 px-3 py-2 text-left text-foreground transition-colors hover:bg-status-pending/20"
         >
           <span className="truncate pr-5 text-sm font-semibold">{picks[id]?.label ?? `Seat ${id.slice(0, 8)}`}</span>
-          <span className="truncate text-xs text-muted-foreground">Moved — click to remove</span>
+          <span className="truncate text-xs text-muted-foreground">Moved â€” click to remove</span>
           <X className="absolute right-2.5 top-2.5 h-3.5 w-3.5" aria-hidden />
         </button>
       ))}

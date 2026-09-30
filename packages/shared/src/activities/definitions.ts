@@ -107,11 +107,24 @@ registerActivity({
 
 const zContentExerciseConfig = z.object({
   contentPackageId: z.string().cuid2(),
+  /** Ser 4 "grade wise" — e.g. "Grade 8". */
   gradeLevel: z.string().min(1),
+  /** Ser 4 "level wise" — the CEFR level, when the content has one. */
+  cefrLevel: z.enum(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']).optional(),
 });
 const zContentExerciseResponse = z.object({
   score: z.number().min(0).max(100),
-  itemResults: z.array(z.object({ itemId: z.string(), correct: z.boolean() })),
+  // prompt/given/expected are optional: a package reports them through
+  // cmi.interactions when it can, and the teacher's detailed report shows them.
+  itemResults: z.array(
+    z.object({
+      itemId: z.string().max(200),
+      correct: z.boolean(),
+      prompt: z.string().max(1000).optional(),
+      given: z.string().max(1000).optional(),
+      expected: z.string().max(1000).optional(),
+    }),
+  ).max(500),
 });
 registerActivity({
   id: ActivityType.CONTENT_EXERCISE,
@@ -319,4 +332,19 @@ registerActivity({
   playerComponent: 'SelfStudyPlayer',
   authoringComponent: 'SelfStudyAuthoring',
   realtimeRequirements: { mediaRoom: 'none', needsRecording: false, needsChairman: false },
+});
+
+// ---- Ser 10: English Course (built-in, originally authored content) ---------------
+// The content lives server-side in the english-course catalog; an Exercise
+// row only points at it, so it can be assigned and graded like any other.
+// Seats reach it through /english-course, never through /attempts.
+
+registerActivity({
+  id: ActivityType.ENGLISH_COURSE,
+  label: 'English Course',
+  configSchema: z.object({ catalogKey: z.string().min(1) }),
+  responseSchema: z.object({}),
+  playerComponent: 'CourseActivityPlayer',
+  authoringComponent: 'EnglishCourseCatalog',
+  realtimeRequirements: { mediaRoom: 'none', needsRecording: true, needsChairman: false },
 });

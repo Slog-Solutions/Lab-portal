@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 520 320" role="img" aria-label="An early wooden wall telephone">
+  <rect width="520" height="320" fill="#f6efe2"/>
+  <rect x="170" y="30" width="180" height="260" rx="14" fill="#8d5a34" stroke="#5e3a1f" stroke-width="4"/>
+  <circle cx="220" cy="75" r="16" fill="#d9b25b" stroke="#5e3a1f" stroke-width="3"/>
+  <circle cx="300" cy="75" r="16" fill="#d9b25b" stroke="#5e3a1f" stroke-width="3"/>
+  <rect x="235" y="120" width="50" height="60" rx="6" fill="#3a2a1d"/>
+  <circle cx="260" cy="150" r="16" fill="#1e1e1e"/>
+  <path d="M260 180 V210" stroke="#1e1e1e" stroke-width="10"/>
+  <ellipse cx="260" cy="222" rx="26" ry="14" fill="#1e1e1e"/>
+  <rect x="330" y="140" width="80" height="16" rx="8" fill="#1e1e1e" transform="rotate(-25 330 140)"/>
+  <path d="M360 110 C420 130 430 200 390 250" fill="none" stroke="#1e1e1e" stroke-width="4"/>
+  <rect x="120" y="120" width="30" height="80" rx="6" fill="#5e3a1f"/>
+  <g font-family="Segoe UI, Arial, sans-serif" font-size="14" fill="#3a2a1d">
+    <text x="30" y="160">handle</text><path d="M80 155 H118" stroke="#3a2a1d"/>
+    <text x="30" y="225">mouthpiece</text><path d="M110 222 H232" stroke="#3a2a1d"/>
+    <text x="420" y="270">earpiece</text><path d="M430 258 L405 245" stroke="#3a2a1d"/>
+    <text x="205" y="310">bells</text>
+  </g>
+</svg>

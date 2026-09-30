@@ -1,0 +1,36 @@
+{
+  "title": "The Water Cycle",
+  "gradeLevel": "Grade 7",
+  "cefrLevel": "A2",
+  "description": "How water moves between the sea, the sky and the land — reading, diagram, narration and six questions.",
+  "image": { "file": "picture.svg", "caption": "The water cycle: evaporation, condensation, precipitation and collection." },
+  "sections": [
+    {
+      "paragraphs": [
+        "The water on Earth is always moving. The same water has been used again and again for millions of years. This journey is called the water cycle.",
+        "First, the Sun heats water in seas, rivers and lakes. Some of the water turns into an invisible gas called water vapour and rises into the air. This is called evaporation."
+      ]
+    },
+    {
+      "heading": "From the sky to the land",
+      "paragraphs": [
+        "High in the sky the air is cold. The water vapour cools down and changes back into tiny drops of water. The drops join together to make clouds. This is called condensation.",
+        "When the drops become too heavy, they fall to the ground as rain, snow or hail. This is called precipitation.",
+        "The water collects in rivers, lakes and under the ground, and much of it flows back to the sea. Then the cycle starts again."
+      ]
+    }
+  ],
+  "glossary": [
+    ["evaporation", "when a liquid changes into a gas"],
+    ["condensation", "when a gas changes into a liquid"],
+    ["precipitation", "water that falls from clouds: rain, snow or hail"]
+  ],
+  "questions": [
+    { "id": "q1", "type": "choice", "prompt": "What heats the water in the seas and rivers?", "choices": ["the Moon", "the Sun", "the wind"], "answer": "the Sun" },
+    { "id": "q2", "type": "text", "prompt": "Water changing into a gas is called ______.", "answer": ["evaporation"] },
+    { "id": "q3", "type": "choice", "prompt": "What do tiny drops of water make when they join together in the sky?", "choices": ["clouds", "rivers", "water vapour"], "answer": "clouds" },
+    { "id": "q4", "type": "text", "prompt": "Rain, snow and hail are all kinds of ______.", "answer": ["precipitation"] },
+    { "id": "q5", "type": "choice", "prompt": "Why does water vapour change back into drops of water?", "choices": ["The air high in the sky is cold.", "The Sun is very hot.", "The drops are heavy."], "answer": "The air high in the sky is cold." },
+    { "id": "q6", "type": "choice", "prompt": "What happens after the water flows back to the sea?", "choices": ["The water disappears.", "The cycle starts again.", "It turns into ice."], "answer": "The cycle starts again." }
+  ]
+}
