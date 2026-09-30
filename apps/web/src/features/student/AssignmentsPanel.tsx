@@ -12,6 +12,7 @@ import { PronunciationTestPlayer } from '../activities/PronunciationTestPlayer';
 import { WritingTestPlayer } from '../activities/WritingTestPlayer';
 import { ListeningTestPlayer } from '../activities/ListeningTestPlayer';
 import { ReadingTestPlayer } from '../activities/ReadingTestPlayer';
+import { CourseActivityPlayer } from '../course/CourseActivityPlayer';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -27,6 +28,7 @@ const TYPE_LABEL: Record<string, string> = {
   READING_TEST: 'Reading test',
   PRONUNCIATION: 'Pronunciation exercise',
   PRONUNCIATION_TEST: 'Pronunciation test',
+  ENGLISH_COURSE: 'English Course',
 };
 
 /**
@@ -52,9 +54,21 @@ const TYPE_LABEL: Record<string, string> = {
  * is masked to SUBMITTED (no score) until AttemptsService.getResult says
  * it's revealed, same server-side gate the live "Launch in lab" path uses.
  */
-export function AssignmentsPanel({ control }: { control: StationControlClient }) {
+export function AssignmentsPanel({
+  control,
+  openRequest,
+}: {
+  control: StationControlClient;
+  /** Ser 4 "launch content files directly to students": the teacher sent
+   * this assignment with "open on screens now" — start it straight away.
+   * `nonce` makes a repeat launch of the same assignment count again. */
+  openRequest?: { assignmentId: string; nonce: number } | null;
+}) {
   const [assignments, setAssignments] = useState<AssignmentRow[] | null>(null);
   const [started, setStarted] = useState<StartedAttempt | null>(null);
+  // An English Course activity runs in its own player (it has no /attempts
+  // start) — the assignment id still links the attempt to this assignment.
+  const [courseRun, setCourseRun] = useState<{ key: string; assignmentId: string } | null>(null);
   const [viewingResult, setViewingResult] = useState<{ title: string; result: AttemptResultView } | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -73,7 +87,7 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
   }, [control]);
 
   useEffect(() => {
-    if (started || viewingResult) return;
+    if (started || courseRun || viewingResult) return;
     const timer = setInterval(() => {
       // Background refresh failures stay silent — the manual Refresh button
       // reports them, and a flaky moment shouldn't flash an error at a
@@ -84,7 +98,28 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
         .catch(() => void 0);
     }, POLL_MS);
     return () => clearInterval(timer);
-  }, [control, started, viewingResult]);
+  }, [control, started, courseRun, viewingResult]);
+
+  useEffect(() => {
+    if (!openRequest) return;
+    let cancelled = false;
+    stationApi
+      .myAssignments(control.getToken())
+      .then((rows) => {
+        if (cancelled) return;
+        setAssignments(rows);
+        const row = rows.find((r) => r.assignment.id === openRequest.assignmentId);
+        if (!row) return;
+        setViewingResult(null);
+        void startAssignment(row);
+      })
+      .catch((err) => !cancelled && setError(err instanceof Error ? err.message : 'Could not open the exercise'));
+    return () => {
+      cancelled = true;
+    };
+    // Only when a new launch arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [openRequest?.nonce]);
 
   async function refresh(): Promise<void> {
     setError(null);
@@ -97,6 +132,10 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
 
   async function startAssignment(row: AssignmentRow): Promise<void> {
     setError(null);
+    if (row.exercise.type === 'ENGLISH_COURSE' && row.exercise.catalogKey) {
+      setCourseRun({ key: row.exercise.catalogKey, assignmentId: row.assignment.id });
+      return;
+    }
     try {
       const res = await stationApi.startAttempt(control.getToken(), {
         exerciseId: row.exercise.id,
@@ -145,6 +184,20 @@ export function AssignmentsPanel({ control }: { control: StationControlClient })
   if (viewingResult) {
     if (viewingResult.result.status === 'OPEN') return null; // shouldn't happen — reached only for a finished attempt
     return <TestResultView result={viewingResult.result} title={viewingResult.title} onDismiss={() => setViewingResult(null)} />;
+  }
+
+  if (courseRun) {
+    return (
+      <CourseActivityPlayer
+        control={control}
+        activityKey={courseRun.key}
+        assignmentId={courseRun.assignmentId}
+        onClose={() => {
+          setCourseRun(null);
+          void onDone();
+        }}
+      />
+    );
   }
 
   if (started) {

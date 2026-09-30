@@ -109,7 +109,7 @@ export class PronunciationTestsService {
       id: ex.id,
       title: ex.title,
       createdAt: ex.createdAt,
-      teacherName: ex.teacher.fullName,
+      teacherName: ex.teacher?.fullName ?? 'Built-in',
       wordCount: ex.itemBank?._count.items ?? 0,
       assigned: ex.assignments.length,
       submitted: ex.assignments.filter((a) =>

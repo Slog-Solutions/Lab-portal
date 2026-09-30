@@ -1,0 +1,97 @@
+# Rendered by the nginx image's envsubst step. Only ${API_UPSTREAM},
+# ${LIVEKIT_UPSTREAM} and ${MAX_UPLOAD_MB} are substituted; every other
+# $var below is a real nginx variable.
+
+map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
+}
+
+server {
+    listen 80 default_server;
+    listen 443 ssl default_server;
+    server_name _;
+
+    # Self-signed by default (generated on first start); mount your own
+    # lab CA-signed pair at these paths to replace it. HTTPS matters:
+    # browsers only allow the microphone in a secure context.
+    ssl_certificate     /etc/nginx/certs/tls.crt;
+    ssl_certificate_key /etc/nginx/certs/tls.key;
+    ssl_protocols       TLSv1.2 TLSv1.3;
+
+    client_max_body_size ${MAX_UPLOAD_MB}m;
+    gzip on;
+    gzip_types text/plain text/css application/json application/javascript text/javascript image/svg+xml;
+
+    root /usr/share/nginx/html;
+    index index.html;
+
+    # Docker's embedded DNS; resolving at request time means nginx still
+    # boots if the API container is briefly down.
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
+    location = /healthz { access_log off; return 200 'ok'; add_header Content-Type text/plain; }
+
+    # Runtime-generated per deployment (see 40-runtime-config.sh); never cache.
+    location = /config.js {
+        add_header Cache-Control "no-store";
+    }
+
+    location /api/ {
+        set $api http://${API_UPSTREAM};
+        proxy_pass $api;
+        proxy_http_version 1.1;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_request_buffering off;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    # LAN auto-update feed for the Electron stations (latest.yml + installer).
+    location /updates/ {
+        set $api http://${API_UPSTREAM};
+        proxy_pass $api;
+        proxy_set_header Host $host;
+    }
+
+    location /socket.io/ {
+        set $api http://${API_UPSTREAM};
+        proxy_pass $api;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+
+    # LiveKit WS/HTTP signalling. The client connects to wss://host/livekit
+    # and appends /rtc; the prefix is stripped here. Media itself is UDP/TCP
+    # straight to the livekit container's published ports, not through nginx.
+    location /livekit/ {
+        set $lk http://${LIVEKIT_UPSTREAM};
+        rewrite ^/livekit/(.*)$ /$1 break;
+        proxy_pass $lk;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_set_header Host $host;
+        proxy_read_timeout 1h;
+        proxy_send_timeout 1h;
+    }
+
+    # SPA (hash router, so no history fallback needed for deep links).
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+    location /assets/ {
+        expires 1y;
+        add_header Cache-Control "public, immutable";
+        try_files $uri =404;
+    }
+}

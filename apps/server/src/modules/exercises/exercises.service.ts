@@ -1,5 +1,5 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { UserRole, type ActivityType, type CreateExerciseDto, type ItemDto } from '@lab/shared';
+import { ActivityType, UserRole, type CreateExerciseDto, type ItemDto } from '@lab/shared';
 import type { Prisma } from '../../../generated/prisma';
 // Importing from the activities subpath (rather than the root) is
 // deliberate and load-bearing: @lab/shared's root index does NOT
@@ -48,6 +48,9 @@ export class ExercisesService {
    * mutation is owner/admin-restricted (see class doc comment). */
   async list() {
     return this.prisma.exercise.findMany({
+      // Built-in English Course content (hundreds of rows) has its own
+      // catalog UI; listing it here would bury the teachers' own exercises.
+      where: { type: { not: ActivityType.ENGLISH_COURSE } },
       orderBy: { createdAt: 'desc' },
       include: { itemBank: { select: { id: true, _count: { select: { items: true } } } } },
     });
@@ -159,7 +162,7 @@ export class ExercisesService {
     return result.data;
   }
 
-  private assertOwnerOrAdmin(exercise: { teacherId: string }, requester: { id: string; role: string }): void {
+  private assertOwnerOrAdmin(exercise: { teacherId: string | null }, requester: { id: string; role: string }): void {
     if (requester.role === UserRole.ADMIN || exercise.teacherId === requester.id) return;
     throw new ForbiddenException('Only the authoring teacher or an admin may modify this exercise');
   }

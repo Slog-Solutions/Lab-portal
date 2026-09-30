@@ -1,0 +1,17 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 720 360" role="img" aria-label="Cross-section of a volcano">
+  <rect width="720" height="360" fill="#dbe7f0"/>
+  <g fill="#6c757d" opacity="0.8"><ellipse cx="360" cy="40" rx="60" ry="22"/><ellipse cx="410" cy="25" rx="45" ry="18"/><ellipse cx="320" cy="20" rx="40" ry="15"/></g>
+  <path d="M0 250 L250 250 L330 90 L390 90 L470 250 L720 250 V360 H0Z" fill="#8d6e63"/>
+  <path d="M0 290 H720 V360 H0Z" fill="#6d4c41"/>
+  <path d="M340 90 L350 250 L370 250 L380 90Z" fill="#e63946"/>
+  <path d="M390 90 L430 170 L420 175 L385 110Z" fill="#f77f00"/>
+  <ellipse cx="360" cy="315" rx="110" ry="30" fill="#e63946"/>
+  <path d="M345 250 L350 290 L370 290 L375 250Z" fill="#e63946"/>
+  <g font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="600" fill="#1d3557">
+    <text x="470" y="30">ash cloud</text>
+    <text x="440" y="185">lava</text>
+    <text x="150" y="180">vent</text><path d="M190 175 L345 175" stroke="#1d3557"/>
+    <text x="520" y="330" fill="#fff">magma chamber</text><path d="M515 325 L470 318" stroke="#fff"/>
+    <text x="20" y="245">crust</text>
+  </g>
+</svg>

@@ -87,6 +87,10 @@ export class ContentPackagesController {
    * against the real installed express@5.2.1, not assumed from older
    * Express docs).
    */
+  // @Roles() too: @Public() only skips the JWT guard, and without an
+  // empty handler-level @Roles() the class's TEACHER/ADMIN requirement
+  // still refused every student seat's <iframe> (which can send no token).
+  @Roles()
   @Public()
   @Get(':id/files/*path')
   async getFile(@Param('id') id: string, @Req() req: Request, @Res() res: Response): Promise<void> {
@@ -96,6 +100,18 @@ export class ContentPackagesController {
     const absolutePath = this.packages.resolveAssetPath(pkg, relative);
     const mimeType = MIME_BY_EXT[extname(absolutePath).toLowerCase()] ?? 'application/octet-stream';
     res.set('Content-Type', mimeType);
+    // helmet's app-wide defaults are wrong for package files: `script-src
+    // 'self'` blocks the inline scripts publisher HTML/SCORM content relies
+    // on, and `frame-ancestors 'self'` + X-Frame-Options stop the Electron
+    // seat (an app:// page) from showing it in its exercise window at all.
+    // Packages are staff-uploaded teaching material, so they get their own
+    // policy: their scripts run, nothing loads from outside the lab server.
+    res.set(
+      'Content-Security-Policy',
+      "default-src 'self' data: blob:; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; " +
+        "img-src 'self' data: blob:; media-src 'self' data: blob:; font-src 'self' data:; frame-ancestors 'self' app: http: https:",
+    );
+    res.removeHeader('X-Frame-Options');
     res.sendFile(absolutePath);
   }
 

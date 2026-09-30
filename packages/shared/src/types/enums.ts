@@ -65,6 +65,7 @@ export const ActivityType = {
   CONFERENCE_INTERPRETING: 'CONFERENCE_INTERPRETING',
   PRESENTATION_RECORDING: 'PRESENTATION_RECORDING',
   SELF_STUDY: 'SELF_STUDY',
+  ENGLISH_COURSE: 'ENGLISH_COURSE',
 } as const;
 export type ActivityType = (typeof ActivityType)[keyof typeof ActivityType];
 
@@ -95,6 +96,9 @@ export const CommandType = {
   OPEN_URL: 'OPEN_URL',
   PUSH_FILE: 'PUSH_FILE',
   MESSAGE: 'MESSAGE',
+  // Ser 4 "launch content files directly to students into an exercise
+  // window": the seat opens the named assignment at once.
+  OPEN_ASSIGNMENT: 'OPEN_ASSIGNMENT',
   APPLY_UPDATE: 'APPLY_UPDATE',
 } as const;
 export type CommandType = (typeof CommandType)[keyof typeof CommandType];

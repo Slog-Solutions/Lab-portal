@@ -94,6 +94,27 @@ The real deployment target is air-gapped: no internet, no cloud
 services, TLS via an internal CA, LiveKit and every dependency running
 natively on the lab server. See [`infra/README.md`](infra/README.md).
 
+### Docker (whole stack)
+
+`docker-compose.yml` at the repo root runs everything: nginx (serves the web
+app, terminates TLS, proxies `/api`, `/socket.io`, `/livekit`), the NestJS
+API, Postgres, Redis and LiveKit. Images are built from
+[`apps/server/Dockerfile`](apps/server/Dockerfile) and
+[`apps/web/Dockerfile`](apps/web/Dockerfile) (build context = repo root).
+
+```
+cp .env.docker.example .env      # set HOST_IP (server LAN IP) and the secrets
+docker compose up -d --build
+# first boot only: create demo accounts (rotate their passwords afterwards)
+docker compose exec server npx tsx prisma/seed.ts
+```
+
+Open `https://<HOST_IP>/` (self-signed cert by default; put your own
+`tls.crt`/`tls.key` into the `nginx-certs` volume to replace it). Migrations
+run automatically on server start. Ports 80/443, 7881/tcp and 7882-7892/udp
+must be free on the host; `infra/docker-compose.yml` (infra-only dev stack)
+uses some of them, so don't run both.
+
 ## Status
 
 Phases 0-5 are built and verified against the real running stack (native

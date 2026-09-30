@@ -1,4 +1,4 @@
-import { BookOpen, ClipboardList, GraduationCap, LayoutDashboard, LogOut, Mic, School, Search, type LucideIcon } from 'lucide-react';
+import { BookOpen, ClipboardList, GraduationCap, Languages, LayoutDashboard, LogOut, Mic, School, Search, type LucideIcon } from 'lucide-react';
 import { Sheet, SheetContent, SheetDescription, SheetTitle } from '@/components/ui/sheet';
 import { cn } from '@/lib/utils';
 import type { StudentSessionUser } from '../../stores/student-session-store';
@@ -6,13 +6,14 @@ import type { StudentSessionUser } from '../../stores/student-session-store';
 /** The screens a signed-in student can move between. `class` is the live
  * classroom view (teacher broadcast, live activities); `classes` is the
  * student's classes (join one, open one to see what they did there). */
-export type StudentSection = 'home' | 'class' | 'classes' | 'assignments' | 'study' | 'pronunciation';
+export type StudentSection = 'home' | 'class' | 'classes' | 'assignments' | 'course' | 'study' | 'pronunciation';
 
 export const SECTION_TITLES: Record<StudentSection, string> = {
   home: 'Home',
   class: 'Live Class',
   classes: 'My Classes',
   assignments: 'Assignments',
+  course: 'English Course',
   study: 'Study Material',
   pronunciation: 'Pronunciation',
 };
@@ -22,6 +23,7 @@ const NAV: Array<{ section: StudentSection; icon: LucideIcon }> = [
   { section: 'class', icon: School },
   { section: 'classes', icon: BookOpen },
   { section: 'assignments', icon: ClipboardList },
+  { section: 'course', icon: Languages },
   { section: 'study', icon: GraduationCap },
   { section: 'pronunciation', icon: Mic },
 ];

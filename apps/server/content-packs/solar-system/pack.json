@@ -1,0 +1,36 @@
+{
+  "title": "Our Solar System",
+  "gradeLevel": "Grade 5",
+  "cefrLevel": "A1",
+  "description": "A short illustrated reading about the Sun and its eight planets, with narration and six questions.",
+  "image": { "file": "picture.svg", "caption": "The Sun and the eight planets (not to scale)." },
+  "sections": [
+    {
+      "paragraphs": [
+        "The Sun is a star. It is very big and very hot. It gives us light and heat.",
+        "Eight planets go around the Sun. Their names are Mercury, Venus, Earth, Mars, Jupiter, Saturn, Uranus and Neptune.",
+        "Mercury is the closest planet to the Sun. Neptune is the farthest. Jupiter is the biggest planet. Saturn has beautiful rings of ice and rock."
+      ]
+    },
+    {
+      "heading": "Our home: the Earth",
+      "paragraphs": [
+        "Earth is the third planet from the Sun. It is the only planet with water that we can drink and air that we can breathe. The Earth goes around the Sun once every year.",
+        "The Moon goes around the Earth. At night, the Moon looks bright because it reflects light from the Sun."
+      ]
+    }
+  ],
+  "glossary": [
+    ["star", "a very large ball of hot gas in space that gives light"],
+    ["planet", "a large, round object that moves around a star"],
+    ["reflect", "to send back light"]
+  ],
+  "questions": [
+    { "id": "q1", "type": "choice", "prompt": "What is the Sun?", "choices": ["a planet", "a star", "a moon"], "answer": "a star" },
+    { "id": "q2", "type": "text", "prompt": "How many planets go around the Sun? (write a number)", "answer": ["8", "eight"] },
+    { "id": "q3", "type": "choice", "prompt": "Which planet is the biggest?", "choices": ["Saturn", "Earth", "Jupiter"], "answer": "Jupiter" },
+    { "id": "q4", "type": "choice", "prompt": "Which planet is closest to the Sun?", "choices": ["Mercury", "Neptune", "Mars"], "answer": "Mercury" },
+    { "id": "q5", "type": "text", "prompt": "Earth is the ______ planet from the Sun. (one word)", "answer": ["third", "3rd"] },
+    { "id": "q6", "type": "choice", "prompt": "Why does the Moon look bright at night?", "choices": ["It makes its own light.", "It reflects light from the Sun.", "It is on fire."], "answer": "It reflects light from the Sun." }
+  ]
+}

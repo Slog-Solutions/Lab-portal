@@ -16,7 +16,7 @@ import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
 import { STUDENT_SEATS, TOTAL_SEATS, useLabStatus } from './use-lab-status';
 import { ClassSessionCard } from './class-control/ClassSessionCard';
-import { ConfirmDialog, MessageDialog } from './class-control/dialogs';
+import { ConfirmDialog, LaunchProgramDialog, MessageDialog, OpenUrlDialog } from './class-control/dialogs';
 import { SeatGrid, SeatLegend } from './class-control/SeatGrid';
 import { SeatInspector } from './class-control/SeatInspector';
 import { SelectionBar, type BulkAction } from './class-control/SelectionBar';
@@ -45,6 +45,8 @@ export function ClassControlPage() {
   const [assigningId, setAssigningId] = useState<string | null>(null);
   const [spotlight, setSpotlight] = useState<{ stationId: string; room: string; viewerToken: string; mic: boolean } | null>(null);
   const [messageOpen, setMessageOpen] = useState(false);
+  const [openUrlOpen, setOpenUrlOpen] = useState(false);
+  const [launchOpen, setLaunchOpen] = useState(false);
   const [confirm, setConfirm] = useState<null | 'shutdown' | 'windows-lock'>(null);
   const lastClickedSeat = useRef<number | null>(null);
 
@@ -169,6 +171,12 @@ export function ClassControlPage() {
         break;
       case 'message':
         setMessageOpen(true);
+        break;
+      case 'open-url':
+        setOpenUrlOpen(true);
+        break;
+      case 'launch-program':
+        setLaunchOpen(true);
         break;
       case 'shutdown':
       case 'windows-lock':
@@ -354,6 +362,18 @@ export function ClassControlPage() {
         onOpenChange={setMessageOpen}
         recipientCount={selectedIds.length}
         onSend={(text, severity) => run(() => controlApi.message(target, text, severity), `Message sent to ${plural(selectedIds.length, 'console')}`, 'Message failed')}
+      />
+      <OpenUrlDialog
+        open={openUrlOpen}
+        onOpenChange={setOpenUrlOpen}
+        recipientCount={selectedIds.length}
+        onOpen={(url) => run(() => controlApi.openUrl(target, url), `Opening website on ${plural(selectedIds.length, 'console')}`, 'Open website failed')}
+      />
+      <LaunchProgramDialog
+        open={launchOpen}
+        onOpenChange={setLaunchOpen}
+        recipientCount={selectedIds.length}
+        onLaunch={(id, label) => run(() => controlApi.launchProgram(target, id), `Launching ${label} on ${plural(selectedIds.length, 'console')}`, 'Launch failed')}
       />
       <ConfirmDialog
         open={confirm === 'shutdown'}

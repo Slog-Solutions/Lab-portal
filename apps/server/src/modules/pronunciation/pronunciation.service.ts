@@ -1,7 +1,8 @@
-import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { execFile, spawn } from 'node:child_process';
-import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { createHash } from 'node:crypto';
+import { mkdir, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { promisify } from 'node:util';
@@ -74,6 +75,7 @@ function runWithStdin(bin: string, args: string[], input: string, timeoutMs: num
  */
 @Injectable()
 export class PronunciationService {
+  private readonly logger = new Logger(PronunciationService.name);
   /** Holds the PROMISE, not the result, so concurrent requests for the
    * same word share one synthesis run (30 students pressing "Hear the
    * word" at once spawn Piper once). Map insertion order doubles as LRU
@@ -202,6 +204,48 @@ export class PronunciationService {
   }
 
   private async synthesize(text: string, voice: 'en_US' | 'en_GB'): Promise<SpeakResult> {
+    const cached = await this.readDiskCache(text, voice);
+    if (cached) return cached;
+    const result = await this.synthesizeFresh(text, voice);
+    if (result.warnings.length === 0) void this.writeDiskCache(text, voice, result);
+    return result;
+  }
+
+  /** `<LAB_DATA_ROOT>/tts-cache/<sha1>.json` — the in-memory LRU above holds
+   * 200 phrases and dies with the process, but the built-in English Course
+   * voices well over a thousand fixed words and sentences; persisting each
+   * successful synthesis means Piper renders every one of them once, ever.
+   * Best-effort both ways: a cache miss or write failure just synthesizes. */
+  private diskCachePath(text: string, voice: string): string | null {
+    const root = this.config.get('LAB_DATA_ROOT', { infer: true });
+    if (!root) return null;
+    const hash = createHash('sha1').update(`${voice}|${text}`).digest('hex');
+    return path.join(path.resolve(root), 'tts-cache', `${hash}.json`);
+  }
+
+  private async readDiskCache(text: string, voice: string): Promise<SpeakResult | null> {
+    const file = this.diskCachePath(text, voice);
+    if (!file) return null;
+    try {
+      const parsed = JSON.parse(await readFile(file, 'utf8')) as { ipa: string | null; audioBase64: string | null };
+      return { ipa: parsed.ipa, audioBase64: parsed.audioBase64, warnings: [] };
+    } catch {
+      return null;
+    }
+  }
+
+  private async writeDiskCache(text: string, voice: string, result: SpeakResult): Promise<void> {
+    const file = this.diskCachePath(text, voice);
+    if (!file) return;
+    try {
+      await mkdir(path.dirname(file), { recursive: true });
+      await writeFile(file, JSON.stringify({ ipa: result.ipa, audioBase64: result.audioBase64 }));
+    } catch (err) {
+      this.logger.warn(`TTS cache write failed: ${(err as Error).message}`);
+    }
+  }
+
+  private async synthesizeFresh(text: string, voice: 'en_US' | 'en_GB'): Promise<SpeakResult> {
     const warnings: string[] = [];
     const [ipa, audioBase64] = await Promise.all([
       this.generateIpa(text).catch((err: Error) => {
@@ -271,7 +315,7 @@ export class PronunciationService {
       id: ex.id,
       title: ex.title,
       createdAt: ex.createdAt,
-      teacherName: ex.teacher.fullName,
+      teacherName: ex.teacher?.fullName ?? 'Built-in',
       config: ex.config as { sourceText?: string; voice?: string; ipaAssetId?: string; modelAudioAssetId?: string },
       assigned: ex.assignments.length,
       submitted: ex.assignments.filter((a) =>

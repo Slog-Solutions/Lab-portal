@@ -95,7 +95,7 @@ export const stationApi = {
     stationFetch<
       Array<{
         assignment: { id: string; targetScore: number | null; allocatedHours: number | null; dueAt: string | null };
-        exercise: { id: string; title: string; type: string };
+        exercise: { id: string; title: string; type: string; catalogKey: string | null };
         /** Where the assignment came from — `className` is set only when the
          * assigning teacher teaches exactly one of the student's classes. */
         source: { teacherName: string; className: string | null };

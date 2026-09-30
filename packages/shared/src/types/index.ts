@@ -7,3 +7,4 @@ export * from './round-table.js';
 export * from './dictionary.js';
 export * from './recording.js';
 export * from './timed-test.js';
+export * from './english-course.js';

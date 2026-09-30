@@ -1,0 +1,41 @@
+{
+  "title": "The Invention of the Telephone",
+  "gradeLevel": "Grade 9",
+  "cefrLevel": "B1",
+  "description": "An encyclopedia-style article on how the telephone was invented and how it changed communication.",
+  "image": { "file": "picture.svg", "caption": "An early telephone: the speaker talked into the mouthpiece and listened at the earpiece." },
+  "sections": [
+    {
+      "paragraphs": [
+        "Before the telephone, the fastest way to send a message over a long distance was the electric telegraph. It sent short signals along a wire, which a trained operator had to translate into words. It could not carry a human voice.",
+        "In 1876, Alexander Graham Bell received a patent for a machine that could send speech along a wire. Bell had spent years teaching deaf students, and his interest in sound and hearing helped him understand how a voice could be turned into an electrical signal."
+      ]
+    },
+    {
+      "heading": "The first call",
+      "paragraphs": [
+        "On 10 March 1876, Bell spoke into his new instrument to his assistant, Thomas Watson, who was in another room. His words were: \"Mr Watson, come here, I want to see you.\" Watson heard the message clearly, and the first telephone call had been made.",
+        "Other inventors were working on similar ideas at the same time, and there were long legal arguments about who deserved the credit. However, Bell's patent was accepted by the courts."
+      ]
+    },
+    {
+      "heading": "A changing world",
+      "paragraphs": [
+        "Within a few years, telephone lines connected homes and businesses in many cities. Operators at exchanges connected each call by hand. Today, mobile phones carry voices, text and pictures around the world in less than a second, but they still depend on the same basic idea: changing sound into a signal and back again."
+      ]
+    }
+  ],
+  "glossary": [
+    ["patent", "an official right to be the only one who can make or sell an invention"],
+    ["telegraph", "an old system for sending messages as electrical signals along a wire"],
+    ["exchange", "a building where telephone calls were connected"]
+  ],
+  "questions": [
+    { "id": "q1", "type": "choice", "prompt": "What could the telegraph NOT do?", "choices": ["send messages over long distances", "carry a human voice", "use electricity"], "answer": "carry a human voice" },
+    { "id": "q2", "type": "text", "prompt": "In which year did Bell receive his patent? (write the year)", "answer": ["1876"] },
+    { "id": "q3", "type": "choice", "prompt": "What helped Bell understand how a voice could become an electrical signal?", "choices": ["his work with deaf students", "his job as a telegraph operator", "his studies of electricity at university"], "answer": "his work with deaf students" },
+    { "id": "q4", "type": "text", "prompt": "Who received the first telephone call? (the assistant's surname)", "answer": ["Watson", "Thomas Watson", "Mr Watson"] },
+    { "id": "q5", "type": "choice", "prompt": "Why were there legal arguments?", "choices": ["The first call did not work.", "Other inventors had similar ideas.", "The telephone was too expensive."], "answer": "Other inventors had similar ideas." },
+    { "id": "q6", "type": "choice", "prompt": "According to the article, what do modern phones still have in common with Bell's telephone?", "choices": ["They need an operator.", "They change sound into a signal and back.", "They only work in cities."], "answer": "They change sound into a signal and back." }
+  ]
+}

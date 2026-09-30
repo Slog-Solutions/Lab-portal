@@ -581,7 +581,34 @@ export const zImportContentPackageDto = z.object({
   title: z.string().min(1).max(200),
   format: zContentPackageFormat,
   scope: zMediaAssetScope.default(MediaAssetScope.INSTITUTION),
+  // Ser 4: publisher, grade-wise, level-wise. Multipart fields arrive as
+  // strings; an empty one means "not given".
+  publisher: z.string().trim().max(200).optional().transform((v) => v || undefined),
+  gradeLevel: z.string().trim().max(50).optional().transform((v) => v || undefined),
+  cefrLevel: z.enum(['A1', 'A2', 'B1', 'B2', 'C1', 'C2', '']).optional().transform((v) => v || undefined),
+  description: z.string().trim().max(1000).optional().transform((v) => v || undefined),
 });
+
+/** Ser 4 Content Exercise — one exercise over one imported (or ready-made) package. */
+export const zCreateContentExerciseDto = z.object({
+  contentPackageId: z.string().cuid2(),
+  title: z.string().trim().min(1).max(200),
+  gradeLevel: z.string().trim().min(1).max(50),
+  cefrLevel: z.enum(['A1', 'A2', 'B1', 'B2', 'C1', 'C2']).optional(),
+});
+export type CreateContentExerciseDto = z.infer<typeof zCreateContentExerciseDto>;
+
+/** Send a content exercise to a class and/or chosen students; with
+ * openNow, seats where those students are signed in open it at once. */
+export const zLaunchContentExerciseDto = z
+  .object({
+    batchId: z.string().cuid2().optional(),
+    studentIds: z.array(z.string().cuid2()).max(500).default([]),
+    dueAt: z.coerce.date().optional(),
+    openNow: z.boolean().default(false),
+  })
+  .refine((d) => d.batchId || d.studentIds.length > 0, { message: 'Choose a class or at least one student' });
+export type LaunchContentExerciseDto = z.infer<typeof zLaunchContentExerciseDto>;
 export type ImportContentPackageDto = z.infer<typeof zImportContentPackageDto>;
 
 // ---- Exercises / item bank (Ser 4, Ser 5, Ser 10) -------------------------------

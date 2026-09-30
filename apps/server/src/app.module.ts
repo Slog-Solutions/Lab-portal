@@ -26,6 +26,7 @@ import { ClassroomModule } from './modules/classroom/classroom.module';
 import { RoundTableModule } from './modules/round-table/round-table.module';
 import { DictionaryModule } from './modules/dictionary/dictionary.module';
 import { TimedTestsModule } from './modules/timed-tests/timed-tests.module';
+import { EnglishCourseModule } from './modules/english-course/english-course.module';
 
 /**
  * Phase 0-5 wiring.
@@ -58,6 +59,7 @@ import { TimedTestsModule } from './modules/timed-tests/timed-tests.module';
     AdminModule,
     DictionaryModule,
     TimedTestsModule,
+    EnglishCourseModule,
   ],
 })
 export class AppModule {}

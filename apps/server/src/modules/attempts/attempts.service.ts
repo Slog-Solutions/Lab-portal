@@ -124,7 +124,13 @@ export class AttemptsService {
 
     const updated = await this.prisma.attempt.update({
       where: { id: attemptId },
-      data: { rawScore, status, submittedAt: new Date() },
+      data: {
+        rawScore,
+        status,
+        submittedAt: new Date(),
+        // Ser 4 report tool: keep what the package reported, answer by answer.
+        ...(attempt.exercise.type === ActivityType.CONTENT_EXERCISE ? { answers: responseResult.data as Prisma.InputJsonValue } : {}),
+      },
     });
 
     if (status === AttemptStatus.SCORED && rawScore !== null) {
@@ -290,7 +296,8 @@ export class AttemptsService {
         return {
           assignment: a,
           // Never the raw config here either — see the class doc comment.
-          exercise: { id: a.exercise.id, type: a.exercise.type, title: a.exercise.title },
+          // catalogKey: an ENGLISH_COURSE assignment opens the course player.
+          exercise: { id: a.exercise.id, type: a.exercise.type, title: a.exercise.title, catalogKey: a.exercise.catalogKey },
           latestAttempt,
           oneShot,
           resultsPending: Boolean(pending),

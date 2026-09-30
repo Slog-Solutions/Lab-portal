@@ -68,6 +68,10 @@ export class ContentPackagesService {
           ownerId,
           scope: dto.scope,
           title: dto.title,
+          publisher: dto.publisher,
+          gradeLevel: dto.gradeLevel,
+          cefrLevel: dto.cefrLevel,
+          description: dto.description,
           format: resolvedFormat,
           entryPoint,
           path: '', // filled in once the directory is committed (needs the id)
@@ -137,6 +141,7 @@ export class ContentPackagesService {
 
   async remove(id: string, requester: { id: string; role: string }): Promise<void> {
     const pkg = await this.get(id, requester);
+    if (pkg.builtinKey) throw new ForbiddenException('Ready-made content ships with the lab and cannot be deleted');
     if (requester.role !== UserRole.ADMIN && pkg.ownerId !== requester.id) {
       throw new ForbiddenException('Only the owner or an admin may delete this content package');
     }
