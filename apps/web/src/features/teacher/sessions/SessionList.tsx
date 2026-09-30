@@ -1,5 +1,8 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { Link } from 'react-router-dom';
+import { ArrowRight, BookOpen, Pause, Play, Square } from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import { getActivity, hasActivity } from '@lab/shared/activities';
 import { resolveDictionaryEnabled, type ActivityType } from '@lab/shared';
 import { apiFetch } from '../../../lib/api-client';
@@ -48,75 +51,103 @@ export function SessionList({
     onSuccess: () => void queryClient.invalidateQueries({ queryKey: queryKeys.sessions }),
   });
 
+
   return (
     <div className="space-y-3">
       {sessions?.map((s) => (
-        <div key={s.id} className="rounded-2xl border border-[rgba(20,21,15,0.08)] bg-[#F4F4EF] p-4 text-[#14150F]">
-          <div className="flex flex-wrap items-center justify-between gap-2">
-            <div className="flex items-center gap-2.5">
-              <span className="font-semibold text-sm text-[#14150F]">{s.title}</span>
-              <span className="rounded-full bg-[#17181A] px-2.5 py-0.5 text-[11px] font-medium text-[#F5F5F0]">
-                {s.state}
-              </span>
-              <span className="text-xs text-[#6E7066]">
-                {s.groups.length} group(s) · {new Date(s.startedAt ?? s.createdAt).toLocaleDateString()}
-              </span>
+        <article key={s.id} className="rounded-control border border-hairline bg-card">
+          <header className="flex flex-wrap items-center justify-between gap-3 px-4 py-3">
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h3 className="truncate text-sm font-semibold text-foreground">{s.title}</h3>
+                <SessionStateBadge state={s.state} />
+              </div>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {s.groups.length} group{s.groups.length === 1 ? '' : 's'} · {new Date(s.startedAt ?? s.createdAt).toLocaleDateString()}
+              </p>
             </div>
-            <div className="flex gap-1.5">
-              {s.state === 'DRAFT' && <SessionActionButton label="Arm" onClick={() => lifecycle.mutate({ id: s.id, action: 'arm' })} />}
+            <div className="flex flex-wrap gap-1.5">
+              {s.state === 'DRAFT' && (
+                <Button size="sm" onClick={() => lifecycle.mutate({ id: s.id, action: 'arm' })}>
+                  Arm
+                </Button>
+              )}
               {(s.state === 'ARMED' || s.state === 'PAUSED') && (
-                <SessionActionButton label="Start" onClick={() => lifecycle.mutate({ id: s.id, action: 'start' })} />
+                <Button size="sm" onClick={() => lifecycle.mutate({ id: s.id, action: 'start' })}>
+                  <Play />
+                  Start
+                </Button>
               )}
-              {s.state === 'RUNNING' && <SessionActionButton label="Pause" onClick={() => lifecycle.mutate({ id: s.id, action: 'pause' })} />}
+              {s.state === 'RUNNING' && (
+                <Button size="sm" variant="outline" onClick={() => lifecycle.mutate({ id: s.id, action: 'pause' })}>
+                  <Pause />
+                  Pause
+                </Button>
+              )}
               {s.state !== 'ENDED' && (
-                <SessionActionButton label="End" tone="danger" onClick={() => lifecycle.mutate({ id: s.id, action: 'end' })} />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="text-destructive hover:text-destructive"
+                  onClick={() => lifecycle.mutate({ id: s.id, action: 'end' })}
+                >
+                  <Square />
+                  End
+                </Button>
               )}
             </div>
-          </div>
-          <ul className="mt-2 space-y-1">
+          </header>
+
+          <ul className="divide-y divide-hairline border-t border-hairline">
             {s.groups.map((g) => {
               const names = (g.members ?? []).flatMap((m) => (m.student ? [m.student.fullName] : []));
               const dictionaryOn = g.activity
                 ? resolveDictionaryEnabled(g.activity.type as ActivityType, g.activity.dictionaryEnabled)
                 : null;
               return (
-                <li key={g.id} className="flex flex-wrap items-center gap-1.5 text-xs text-[#6E7066]">
-                  <span>
-                    Group {g.index} · <span className="font-medium text-[#14150F]">{activityLabel(g.activity?.type)}</span>
-                    {names.length > 0 && ` · ${names.join(', ')}`}
+                <li key={g.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-4 py-2.5 text-xs">
+                  <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-control bg-muted text-[11px] font-bold text-foreground">
+                    {g.index}
                   </span>
+                  <span className="font-medium text-foreground">{activityLabel(g.activity?.type)}</span>
+                  {names.length > 0 && <span className="min-w-0 flex-1 truncate text-muted-foreground">{names.join(', ')}</span>}
                   {g.activity && (
                     <button
                       type="button"
                       title="Offline dictionary — click to toggle"
                       onClick={() => dictionaryToggle.mutate({ sessionId: s.id, groupId: g.id, enabled: !dictionaryOn })}
-                      className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${dictionaryOn ? 'bg-[#DFE2D6] text-[#14150F]' : 'bg-[#E5E8DC] text-[#6E7066]'}`}
+                      className={cn(
+                        'ml-auto inline-flex items-center gap-1 rounded-pill px-2.5 py-0.5 text-[11px] font-semibold transition-colors',
+                        dictionaryOn ? 'bg-brand-soft text-brand hover:bg-brand-soft/70' : 'bg-muted text-muted-foreground hover:bg-accent',
+                      )}
                     >
-                      Dictionary: {dictionaryOn ? 'On' : 'Off'}
+                      <BookOpen className="h-3 w-3" aria-hidden />
+                      Dictionary {dictionaryOn ? 'on' : 'off'}
                     </button>
                   )}
                 </li>
               );
             })}
           </ul>
+
           {/* Ser 3 Teacher listens in on any group — except a vocabulary
               test's group, which has no media room at all (see
               SessionsService.arm's own skip), and Round Table, which gets
               its own dedicated monitor link below instead. */}
           {s.state !== 'DRAFT' && s.groups.length > 0 && (
-            <div className="mt-3 flex flex-wrap gap-1.5 border-t border-[rgba(20,21,15,0.08)] pt-2.5">
+            <div className="flex flex-wrap gap-1.5 border-t border-hairline bg-muted/30 px-4 py-2.5">
               {s.groups
                 .filter((g) => g.activity?.type !== 'ROUND_TABLE' && g.activity?.type !== 'VOCABULARY_TEST')
                 .map((g) => (
                   <GroupMonitorButton key={g.id} groupId={g.id} label={`Group ${g.index}`} />
                 ))}
               {s.groups.some((g) => g.activity?.type === 'ROUND_TABLE') && (
-                <Link
-                  to={`/sessions/${s.id}/round-table`}
-                  className="rounded-full bg-[#17181A] px-3 py-1 text-xs font-semibold text-[#F5F5F0] hover:bg-black"
-                >
-                  {s.state === 'ENDED' ? 'Round Table review' : 'Round Table monitor'}
-                </Link>
+                <Button asChild size="sm" variant="secondary">
+                  <Link to={`/sessions/${s.id}/round-table`}>
+                    {s.state === 'ENDED' ? 'Round Table review' : 'Round Table monitor'}
+                    <ArrowRight />
+                  </Link>
+                </Button>
               )}
               {/* SPEC-mcq-test-timed-reveal.md §7.3 — a vocabulary test group
                   is only ever created by TimedTestsService.launch, which
@@ -125,35 +156,41 @@ export function SessionList({
               {s.groups
                 .filter((g) => g.activity?.type === 'VOCABULARY_TEST' && g.activity.id)
                 .map((g) => (
-                  <Link
-                    key={g.id}
-                    to={`/tests/live/${g.activity!.id}`}
-                    className="rounded-full bg-[#17181A] px-3 py-1 text-xs font-semibold text-[#F5F5F0] hover:bg-black"
-                  >
-                    Test board
-                  </Link>
+                  <Button key={g.id} asChild size="sm" variant="secondary">
+                    <Link to={`/tests/live/${g.activity!.id}`}>
+                      Test board
+                      <ArrowRight />
+                    </Link>
+                  </Button>
                 ))}
             </div>
           )}
-        </div>
+        </article>
       ))}
-      {sessions?.length === 0 && <p className="text-xs text-[#6E7066]">{emptyText}</p>}
-      {isError && <p className="text-xs text-[#C9503F]">Could not load sessions.</p>}
+      {sessions?.length === 0 && (
+        <p className="rounded-control border border-dashed border-input px-4 py-6 text-center text-xs text-muted-foreground">{emptyText}</p>
+      )}
+      {isError && <p className="text-xs text-destructive">Could not load sessions.</p>}
       {lifecycle.isError && (
-        <p className="text-xs text-[#C9503F]">{lifecycle.error instanceof Error ? lifecycle.error.message : 'That action failed'}</p>
+        <p className="text-xs text-destructive">{lifecycle.error instanceof Error ? lifecycle.error.message : 'That action failed'}</p>
       )}
     </div>
   );
 }
 
-function SessionActionButton({ label, onClick, tone }: { label: string; onClick: () => void; tone?: 'danger' }) {
+const STATE_STYLE: Record<string, string> = {
+  DRAFT: 'bg-muted text-muted-foreground',
+  ARMED: 'bg-status-info/10 text-status-info',
+  RUNNING: 'bg-status-online/10 text-status-online',
+  PAUSED: 'bg-status-pending/10 text-status-pending',
+  ENDED: 'bg-muted text-muted-foreground',
+};
+
+function SessionStateBadge({ state }: { state: string }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`rounded-full px-3 py-1 text-xs font-semibold transition-all ${tone === 'danger' ? 'bg-[#C9503F] text-white hover:opacity-90' : 'bg-[#17181A] text-[#F5F5F0] hover:bg-black'}`}
-    >
-      {label}
-    </button>
+    <span className={cn('inline-flex items-center gap-1.5 rounded-pill px-2 py-0.5 text-[11px] font-semibold', STATE_STYLE[state] ?? STATE_STYLE.DRAFT)}>
+      {state === 'RUNNING' && <span className="h-1.5 w-1.5 rounded-full bg-status-online" aria-hidden />}
+      {state.charAt(0) + state.slice(1).toLowerCase()}
+    </span>
   );
 }

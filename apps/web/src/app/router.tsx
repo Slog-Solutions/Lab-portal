@@ -1,6 +1,7 @@
 import { createHashRouter, Navigate } from 'react-router-dom';
 import { LoginPage } from '../features/auth/LoginPage';
-import { StatusBoardPage } from '../features/admin/StatusBoardPage';
+import { LabOverviewPage } from '../features/lab/LabOverviewPage';
+import { ClassControlPage } from '../features/lab/ClassControlPage';
 import { BatchesPage } from '../features/admin/BatchesPage';
 import { BatchDetailPage } from '../features/admin/BatchDetailPage';
 import { UsersPage } from '../features/admin/UsersPage';
@@ -61,7 +62,8 @@ export const router = createHashRouter([
       </ProtectedRoute>
     ),
     children: [
-      { path: '/dashboard', element: <StatusBoardPage /> },
+      { path: '/dashboard', element: <LabOverviewPage /> },
+      { path: '/class-control', element: <ClassControlPage /> },
       {
         path: '/admin/batches',
         element: (

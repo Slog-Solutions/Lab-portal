@@ -7,6 +7,7 @@ import { queryKeys } from '../../lib/query-keys';
 import { DocumentPreview } from './DocumentPreview';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { NativeSelect } from '@/components/ui/native-select';
 
 /**
  * Where a reading test's PDF comes from: a new upload, or one already in the
@@ -91,11 +92,11 @@ export function DocumentPicker({ value, onChange }: { value: MediaAsset | null; 
           ) : shared.length === 0 ? (
             <p className="text-xs text-muted-foreground">No shared PDFs in the library yet — upload one instead.</p>
           ) : (
-            <select
+            <NativeSelect
               aria-label="PDF from the Media Library"
               defaultValue=""
               onChange={(e) => onChange(shared.find((a) => a.id === e.target.value) ?? null)}
-              className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+              className="w-full"
             >
               <option value="" disabled>
                 Choose a document…
@@ -105,7 +106,7 @@ export function DocumentPicker({ value, onChange }: { value: MediaAsset | null; 
                   {a.title || a.filename}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           )}
           <p className="text-xs text-muted-foreground">Only PDFs shared with the lab are listed — students can&apos;t open private ones.</p>
         </div>

@@ -11,6 +11,7 @@ import { queryKeys } from '../../lib/query-keys';
 import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
+import { NativeSelect } from '@/components/ui/native-select';
 
 interface Candidate {
   studentId: string;
@@ -97,21 +98,21 @@ export function LaunchInLabDialog({
         <div className="space-y-3">
           <div className="space-y-1.5">
             <Label htmlFor="lil-class">Class</Label>
-            <select
+            <NativeSelect
               id="lil-class"
               value={batchId}
               onChange={(e) => {
                 setBatchId(e.target.value);
                 setSelected([]);
               }}
-              className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+              className="w-full"
             >
               {(myClasses ?? []).map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           </div>
 
           <div className="flex items-center justify-between">

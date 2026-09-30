@@ -6,6 +6,7 @@ import { base64ToAudioUrl, type PronunciationVoice } from '../../lib/pronunciati
 import { PronunciationPlayer } from '../activities/PronunciationPlayer';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { NativeSelect } from '@/components/ui/native-select';
 import { Textarea } from '@/components/ui/textarea';
 
 interface Heard {
@@ -171,15 +172,14 @@ export function PronunciationPracticePanel({ control }: { control: StationContro
             className="resize-y text-base leading-relaxed"
           />
           <div className="flex flex-wrap gap-2">
-            <select
+            <NativeSelect
               value={voice}
               onChange={(e) => setVoice(e.target.value as PronunciationVoice)}
               aria-label="Voice"
-              className="h-9 rounded-md border border-input bg-transparent px-2 text-sm"
             >
               <option value="en_GB">British</option>
               <option value="en_US">American</option>
-            </select>
+            </NativeSelect>
             <Button onClick={() => void listen()} disabled={loading || recording || !text.trim()}>
               {loading ? 'Loading…' : 'Listen'}
             </Button>

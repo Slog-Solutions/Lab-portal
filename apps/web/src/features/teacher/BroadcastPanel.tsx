@@ -171,12 +171,12 @@ export function BroadcastPanel({ isAdmin, classId }: { isAdmin: boolean; classId
   const isSaving = recorderState.status === 'saving';
 
   return (
-    <div className="flex flex-wrap items-center justify-between gap-3 rounded-[28px] border border-[rgba(20,21,15,0.08)] bg-[#F4F4EF] p-5 text-[#14150F]">
+    <div className="flex h-full flex-wrap content-start items-center justify-between gap-3 rounded-card border border-hairline bg-card p-5 text-foreground">
       <div className="flex items-center gap-3">
-        <span className={`h-2.5 w-2.5 rounded-full ring-2 ring-black/5 ${live ? 'bg-[#C9503F] animate-pulse' : connected ? 'bg-[#6FCF6F]' : 'bg-[#6E7066]'}`} />
+        <span className={`h-2.5 w-2.5 rounded-full ${live ? 'bg-destructive animate-pulse' : connected ? 'bg-status-online' : 'bg-muted-foreground'}`} />
         <div>
-          <h4 className="text-xs font-semibold text-[#6E7066]">Classroom broadcast &amp; audio intercom</h4>
-          <p className="text-sm font-medium text-[#14150F]">
+          <h2 className="text-[15px] font-semibold leading-snug text-foreground">Classroom broadcast &amp; intercom</h2>
+          <p className="mt-0.5 text-xs text-muted-foreground">
             {!connectKey
               ? 'Start a class to broadcast or talk to students'
               : !connected
@@ -192,7 +192,7 @@ export function BroadcastPanel({ isAdmin, classId }: { isAdmin: boolean; classId
           <button
             type="button"
             onClick={() => void enableAudio()}
-            className="rounded-full bg-[#E0B84A] px-3.5 py-1.5 text-xs font-semibold text-[#14150F] transition hover:opacity-90"
+            className="rounded-control bg-status-pending px-3.5 py-1.5 text-xs font-semibold text-foreground transition hover:opacity-90"
           >
             Enable audio
           </button>
@@ -201,7 +201,7 @@ export function BroadcastPanel({ isAdmin, classId }: { isAdmin: boolean; classId
           type="button"
           disabled={!connected}
           onClick={() => void toggleMic()}
-          className={`rounded-full px-4 py-2 text-xs font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${micOn ? 'bg-[#17181A] text-[#F5F5F0]' : 'border border-[rgba(20,21,15,0.12)] bg-black/5 text-[#14150F] hover:bg-black/10'}`}
+          className={`rounded-control px-4 py-2 text-xs font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${micOn ? 'bg-brand text-brand-ink' : 'border border-input bg-card text-foreground hover:bg-accent'}`}
         >
           {micOn ? 'Mic on' : 'Mic off'}
         </button>
@@ -210,7 +210,7 @@ export function BroadcastPanel({ isAdmin, classId }: { isAdmin: boolean; classId
             type="button"
             disabled={!connected}
             onClick={() => void startBroadcast()}
-            className="rounded-full bg-[#17181A] px-4 py-2 text-xs font-semibold text-[#F5F5F0] transition-all hover:bg-black disabled:opacity-40 disabled:cursor-not-allowed"
+            className="rounded-control bg-brand px-4 py-2 text-xs font-semibold text-brand-ink transition-all hover:bg-brand-hover disabled:opacity-40 disabled:cursor-not-allowed"
           >
             Start broadcast
           </button>
@@ -218,7 +218,7 @@ export function BroadcastPanel({ isAdmin, classId }: { isAdmin: boolean; classId
           <button
             type="button"
             onClick={() => void stopBroadcast()}
-            className="rounded-full bg-[#C9503F] px-4 py-2 text-xs font-semibold text-white transition hover:opacity-90"
+            className="rounded-control bg-destructive px-4 py-2 text-xs font-semibold text-destructive-foreground transition hover:opacity-90"
           >
             Stop broadcast
           </button>
@@ -227,13 +227,13 @@ export function BroadcastPanel({ isAdmin, classId }: { isAdmin: boolean; classId
 
       {/* Recording — a separate control from the broadcast itself (design
           decision: teacher chooses per-recording, not once at start). */}
-      <div className="flex w-full flex-wrap items-center gap-2 border-t border-[rgba(20,21,15,0.08)] pt-3">
+      <div className="flex w-full flex-wrap items-center gap-2 border-t border-hairline pt-3">
         <button
           type="button"
           disabled={isRecording || isSaving}
           onClick={() => setRecordAudio((v) => !v)}
           title="Include your mic and the shared screen's sound in the recording"
-          className={`rounded-full px-3.5 py-1.5 text-xs font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${recordAudio ? 'bg-[#17181A] text-[#F5F5F0]' : 'border border-[rgba(20,21,15,0.12)] bg-black/5 text-[#14150F] hover:bg-black/10'}`}
+          className={`rounded-control px-3.5 py-1.5 text-xs font-semibold transition-all disabled:opacity-40 disabled:cursor-not-allowed ${recordAudio ? 'bg-brand text-brand-ink' : 'border border-input bg-card text-foreground hover:bg-accent'}`}
         >
           {recordAudio ? 'Record audio: on' : 'Record audio: off'}
         </button>
@@ -244,7 +244,7 @@ export function BroadcastPanel({ isAdmin, classId }: { isAdmin: boolean; classId
             disabled={!live}
             title={!live ? 'Start the broadcast first' : undefined}
             onClick={() => void toggleRecording()}
-            className="rounded-full bg-[#C9503F] px-4 py-2 text-xs font-semibold text-white transition hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+            className="rounded-control bg-destructive px-4 py-2 text-xs font-semibold text-destructive-foreground transition hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
           >
             ● Record
           </button>
@@ -252,25 +252,25 @@ export function BroadcastPanel({ isAdmin, classId }: { isAdmin: boolean; classId
 
         {isRecording && (
           <>
-            <span className="flex items-center gap-1.5 rounded-full bg-[#C9503F]/10 px-3 py-1.5 text-xs font-semibold text-[#C9503F]">
-              <span className="h-2 w-2 animate-pulse rounded-full bg-[#C9503F]" />
+            <span className="flex items-center gap-1.5 rounded-pill bg-destructive/10 px-3 py-1.5 text-xs font-semibold text-destructive">
+              <span className="h-2 w-2 animate-pulse rounded-full bg-destructive" />
               REC {formatElapsed(recorderState.startedAt ?? now, now)}
-              {recorderState.pendingChunks > 0 && <span className="text-[#6E7066]">· uploading…</span>}
+              {recorderState.pendingChunks > 0 && <span className="text-muted-foreground">· uploading…</span>}
             </span>
             <button
               type="button"
               onClick={() => void toggleRecording()}
-              className="rounded-full border border-[rgba(20,21,15,0.12)] bg-black/5 px-4 py-2 text-xs font-semibold text-[#14150F] transition hover:bg-black/10"
+              className="rounded-control border border-input bg-card px-4 py-2 text-xs font-semibold text-foreground transition hover:bg-accent"
             >
               ■ Stop recording
             </button>
           </>
         )}
 
-        {isSaving && <span className="text-xs font-medium text-[#6E7066]">Saving recording…</span>}
+        {isSaving && <span className="text-xs font-medium text-muted-foreground">Saving recording…</span>}
 
         {recorderState.status === 'saved' && (
-          <span className="text-xs font-medium text-[#14150F]">
+          <span className="text-xs font-medium text-foreground">
             Recording saved ·{' '}
             <Link to="/recordings" className="font-semibold underline underline-offset-2">
               View recordings →
@@ -278,14 +278,14 @@ export function BroadcastPanel({ isAdmin, classId }: { isAdmin: boolean; classId
           </span>
         )}
 
-        {(recordError || recorderState.error) && <span className="text-xs text-[#C9503F]">{recordError ?? recorderState.error}</span>}
+        {(recordError || recorderState.error) && <span className="text-xs text-destructive">{recordError ?? recorderState.error}</span>}
 
         {isRecording && recordAudio && !micOn && (
-          <span className="w-full text-xs text-[#6E7066]">Mic is off — your voice isn't being recorded.</span>
+          <span className="w-full text-xs text-muted-foreground">Mic is off — your voice isn't being recorded.</span>
         )}
       </div>
 
-      {error && <p className="w-full text-xs text-[#C9503F]">{error}</p>}
+      {error && <p className="w-full text-xs text-destructive">{error}</p>}
       <div ref={audioContainerRef} className="hidden" />
     </div>
   );

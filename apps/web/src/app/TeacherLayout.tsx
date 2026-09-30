@@ -1,6 +1,9 @@
-import { NavLink, Outlet } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { NavLink, Outlet, useLocation } from 'react-router-dom';
+import { useQuery } from '@tanstack/react-query';
 import {
   LayoutDashboard,
+  MonitorCog,
   Users2,
   GraduationCap,
   ClipboardList,
@@ -11,14 +14,26 @@ import {
   Mic,
   School,
   Video,
+  Menu,
+  X,
+  type LucideIcon,
 } from 'lucide-react';
 import { useAuthStore } from '../stores/auth-store';
+import { classroomApi } from '../lib/classroom-api';
 import { ASSIGNMENT_KINDS } from '../features/assignments/assignment-kinds';
 import { cn } from '@/lib/utils';
 import { BrandLogo } from '@/components/brand/BrandLogo';
 
-const NAV = [
+interface NavItem {
+  to: string;
+  label: string;
+  icon: LucideIcon;
+  teacherOnly?: boolean;
+}
+
+const NAV: NavItem[] = [
   { to: '/dashboard', label: 'Lab Control', icon: LayoutDashboard },
+  { to: '/class-control', label: 'Class Control', icon: MonitorCog },
   { to: '/classes', label: 'My Classes', icon: School, teacherOnly: true },
   { to: '/sessions', label: 'Sessions', icon: Users2 },
   { to: '/pronunciation', label: 'Pronunciation', icon: Mic },
@@ -28,123 +43,236 @@ const NAV = [
   { to: '/reports', label: 'Reports', icon: FileBarChart },
 ];
 
-const ASSIGNMENT_NAV = ASSIGNMENT_KINDS.map(({ slug, label, icon }) => ({ to: `/assignments/${slug}`, label, icon }));
+const ASSIGNMENT_NAV: NavItem[] = ASSIGNMENT_KINDS.map(({ slug, label, icon }) => ({ to: `/assignments/${slug}`, label, icon }));
 
-const ADMIN_NAV = [
+const ADMIN_NAV: NavItem[] = [
   { to: '/admin/batches', label: 'Batches', icon: Building2 },
   { to: '/admin/users', label: 'Users', icon: UserCog },
 ];
 
-// The sidebar is the green chrome, so the active/inactive relationship is
-// inverted from a light nav: active is a cream fill with green ink, and
-// inactive text sits directly on the green.
-function navLinkClassName({ isActive }: { isActive: boolean }): string {
-  return cn(
-    'group flex items-center justify-between rounded-control px-3.5 py-2.5 text-sm font-medium transition-all duration-150',
-    isActive
-      ? 'bg-cream text-brand shadow-sm'
-      : 'text-brand-ink-muted hover:bg-white/10 hover:text-brand-ink',
-  );
+const COLLAPSE_KEY = 'lab.sidebar.collapsed';
+
+function readCollapsed(): boolean {
+  try {
+    return localStorage.getItem(COLLAPSE_KEY) === '1';
+  } catch {
+    return false;
+  }
 }
 
+function initials(name: string | undefined): string {
+  if (!name) return '?';
+  const parts = name.trim().split(/\s+/);
+  return ((parts[0]?.[0] ?? '') + (parts.length > 1 ? (parts[parts.length - 1]?.[0] ?? '') : '')).toUpperCase();
+}
+
+/**
+ * Admin-console shell: a fixed full-height green sidebar (grouped menu with
+ * small uppercase section titles), a flat topbar across the content column,
+ * and a padded content area with a footer. Flat throughout — separation is
+ * hairlines and spacing, never shadows.
+ *
+ * On lg+ the topbar toggle condenses the sidebar to an icon rail (remembered
+ * per browser); below lg the sidebar is off-canvas and the toggle opens it.
+ */
 export function TeacherLayout() {
   const user = useAuthStore((s) => s.user);
   const clear = useAuthStore((s) => s.clear);
   const isAdmin = user?.role === 'ADMIN';
+  const location = useLocation();
+
+  const [collapsed, setCollapsed] = useState(readCollapsed);
+  const [mobileOpen, setMobileOpen] = useState(false);
+
+  // Shares the cache entry with the dashboard's class card and LiveClassCard.
+  const { data: currentClass } = useQuery({ queryKey: ['classroom', 'current'], queryFn: classroomApi.current });
+  const classLive = currentClass?.state === 'ACTIVE';
+
+  useEffect(() => {
+    setMobileOpen(false);
+  }, [location.pathname]);
+
+  function toggleSidebar(): void {
+    if (window.matchMedia('(min-width: 1024px)').matches) {
+      setCollapsed((prev) => {
+        const next = !prev;
+        try {
+          localStorage.setItem(COLLAPSE_KEY, next ? '1' : '0');
+        } catch {
+          // Storage unavailable — the preference just won't persist.
+        }
+        return next;
+      });
+    } else {
+      setMobileOpen((v) => !v);
+    }
+  }
+
+  // On mobile the drawer is always full width, whatever the desktop preference.
+  const rail = collapsed && !mobileOpen;
+
+  const renderItems = (items: NavItem[]) =>
+    items.map(({ to, label, icon: Icon }) => (
+      <NavLink
+        key={to}
+        to={to}
+        title={rail ? label : undefined}
+        className={({ isActive }) =>
+          cn(
+            'relative flex items-center gap-3 py-2.5 text-sm transition-colors',
+            rail ? 'lg:justify-center lg:px-0 px-6' : 'px-6',
+            isActive ? 'bg-white/[0.08] font-semibold text-cream' : 'font-medium text-brand-ink-muted hover:text-brand-ink',
+          )
+        }
+      >
+        {({ isActive }) => (
+          <>
+            {isActive && <span className="absolute inset-y-1.5 left-0 w-[3px] rounded-r-pill bg-cream" aria-hidden />}
+            <Icon className="h-[18px] w-[18px] shrink-0" />
+            <span className={cn('truncate', rail && 'lg:sr-only')}>{label}</span>
+          </>
+        )}
+      </NavLink>
+    ));
+
+  // In the icon rail a group title becomes a short rule — except the first,
+  // which would just double the border under the logo.
+  const sectionTitle = (text: string, first = false) =>
+    rail ? (
+      first ? (
+        <div className="hidden h-3 lg:block" aria-hidden />
+      ) : (
+        <div className="mx-auto my-3 hidden h-px w-8 bg-hairline-on-dark lg:block" aria-hidden />
+      )
+    ) : (
+      <p className="px-6 pb-2 pt-5 text-[11px] font-semibold uppercase tracking-[0.08em] text-brand-ink-muted/80">{text}</p>
+    );
 
   return (
-    <div className="flex min-h-screen gap-4 bg-canvas p-3 text-foreground sm:p-4">
-      {/* Brand chrome: the one full-green surface on a teacher screen. */}
-      <aside className="flex w-60 shrink-0 flex-col rounded-card bg-brand p-4 text-brand-ink">
-        <div className="border-b border-hairline-on-dark px-2 pb-4 pt-1">
-          {/*
-            The logo artwork is deep green on transparent, so it needs a light
-            plate to sit on — placed directly on the green chrome it would be
-            invisible. The cream plate is the same fill as an active nav item.
-          */}
-          <div className="rounded-control bg-cream px-3 py-2.5">
-            {/* The wordmark carries the product name, so no adjacent <h1>. */}
-            <BrandLogo variant="full" className="w-full" />
+    <div className="min-h-screen bg-canvas text-foreground">
+      {/* Mobile scrim */}
+      {mobileOpen && (
+        <button
+          type="button"
+          aria-label="Close menu"
+          onClick={() => setMobileOpen(false)}
+          className="fixed inset-0 z-30 bg-foreground/40 lg:hidden"
+        />
+      )}
+
+      {/* Sidebar — the one full-green surface on a teacher screen. */}
+      <aside
+        className={cn(
+          'fixed inset-y-0 left-0 z-40 flex w-[260px] flex-col bg-brand text-brand-ink transition-[width,transform] duration-200',
+          mobileOpen ? 'translate-x-0' : '-translate-x-full lg:translate-x-0',
+          rail && 'lg:w-[72px]',
+        )}
+      >
+        {/* Logo row lines up with the topbar height. The artwork is deep green
+            on transparent, so it sits on a cream plate (DESIGN_SYSTEM.md §4). */}
+        {/*
+          Brand lockup: the square mark on a cream tile (the artwork is deep
+          green on transparent, so it needs a light plate — DESIGN_SYSTEM.md
+          §4) beside the product name set as live text. The full PNG wordmark
+          renders "Language Lab" too small to read at sidebar size.
+        */}
+        <div
+          className={cn(
+            'flex h-[70px] shrink-0 items-center gap-3 border-b border-hairline-on-dark',
+            rail ? 'px-5 lg:justify-center lg:px-0' : 'px-5',
+          )}
+        >
+          <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-control bg-cream">
+            <BrandLogo variant="mark" decorative className="h-8 w-8" />
+          </span>
+          <div className={cn('min-w-0 flex-1 leading-tight', rail && 'lg:hidden')}>
+            <p className="truncate text-[15px] font-bold tracking-tight text-cream">Digital</p>
+            <p className="truncate text-xs font-medium text-brand-ink-muted">Language Lab</p>
           </div>
-          <div className="mt-3 flex items-center justify-between gap-2">
-            <p className="truncate text-xs font-medium text-brand-ink-muted">{user?.fullName}</p>
-            <span className="rounded-pill bg-white/10 px-2 py-0.5 text-[10px] font-semibold text-brand-ink">
-              {user?.role}
-            </span>
-          </div>
+          <button
+            type="button"
+            onClick={() => setMobileOpen(false)}
+            aria-label="Close menu"
+            className="rounded-control p-1.5 text-brand-ink-muted hover:text-brand-ink lg:hidden"
+          >
+            <X className="h-5 w-5" />
+          </button>
         </div>
 
-        <nav className="flex-1 space-y-1 py-3 overflow-y-auto">
-          {NAV.filter((item) => !item.teacherOnly || !isAdmin).map(({ to, label, icon: Icon }) => (
-            <NavLink key={to} to={to} className={navLinkClassName}>
-              {({ isActive }) => (
-                <>
-                  <div className="flex items-center gap-2.5">
-                    <Icon className="h-4 w-4" />
-                    <span>{label}</span>
-                  </div>
-                  {isActive && <span className="h-1.5 w-1.5 rounded-full bg-brand" />}
-                </>
-              )}
-            </NavLink>
-          ))}
+        <nav className="sidebar-scroll flex-1 overflow-y-auto pb-6">
+          {sectionTitle('Navigation', true)}
+          {renderItems(NAV.filter((item) => !item.teacherOnly || !isAdmin))}
 
-          {/* Sentence-case section header per DESIGN_SYSTEM.md §3 */}
-          <div className="px-3.5 pt-4 pb-1">
-            <p className="text-xs font-semibold uppercase tracking-wide text-brand-ink-muted">Create assignment</p>
-          </div>
-          {ASSIGNMENT_NAV.map(({ to, label, icon: Icon }) => (
-            <NavLink key={to} to={to} className={navLinkClassName}>
-              {({ isActive }) => (
-                <>
-                  <div className="flex items-center gap-2.5">
-                    <Icon className="h-4 w-4" />
-                    <span>{label}</span>
-                  </div>
-                  {isActive && <span className="h-1.5 w-1.5 rounded-full bg-brand" />}
-                </>
-              )}
-            </NavLink>
-          ))}
+          {sectionTitle('Create assignment')}
+          {renderItems(ASSIGNMENT_NAV)}
 
           {isAdmin && (
             <>
-              <div className="px-3.5 pt-4 pb-1">
-                <p className="text-xs font-semibold uppercase tracking-wide text-brand-ink-muted">Administration</p>
-              </div>
-              {ADMIN_NAV.map(({ to, label, icon: Icon }) => (
-                <NavLink key={to} to={to} className={navLinkClassName}>
-                  {({ isActive }) => (
-                    <>
-                      <div className="flex items-center gap-2.5">
-                        <Icon className="h-4 w-4" />
-                        <span>{label}</span>
-                      </div>
-                      {isActive && <span className="h-1.5 w-1.5 rounded-full bg-brand" />}
-                    </>
-                  )}
-                </NavLink>
-              ))}
+              {sectionTitle('Administration')}
+              {renderItems(ADMIN_NAV)}
             </>
           )}
         </nav>
-
-        <div className="border-t border-hairline-on-dark pt-3">
-          <button
-            type="button"
-            onClick={() => clear()}
-            className="flex w-full items-center gap-2.5 rounded-control px-3.5 py-2 text-sm font-medium text-brand-ink-muted transition-colors hover:bg-white/10 hover:text-brand-ink"
-          >
-            <LogOut className="h-4 w-4" />
-            <span>Sign out</span>
-          </button>
-        </div>
       </aside>
 
-      {/* Main bento outlet */}
-      <main className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
-        <Outlet />
-      </main>
+      {/* Content column */}
+      <div className={cn('flex min-h-screen flex-col transition-[padding] duration-200', rail ? 'lg:pl-[72px]' : 'lg:pl-[260px]')}>
+        <header className="sticky top-0 z-20 flex h-[70px] shrink-0 items-center justify-between gap-4 border-b border-hairline bg-card px-4 sm:px-6">
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            aria-label="Toggle menu"
+            className="rounded-control p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-brand"
+          >
+            <Menu className="h-5 w-5" />
+          </button>
+
+          <div className="flex items-center gap-3 sm:gap-5">
+            {currentClass && (
+              <span
+                className={cn(
+                  'hidden items-center gap-2 rounded-pill px-3 py-1 text-xs font-semibold sm:inline-flex',
+                  classLive ? 'bg-status-online/10 text-status-online' : 'bg-muted text-muted-foreground',
+                )}
+              >
+                <span className={cn('h-1.5 w-1.5 rounded-full', classLive ? 'bg-status-online' : 'bg-muted-foreground')} />
+                {classLive ? `Class live · ${currentClass.code}` : 'No class running'}
+              </span>
+            )}
+
+            <div className="flex items-center gap-3 border-l border-hairline pl-3 sm:pl-5">
+              <span
+                className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-cream text-xs font-bold text-brand"
+                aria-hidden
+              >
+                {initials(user?.fullName)}
+              </span>
+              <div className="hidden min-w-0 leading-tight sm:block">
+                <p className="max-w-[180px] truncate text-sm font-semibold text-foreground">{user?.fullName}</p>
+                <p className="text-[11px] font-medium text-muted-foreground">{isAdmin ? 'Administrator' : 'Instructor'}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => clear()}
+                title="Sign out"
+                aria-label="Sign out"
+                className="rounded-control p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-destructive"
+              >
+                <LogOut className="h-[18px] w-[18px]" />
+              </button>
+            </div>
+          </div>
+        </header>
+
+        <main className="min-w-0 flex-1 p-4 sm:p-6">
+          <Outlet />
+        </main>
+
+        <footer className="flex flex-wrap items-center justify-between gap-2 border-t border-hairline px-4 py-4 text-xs text-muted-foreground sm:px-6">
+          <span>© {new Date().getFullYear()} Digital Language Lab</span>
+          <span>ACTC No 2 TRG BN, ASC Centre (South)</span>
+        </footer>
+      </div>
     </div>
   );
 }

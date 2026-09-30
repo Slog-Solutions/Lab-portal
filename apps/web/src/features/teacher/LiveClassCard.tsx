@@ -8,7 +8,7 @@ import { CopyButton } from '@/components/ui/copy-button';
 
 /**
  * "Start Live Class" (ClassDetailPage) — the batch-scoped counterpart to
- * Lab Control's ad-hoc ClassroomPanel (StatusBoardPage). Starting it here
+ * Class Control’s ClassSessionCard (features/lab/ClassControlPage). Starting it here
  * removes the classroom code entirely for this roster: every enrolled
  * student already signed in is attached in the same call
  * (ClassroomService.start's batchId branch), and any enrolled student who

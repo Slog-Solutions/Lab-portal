@@ -1,6 +1,7 @@
 import type { TestRevealDetail, TestRevealMode, VocabTestSettings } from '../../lib/assessments-api';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { NativeSelect } from '@/components/ui/native-select';
 
 export interface TestSettingsDraft {
   /** Minutes, as typed text — blank means untimed. Converted to
@@ -103,31 +104,31 @@ export function TestSettingsPanel({
 
       <div className="space-y-1.5">
         <Label htmlFor="ts-reveal-mode">When students see the correct answers</Label>
-        <select
+        <NativeSelect
           id="ts-reveal-mode"
           value={value.revealMode}
           onChange={(e) => set('revealMode', e.target.value as TestRevealMode)}
-          className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+          className="w-full"
         >
           <option value="ON_TIME_EXPIRY">When the time runs out</option>
           <option value="ON_SUBMIT">As soon as they submit</option>
           <option value="ON_TEACHER_RELEASE">Only when I release them</option>
-        </select>
+        </NativeSelect>
         <p className="text-xs text-muted-foreground">{REVEAL_MODE_HELP[value.revealMode]}</p>
       </div>
 
       <div className="space-y-1.5">
         <Label htmlFor="ts-reveal-detail">What students see once revealed</Label>
-        <select
+        <NativeSelect
           id="ts-reveal-detail"
           value={value.revealDetail}
           onChange={(e) => set('revealDetail', e.target.value as TestRevealDetail)}
-          className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+          className="w-full"
         >
           <option value="FULL_ANSWERS">Their answer, the correct answer, and the explanation</option>
           <option value="SCORE_AND_FLAGS">Just right/wrong per question</option>
           <option value="SCORE_ONLY">Only their overall score</option>
-        </select>
+        </NativeSelect>
       </div>
 
       <label className="flex items-center gap-2 text-sm">

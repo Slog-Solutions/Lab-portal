@@ -1,4 +1,5 @@
 import { useRef, useState } from 'react';
+import { Headphones, Square } from 'lucide-react';
 import { apiFetch } from '../../lib/api-client';
 import { LiveKitRoomClient } from '../../lib/livekit-client';
 import { getLiveKitUrl } from '../../lib/runtime-config';
@@ -61,11 +62,12 @@ export function GroupMonitorButton({ groupId, label }: { groupId: string; label:
         type="button"
         disabled={busy}
         onClick={() => void (listening ? stop() : start())}
-        className={`rounded-md px-2.5 py-1 text-xs font-medium ${
-          listening ? 'bg-red-800 text-white hover:bg-red-700' : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
-        } disabled:opacity-40`}
+        className={`inline-flex h-8 items-center gap-1.5 rounded-control px-3 text-xs font-medium transition-colors disabled:opacity-40 ${
+          listening ? 'bg-destructive text-destructive-foreground hover:bg-destructive/90' : 'border border-input bg-card text-foreground hover:bg-accent'
+        }`}
       >
-        {listening ? `⏹ Stop listening — ${label}` : `🎧 Listen — ${label}`}
+        {listening ? <Square className="h-3.5 w-3.5" /> : <Headphones className="h-3.5 w-3.5" />}
+        {listening ? `Stop listening — ${label}` : `Listen — ${label}`}
       </button>
       <div ref={containerRef} className="hidden" />
     </>

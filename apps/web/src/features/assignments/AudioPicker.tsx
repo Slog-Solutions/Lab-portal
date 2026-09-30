@@ -7,6 +7,7 @@ import { queryKeys } from '../../lib/query-keys';
 import { AudioPreview } from './AudioPreview';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
+import { NativeSelect } from '@/components/ui/native-select';
 
 /**
  * Where a listening test's audio comes from: a new upload, or a clip already
@@ -90,11 +91,11 @@ export function AudioPicker({ value, onChange }: { value: MediaAsset | null; onC
           ) : shared.length === 0 ? (
             <p className="text-xs text-muted-foreground">No shared audio in the library yet — upload a file instead.</p>
           ) : (
-            <select
+            <NativeSelect
               aria-label="Audio clip from the Media Library"
               defaultValue=""
               onChange={(e) => onChange(shared.find((a) => a.id === e.target.value) ?? null)}
-              className="h-9 w-full rounded-md border border-input bg-transparent px-2 text-sm"
+              className="w-full"
             >
               <option value="" disabled>
                 Choose a clip…
@@ -104,7 +105,7 @@ export function AudioPicker({ value, onChange }: { value: MediaAsset | null; onC
                   {a.title || a.filename}
                 </option>
               ))}
-            </select>
+            </NativeSelect>
           )}
           <p className="text-xs text-muted-foreground">Only clips shared with the lab are listed — students can&apos;t play private ones.</p>
         </div>

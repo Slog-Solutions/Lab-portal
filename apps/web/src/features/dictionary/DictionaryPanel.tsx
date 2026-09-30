@@ -3,6 +3,7 @@ import { BookOpen, Loader2, Search, X } from 'lucide-react';
 import type { DictionaryLookupResult } from '@lab/shared';
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
+import { fieldClass } from '@/components/ui/input';
 import type { StationControlClient } from '../../lib/station-control-client';
 import { stationApi } from '../../lib/station-api';
 import { ApiError } from '../../lib/api-client';
@@ -147,7 +148,7 @@ export function DictionaryPanel({
                 }}
                 placeholder="Look up a word…"
                 maxLength={64}
-                className="h-9 w-full rounded-md border border-input bg-transparent pl-8 pr-3 text-sm shadow-sm placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                className={cn(fieldClass, 'h-10 pl-8 pr-3')}
               />
             </div>
             {suggestions.length > 0 && (
