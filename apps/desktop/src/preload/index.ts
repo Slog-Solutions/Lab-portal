@@ -12,14 +12,15 @@ import type { RemoteInputEvent } from '@lab/shared/events';
  * (main/index.ts) rather than being read here directly — this is a CJS
  * preload build with no top-level await, and getOrCreateMachineGuid()
  * is async (reads a file), so the value has to be computed in main and
- * handed down. serverUrl in particular MUST come from main's SERVER_URL
- * (not be re-derived from process.env here with its own fallback) —
- * main already resolves LAB_SERVER_URL with a dev-friendly
- * http://localhost:3010 default; a second, different hardcoded fallback
- * here (previously https://labserver.lab.local, a prod-only hostname)
- * silently diverged from it whenever the env var was unset, sending the
- * renderer's socket.io client into an ERR_NAME_NOT_RESOLVED reconnect
- * loop against a hostname that only resolves on the real lab network.
+ * handed down. serverUrl in particular MUST come from main's resolved
+ * SERVER_URL (runtime-config.ts) — a second, different hardcoded fallback
+ * here (previously https://labserver.lab.local, a prod-only hostname that
+ * only resolves on the real lab network) silently diverged from it
+ * whenever the arg was somehow missing, sending the renderer's socket.io
+ * client into an ERR_NAME_NOT_RESOLVED reconnect loop. The fallback below
+ * now matches main's own dev default instead, so the two can never
+ * diverge again — in practice main always passes the arg and this branch
+ * is dead.
  */
 function readArg(flag: string): string | undefined {
   const prefix = `--${flag}=`;
@@ -29,7 +30,7 @@ function readArg(flag: string): string | undefined {
 
 contextBridge.exposeInMainWorld('__LAB__', {
   platform: 'desktop',
-  serverUrl: readArg('server-url') ?? 'https://labserver.lab.local',
+  serverUrl: readArg('server-url') ?? 'http://localhost:3010',
   stationId: process.env.LAB_STATION_ID,
   machineGuid: readArg('machine-guid'),
   livekitUrl: readArg('livekit-url'),

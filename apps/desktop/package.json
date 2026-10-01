@@ -1,5 +1,6 @@
 {
   "name": "@lab/desktop",
+  "productName": "LabPortal",
   "version": "0.1.0",
   "private": true,
   "main": "dist/main/index.js",

@@ -4,9 +4,14 @@ import { sendToAgent } from './agent-client';
 
 /**
  * LAN auto-update (design doc §3.8): `electron-builder.yml`'s `publish`
- * block already points the generic provider at
- * `https://labserver.lab.local/updates/win/` — this wires the client side
- * up to actually use it. Deliberately `autoInstallOnAppQuit: false`: that
+ * block bakes in a placeholder generic-provider URL
+ * (`https://labserver.lab.local/updates/win/`) at build time, since the
+ * real server address isn't known until deployment — setFeedURL below
+ * overrides it at runtime with the SAME server address the station was
+ * actually pointed at (runtime-config.ts), so the update feed always
+ * follows wherever LAB_SERVER_URL / userData/config.json says the server
+ * is, with no DNS entry for "labserver.lab.local" ever required.
+ * Deliberately `autoInstallOnAppQuit: false`: that
  * default would make electron-updater run the installer itself on quit,
  * which for a `perMachine: true` NSIS build means a UAC prompt in front
  * of a student — exactly what the elevated agent's `apply-update` verb
@@ -22,9 +27,10 @@ import { sendToAgent } from './agent-client';
  */
 let downloadedInstallerPath: string | null = null;
 
-export function initUpdater(): void {
+export function initUpdater(serverUrl: string): void {
   if (!app.isPackaged) return;
 
+  autoUpdater.setFeedURL({ provider: 'generic', url: `${serverUrl}/updates/win/` });
   autoUpdater.autoDownload = true;
   autoUpdater.autoInstallOnAppQuit = false;
 

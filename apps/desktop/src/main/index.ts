@@ -8,6 +8,7 @@ import { LockOverlayManager } from './lock-overlay';
 import { SoftLockController } from './soft-lock';
 import { executeCommand } from './command-handler';
 import { getOrCreateMachineGuid } from './station-identity';
+import { resolveRuntimeConfig } from './runtime-config';
 import { initUpdater } from './updater';
 import { lockWorkstation, resolveEnforce, resolveGraceMs, WorkstationLockController, type NoticeKind } from './workstation-lock';
 
@@ -22,8 +23,10 @@ const TRAY_ICON_DATA_URL =
 registerAppScheme();
 
 const isDev = !app.isPackaged;
-const SERVER_URL = process.env.LAB_SERVER_URL ?? 'http://localhost:3010';
-const LIVEKIT_URL = process.env.LAB_LIVEKIT_URL ?? 'ws://localhost:7880';
+// Dev: env vars or localhost:3010/7880 (npm run dev:all). Packaged: env vars
+// or userData/config.json — see runtime-config.ts for the one file a lab
+// technician edits to point a station at the Docker stack's server IP.
+const { serverUrl: SERVER_URL, livekitUrl: LIVEKIT_URL } = resolveRuntimeConfig(app.isPackaged);
 
 let mainWindow: BrowserWindow | null = null;
 let controlClient: ControlClient | null = null;
@@ -255,7 +258,7 @@ if (!gotSingleInstanceLock) {
     // comment on why this isn't enforcing yet. Session-level (not
     // per-window), so registered once here rather than in createMainWindow.
     applyContentSecurityPolicy(SERVER_URL, LIVEKIT_URL);
-    initUpdater();
+    initUpdater(SERVER_URL);
 
     if (app.isPackaged) {
       app.setLoginItemSettings({ openAtLogin: true, path: process.execPath });

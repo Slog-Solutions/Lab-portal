@@ -18,6 +18,11 @@ packages/native-bridge/CMakeFiles/
 # Electron
 apps/desktop/out/
 apps/desktop/release/
+# electron-builder's buildResources dir (installer.nsh, set-server-ip.ps1) —
+# real source, not a build output; the generic "build/" rule above would
+# otherwise swallow it since it happens to be named "build" too.
+!apps/desktop/build/
+!apps/desktop/build/**
 
 # Env
 .env

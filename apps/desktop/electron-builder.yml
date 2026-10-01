@@ -20,6 +20,12 @@ extraResources:
   # alongside the app so a licence audit doesn't depend on the source repo.
   - from: ../../THIRD-PARTY-NOTICES.md
     to: THIRD-PARTY-NOTICES.md
+  # The one-command way to point a station at the server (see
+  # runtime-config.ts) — ships inside every install so a lab technician
+  # never needs the source repo, just this installed copy:
+  #   <installDir>\resources\set-server-ip.ps1 -Ip <server-ip>
+  - from: build/set-server-ip.ps1
+    to: set-server-ip.ps1
 
 # Native modules must be unpacked from the asar archive — `bindings`
 # (used by @nut-tree-fork/nut-js, added in Phase 1) does a runtime
