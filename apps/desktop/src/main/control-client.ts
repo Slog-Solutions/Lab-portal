@@ -65,6 +65,7 @@ export class ControlClient {
       auth: (cb) => cb({ token: this.stationToken ?? 'station-unauthenticated-no-token-yet' }),
       reconnection: true,
       reconnectionDelay: 2_000,
+      rejectUnauthorized: false,
     });
 
     this.socket.on('connect', () => {
