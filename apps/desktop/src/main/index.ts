@@ -23,6 +23,10 @@ const TRAY_ICON_DATA_URL =
 registerAppScheme();
 
 const isDev = !app.isPackaged;
+
+app.commandLine.appendSwitch('ignore-certificate-errors');
+process.env.NODE_TLS_REJECT_UNAUTHORIZED = '0';
+
 // Dev: env vars or localhost:3010/7880 (npm run dev:all). Packaged: env vars
 // or userData/config.json — see runtime-config.ts for the one file a lab
 // technician edits to point a station at the Docker stack's server IP.
@@ -143,7 +147,7 @@ function createMainWindow(machineGuid: string): void {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
-      devTools: isDev,
+      devTools: true, // temporarily always-on for debugging
       // Preload has no async top-level (CJS build) so it can't read the
       // persisted machineGuid itself — passed in here instead, the
       // standard Electron pattern for seeding preload config.

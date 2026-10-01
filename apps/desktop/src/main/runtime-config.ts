@@ -76,17 +76,17 @@ function writeTemplateIfMissing(): void {
  * packaged-app path) > hardcoded dev defaults.
  */
 export function resolveRuntimeConfig(isPackaged: boolean): RuntimeConfig {
-  const envServerUrl = process.env.LAB_SERVER_URL;
-  if (envServerUrl) {
-    return { serverUrl: envServerUrl, livekitUrl: process.env.LAB_LIVEKIT_URL ?? deriveLivekitUrl(envServerUrl) };
-  }
-
   if (isPackaged) {
     writeTemplateIfMissing();
     const fileConfig = readConfigFile();
-    if (fileConfig.serverUrl) {
+    if (fileConfig.serverUrl && fileConfig.serverUrl !== 'http://CHANGE-ME-TO-SERVER-IP') {
       return { serverUrl: fileConfig.serverUrl, livekitUrl: fileConfig.livekitUrl ?? deriveLivekitUrl(fileConfig.serverUrl) };
     }
+  }
+
+  const envServerUrl = process.env.LAB_SERVER_URL;
+  if (envServerUrl) {
+    return { serverUrl: envServerUrl, livekitUrl: process.env.LAB_LIVEKIT_URL ?? deriveLivekitUrl(envServerUrl) };
   }
 
   return { serverUrl: DEV_DEFAULT_SERVER_URL, livekitUrl: DEV_DEFAULT_LIVEKIT_URL };
