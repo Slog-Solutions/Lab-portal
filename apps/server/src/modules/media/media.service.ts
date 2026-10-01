@@ -4,6 +4,15 @@ import { AccessToken, RoomServiceClient, TrackSource, TrackType, type Participan
 import { BROADCAST_ROOM } from '@lab/shared/events';
 import type { EnvConfig } from '../../config/env.validation';
 
+/** How long a room outlives both its last participant leaving and never
+ * being joined at all. A class runs for hours and the room must survive
+ * the gaps between them. */
+const ROOM_TIMEOUT_SECONDS = 6 * 60 * 60;
+
+/** Upper bound on how long lab:broadcast can stay missing after LiveKit
+ * tears it down before the next snapshot recreates it. */
+const ENSURE_RECHECK_MS = 60_000;
+
 export type StationMediaRole = 'TEACHER' | 'STUDENT';
 
 /**
@@ -22,7 +31,7 @@ export class MediaService {
   private readonly apiKey: string;
   private readonly apiSecret: string;
   private readonly httpUrl: string;
-  private broadcastRoomEnsured = false;
+  private broadcastRoomEnsuredAt = 0;
 
   constructor(private readonly config: ConfigService<EnvConfig, true>) {
     const url = this.config.get('LIVEKIT_URL', { infer: true });
@@ -34,12 +43,16 @@ export class MediaService {
     this.roomService = new RoomServiceClient(this.httpUrl, this.apiKey, this.apiSecret);
   }
 
-  /** Idempotent — safe to call on every session arm; only memoizes once
-   * ensureRoom has confirmed (not merely attempted) room creation. See
-   * ensureRoom's doc comment for why this can't just fire-and-forget. */
+  /** Idempotent — safe to call on every session arm. Re-verified on a TTL
+   * rather than memoized for the life of the process: LiveKit tears a room
+   * down a short departureTimeout after its LAST participant leaves, not
+   * just when it idles unused, so a once-true flag leaves lab:broadcast
+   * permanently 404 as soon as one class ends — every later join fails and
+   * a teacher's broadcast silently captures nothing. See ensureRoom's doc
+   * comment for why this can't just fire-and-forget. */
   async ensureBroadcastRoom(): Promise<void> {
-    if (this.broadcastRoomEnsured) return;
-    this.broadcastRoomEnsured = await this.ensureRoom(BROADCAST_ROOM);
+    if (Date.now() - this.broadcastRoomEnsuredAt < ENSURE_RECHECK_MS) return;
+    if (await this.ensureRoom(BROADCAST_ROOM)) this.broadcastRoomEnsuredAt = Date.now();
   }
 
   /**
@@ -61,7 +74,15 @@ export class MediaService {
    */
   async ensureRoom(name: string): Promise<boolean> {
     try {
-      await this.roomService.createRoom({ name, emptyTimeout: 6 * 60 * 60, maxParticipants: 45 });
+      // departureTimeout matters as much as emptyTimeout: without it LiveKit
+      // deletes the room ~20s after the last participant leaves, which is how
+      // lab:broadcast kept vanishing between classes.
+      await this.roomService.createRoom({
+        name,
+        emptyTimeout: ROOM_TIMEOUT_SECONDS,
+        departureTimeout: ROOM_TIMEOUT_SECONDS,
+        maxParticipants: 45,
+      });
       return true;
     } catch (err) {
       try {
