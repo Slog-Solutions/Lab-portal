@@ -159,8 +159,22 @@ curl.exe -s -o NUL -w "%{http_code}`n" http://192.168.1.22/healthz
 
 Expect `200`. Then open `https://192.168.1.22/` in a browser — this is the
 teacher/admin console. You'll get a certificate warning (the cert is self-signed
-by default); click through it. Teachers must use **https**, because browsers only
-allow microphone access on a secure origin.
+by default); click through it.
+
+Teachers must use **https**. Browsers only expose the microphone and screen
+sharing on a "secure context", and plain HTTP on a LAN IP is not one — those
+features aren't degraded there, they're entirely absent. Visiting `http://<ip>/`
+now redirects to HTTPS automatically so nobody lands on the broken version by
+accident. (`http://localhost/` on the server itself is left alone: browsers
+already count localhost as secure, so that one page needs no certificate.)
+
+To get rid of the warning on a teacher's PC, import the server's certificate
+once, as Administrator:
+
+```powershell
+docker compose cp web:/etc/nginx/certs/tls.crt .\lab-ca.crt      # on the server
+Import-Certificate -FilePath .\lab-ca.crt -CertStoreLocation Cert:\LocalMachine\Root
+```
 
 > **If you ever change `HOST_IP` later**, don't just edit `.env` — the TLS
 > certificate and LiveKit's advertised media address both need refreshing. Run
@@ -346,6 +360,16 @@ LiveKit media ports are blocked, or `HOST_IP` points at a virtual adapter. Reche
 Part 1.3 and Part 1.7. Signalling (sign-in, locking, commands) goes over port 80
 and will keep working even when media is broken, so "it connects but nobody can
 hear anything" is almost always this.
+
+### Screen share or microphone missing for a teacher on another PC
+
+Almost always because that PC opened the console over plain `http://<ip>/`.
+Browsers only expose `getDisplayMedia`/`getUserMedia` on a secure context, so on
+plain HTTP the buttons do nothing — it works on the server itself only because
+`localhost` is special-cased as secure. Use `https://<ip>/` (the redirect in
+Part 1.8 should take you there automatically) and import the certificate as
+shown there. To confirm what a given machine sees, open DevTools on the console
+page and run `window.isSecureContext` — it must be `true`.
 
 ### "System number N is already in use by another computer"
 

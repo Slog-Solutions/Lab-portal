@@ -7,6 +7,27 @@ map $http_upgrade $connection_upgrade {
     ''      close;
 }
 
+# Screen share and the microphone need a browser "secure context". Plain HTTP
+# on a LAN IP is not one — navigator.mediaDevices is undefined there, so the
+# feature isn't degraded, it's absent, and a teacher on any machine other than
+# the server just sees it not work. Page loads are therefore sent to HTTPS.
+#
+# localhost is exempt because browsers already treat it as secure: whoever
+# works on the server box itself keeps a warning-free HTTP page.
+#
+# Only the SPA is redirected. /api, /socket.io, /livekit and /updates stay
+# reachable over HTTP on purpose — the Electron stations are pointed at
+# http://<ip> and Node rejects the self-signed certificate.
+map $host $lab_host_is_local {
+    default   0;
+    localhost 1;
+    127.0.0.1 1;
+}
+map $scheme$lab_host_is_local $lab_force_https {
+    default 0;
+    http0   1;
+}
+
 server {
     listen 80 default_server;
     listen 443 ssl default_server;
@@ -87,6 +108,9 @@ server {
 
     # SPA (hash router, so no history fallback needed for deep links).
     location / {
+        if ($lab_force_https) {
+            return 302 https://$host$request_uri;
+        }
         try_files $uri $uri/ /index.html;
     }
     location /assets/ {
