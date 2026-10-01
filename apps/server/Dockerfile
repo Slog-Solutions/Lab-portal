@@ -22,13 +22,25 @@ RUN npm run build --workspace=@lab/shared \
 # ---------------------------------------------------------------------------
 FROM node:24-bookworm-slim AS runtime
 # espeak-ng powers IPA generation for pronunciation activities (optional).
-RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates espeak-ng tini \
+RUN apt-get update && apt-get install -y --no-install-recommends openssl ca-certificates espeak-ng tini wget \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Piper TTS and download voices
+RUN mkdir -p /usr/local/piper/voices \
+    && wget -qO- https://github.com/rhasspy/piper/releases/download/v1.2.0/piper_amd64.tar.gz | tar -xz -C /usr/local/piper --strip-components=1 \
+    && wget -qO /usr/local/piper/voices/en_US.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx \
+    && wget -qO /usr/local/piper/voices/en_US.onnx.json https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_US/lessac/medium/en_US-lessac-medium.onnx.json \
+    && wget -qO /usr/local/piper/voices/en_GB.onnx https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx \
+    && wget -qO /usr/local/piper/voices/en_GB.onnx.json https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx.json \
+    && apt-get purge -y --auto-remove wget
+
 ENV NODE_ENV=production \
     PORT=3000 \
     LAB_DATA_ROOT=/data/LabData \
     UPDATES_DIR=/data/updates \
-    ESPEAK_NG_BIN=/usr/bin/espeak-ng
+    ESPEAK_NG_BIN=/usr/bin/espeak-ng \
+    PIPER_BIN=/usr/local/piper/piper \
+    PIPER_VOICES_DIR=/usr/local/piper/voices
 WORKDIR /app
 
 # The install is already limited to server + shared; it keeps prisma (CLI,
