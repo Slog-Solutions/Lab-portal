@@ -159,7 +159,7 @@ export class StationControlClient {
       'station:hello',
       {
         machineGuid,
-        hostname: `browser-${machineGuid.slice(0, 8)}`,
+        hostname: getRuntimeConfig().hostname ?? `browser-${machineGuid.slice(0, 8)}`,
         macs: ['00:00:00:00:00:00'], // browsers cannot read real MAC addresses — dev/test path only
         appVersion: APP_VERSION,
         osBuild: navigator.userAgent,

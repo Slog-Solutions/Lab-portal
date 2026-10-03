@@ -10,7 +10,7 @@ import {
   ServiceUnavailableException,
 } from '@nestjs/common';
 import { z } from 'zod';
-import { CommandType, StationLifecycle, UserRole, type StationStatusRow } from '@lab/shared';
+import { CommandType, seatLabel, StationLifecycle, UserRole, type StationStatusRow } from '@lab/shared';
 import { BROADCAST_ROOM, classBroadcastRoom, controlRoom, mediaRoomForActivity } from '@lab/shared/events';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
@@ -51,6 +51,7 @@ const zOpenUrlDto = z.object({ target: zTarget, url: z.string().url() });
 const zMessageDto = z.object({ target: zTarget, text: z.string().min(1), severity: z.enum(['info', 'warning']) });
 const zPromoteDto = z.object({ stationId: z.string(), mic: z.boolean().default(false) });
 const zRevokeDto = z.object({ stationId: z.string() });
+const zChangeSeatDto = z.object({ seatNo: z.number().int().min(1).max(41) });
 const zPushFileDto = z.object({
   target: zTarget,
   assetId: z.string(),
@@ -414,6 +415,44 @@ export class ControlController {
       detail: { room, tornDown: isFinalStop },
     });
     return { ok: true };
+  }
+
+  /**
+   * Admin: give a station a different seat number. A free seat is a plain
+   * reassignment; a seat another station already holds swaps the two. Lives
+   * here rather than on StationsController because every affected PC must be
+   * told its new number right away (station:identity, a fresh snapshot) and
+   * the dashboards updated — and that needs ControlGateway/PresenceService.
+   */
+  @Roles(UserRole.ADMIN)
+  @Post('stations/:stationId/seat')
+  async changeSeat(
+    @Param('stationId') stationId: string,
+    @Body(new ZodValidationPipe(zChangeSeatDto)) dto: z.infer<typeof zChangeSeatDto>,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    const station = await this.prisma.station.findUnique({ where: { id: stationId }, select: { seatNo: true } });
+    if (!station) throw new NotFoundException('Station not found');
+    if (station.seatNo === dto.seatNo) return { ok: true, swappedWithStationId: null };
+
+    const holder = await this.prisma.station.findUnique({ where: { seatNo: dto.seatNo }, select: { id: true } });
+    // Swapping with an unnumbered station would leave the other PC with no
+    // seat at all — make the admin free the seat deliberately instead.
+    if (holder && station.seatNo === null) {
+      throw new ConflictException(`Seat ${seatLabel(dto.seatNo)} is taken — pick a free seat for an unassigned station`);
+    }
+    if (holder) await this.stations.swapSeats(stationId, holder.id, user.sub);
+    else await this.stations.assignSeat({ stationId, seatNo: dto.seatNo }, user.sub);
+
+    const moved: Array<[string, number]> = [[stationId, dto.seatNo]];
+    if (holder && station.seatNo !== null) moved.push([holder.id, station.seatNo]);
+    for (const [id, seatNo] of moved) {
+      this.presence.setSeatNo(id, seatNo);
+      this.gateway.emitIdentity(id, seatNo);
+      this.gateway.pushSnapshot(id, await this.sessionState.getDesiredState(id));
+      await this.gateway.sendStatusRow(id);
+    }
+    return { ok: true, swappedWithStationId: holder?.id ?? null };
   }
 
   private async setEnabled(target: z.infer<typeof zTargetOnlyDto>['target'], enabled: boolean, user: JwtPayload) {

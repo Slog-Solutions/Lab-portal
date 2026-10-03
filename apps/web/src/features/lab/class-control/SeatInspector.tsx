@@ -1,10 +1,12 @@
 import { useState, type ReactNode } from 'react';
-import { MonitorPlay, MousePointerClick, Tv, UserMinus } from 'lucide-react';
+import { ArrowLeftRight, MonitorPlay, MousePointerClick, Tv, UserMinus } from 'lucide-react';
 import { getActivity, hasActivity } from '@lab/shared/activities';
 import { seatLabel, type ActivityType, type StationStatusRow } from '@lab/shared';
 import { Button } from '@/components/ui/button';
+import { NativeSelect } from '@/components/ui/native-select';
 import { cn } from '@/lib/utils';
 import { SEAT_STATES, stateOf } from '../seat-states';
+import { TOTAL_SEATS } from '../use-lab-status';
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -28,6 +30,97 @@ function Kbd({ children }: { children: ReactNode }) {
   return <kbd className="rounded-[4px] border border-input bg-card px-1.5 py-0.5 font-sans text-[10px] font-semibold text-foreground">{children}</kbd>;
 }
 
+/** Admin-only: renumber one station. A free seat is a plain move; a taken
+ * one swaps the two PCs (an unassigned station may only take a free seat). */
+function ChangeSeat({
+  station,
+  bySeat,
+  onChangeSeat,
+}: {
+  station: StationStatusRow;
+  bySeat: Map<number | null, StationStatusRow>;
+  onChangeSeat: (stationId: string, seatNo: number) => Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [target, setTarget] = useState<number | undefined>();
+  const [saving, setSaving] = useState(false);
+
+  const options = Array.from({ length: TOTAL_SEATS }, (_, i) => i + 1)
+    .filter((n) => n !== station.seatNo)
+    .map((n) => ({ n, holder: bySeat.get(n) }))
+    .filter((o) => station.seatNo !== null || !o.holder);
+
+  if (!open) {
+    return (
+      <Button
+        className="w-full"
+        size="sm"
+        variant="outline"
+        disabled={options.length === 0}
+        onClick={() => {
+          setTarget((options.find((o) => !o.holder) ?? options[0])?.n);
+          setOpen(true);
+        }}
+      >
+        <ArrowLeftRight />
+        Change seat number
+      </Button>
+    );
+  }
+
+  const holder = target !== undefined ? bySeat.get(target) : undefined;
+  return (
+    <div className="space-y-2 rounded-control border border-hairline p-3">
+      <label htmlFor={`change-seat-${station.stationId}`} className="block text-xs font-medium text-foreground">
+        Move <span className="font-mono">{station.hostname}</span> to
+      </label>
+      <NativeSelect
+        id={`change-seat-${station.stationId}`}
+        compact
+        className="w-full"
+        value={target ?? ''}
+        disabled={saving}
+        onChange={(e) => setTarget(Number(e.target.value))}
+      >
+        {options.map(({ n, holder: h }) => (
+          <option key={n} value={n}>
+            Seat {seatLabel(n)} — {h ? `swap with ${h.hostname}` : 'free'}
+          </option>
+        ))}
+      </NativeSelect>
+      {holder && station.seatNo !== null && (
+        <p className="text-[11px] text-muted-foreground">
+          <span className="font-mono">{holder.hostname}</span> will move to seat {seatLabel(station.seatNo)}.
+        </p>
+      )}
+      <div className="flex gap-2">
+        <Button
+          className="flex-1"
+          size="sm"
+          disabled={saving || target === undefined}
+          onClick={async () => {
+            if (target === undefined) return;
+            setSaving(true);
+            try {
+              await onChangeSeat(station.stationId, target);
+              setOpen(false);
+            } catch {
+              // The page already reported the error — stay open for a retry.
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          {saving ? 'Saving…' : holder ? 'Swap seats' : 'Move'}
+        </Button>
+        <Button size="sm" variant="ghost" disabled={saving} onClick={() => setOpen(false)}>
+          Cancel
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 /**
  * The right-hand inspector next to the seat grid. With one seat selected it
  * is that seat's detail + per-seat controls; with several, a breakdown of the
@@ -40,6 +133,8 @@ export function SeatInspector({
   onShareToClass,
   onStopSharing,
   onReleaseStudent,
+  bySeat,
+  onChangeSeat,
 }: {
   selected: StationStatusRow[];
   isAdmin: boolean;
@@ -47,6 +142,9 @@ export function SeatInspector({
   onShareToClass: (stationId: string) => void;
   onStopSharing: (stationId: string) => void;
   onReleaseStudent: (stationId: string) => Promise<void>;
+  bySeat: Map<number | null, StationStatusRow>;
+  /** Admin-only — omitted for a teacher, which hides the control. */
+  onChangeSeat?: (stationId: string, seatNo: number) => Promise<void>;
 }) {
   const [releasing, setReleasing] = useState(false);
 
@@ -190,6 +288,7 @@ export function SeatInspector({
             {releasing ? 'Releasing…' : 'Release student from seat'}
           </Button>
         )}
+        {isAdmin && onChangeSeat && <ChangeSeat key={station.stationId} station={station} bySeat={bySeat} onChangeSeat={onChangeSeat} />}
       </div>
     </div>
   );

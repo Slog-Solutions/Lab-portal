@@ -1,0 +1,4 @@
+{
+  "_comment": "Server address baked into this installer at build time. AppData/LabPortal/config.json (written by set-server-ip.ps1) overrides it.",
+  "serverUrl": "http://192.168.29.60"
+}

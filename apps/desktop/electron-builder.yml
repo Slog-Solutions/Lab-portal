@@ -26,6 +26,10 @@ extraResources:
   #   <installDir>\resources\set-server-ip.ps1 -Ip <server-ip>
   - from: build/set-server-ip.ps1
     to: set-server-ip.ps1
+  # Default server address for a fresh install (runtime-config.ts's
+  # readBundledConfig) — edit serverUrl before `npm run dist:win`.
+  - from: build/server-config.json
+    to: server-config.json
 
 # Native modules must be unpacked from the asar archive — `bindings`
 # (used by @nut-tree-fork/nut-js, added in Phase 1) does a runtime

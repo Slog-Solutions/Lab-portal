@@ -20,6 +20,10 @@ export interface LabRuntimeConfig {
    * mints one into localStorage instead (dev/test path only — design
    * doc §3.7: real stations are Electron-only). */
   machineGuid?: string;
+  /** The PC's real name (os.hostname() in Electron's main process), so the
+   * renderer's station:hello doesn't overwrite it on the Station row with a
+   * browser-xxxx placeholder. Absent in a plain browser, which can't read it. */
+  hostname?: string;
   /** LiveKit's own WS endpoint — deliberately NOT derived from serverUrl
    * (different services, no fixed port relationship in a real
    * deployment). TODO(Phase 1 hardening): serve this from the API

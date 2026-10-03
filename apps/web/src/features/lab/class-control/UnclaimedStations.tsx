@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { seatLabel, type StationStatusRow } from '@lab/shared';
 import { Button } from '@/components/ui/button';
 import { NativeSelect } from '@/components/ui/native-select';
+import { cn } from '@/lib/utils';
+import { stateOf } from '../seat-states';
 
 function UnclaimedStationRow({
   station,
@@ -15,6 +17,7 @@ function UnclaimedStationRow({
   onAssign: (stationId: string, seatNo: number) => Promise<void>;
 }) {
   const [seatNo, setSeatNo] = useState<number | undefined>(freeSeats[0]);
+  const state = stateOf(station.lifecycle);
 
   useEffect(() => {
     if (seatNo === undefined || !freeSeats.includes(seatNo)) setSeatNo(freeSeats[0]);
@@ -22,8 +25,11 @@ function UnclaimedStationRow({
 
   return (
     <li className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 text-xs text-foreground">
-      <div className="flex items-center gap-2">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-0.5">
+        <span className={cn('h-2 w-2 shrink-0 rounded-full', state.dot)} title={state.label} aria-hidden />
         <span className="font-semibold">{station.hostname}</span>
+        <span className="text-muted-foreground">{state.label}</span>
+        {station.ip && <span className="font-mono text-muted-foreground">{station.ip}</span>}
         <span className="text-muted-foreground">{station.appVersion ?? 'unknown version'}</span>
       </div>
       <div className="flex items-center gap-2">
@@ -48,6 +54,11 @@ function UnclaimedStationRow({
   );
 }
 
+function byOnlineThenName(a: StationStatusRow, b: StationStatusRow): number {
+  const offline = (r: StationStatusRow) => (r.lifecycle === 'OFFLINE' ? 1 : 0);
+  return offline(a) - offline(b) || a.hostname.localeCompare(b.hostname);
+}
+
 /** Admin-only: stations that connected but have no seat number yet. */
 export function UnclaimedStationsPanel({
   stations,
@@ -68,7 +79,8 @@ export function UnclaimedStationsPanel({
       </h3>
       <p className="mt-0.5 text-xs text-muted-foreground">Connected and registered, but not yet numbered — assign a seat to map it into the grid.</p>
       <ul className="mt-3 divide-y divide-hairline rounded-control border border-hairline bg-card">
-        {stations.map((station) => (
+        {/* Online PCs first — those are the ones someone can walk up to and identify. */}
+        {[...stations].sort(byOnlineThenName).map((station) => (
           <UnclaimedStationRow
             key={station.stationId}
             station={station}

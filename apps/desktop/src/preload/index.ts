@@ -33,6 +33,7 @@ contextBridge.exposeInMainWorld('__LAB__', {
   serverUrl: readArg('server-url') ?? 'http://localhost:3010',
   stationId: process.env.LAB_STATION_ID,
   machineGuid: readArg('machine-guid'),
+  hostname: readArg('hostname'),
   livekitUrl: readArg('livekit-url'),
 } satisfies LabRuntimeConfig);
 

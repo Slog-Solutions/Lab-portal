@@ -7,7 +7,7 @@ import { ControlClient } from './control-client';
 import { LockOverlayManager } from './lock-overlay';
 import { SoftLockController } from './soft-lock';
 import { executeCommand } from './command-handler';
-import { getOrCreateMachineGuid } from './station-identity';
+import { getHostname, getOrCreateMachineGuid } from './station-identity';
 import { resolveRuntimeConfig } from './runtime-config';
 import { initUpdater } from './updater';
 import { lockWorkstation, resolveEnforce, resolveGraceMs, WorkstationLockController, type NoticeKind } from './workstation-lock';
@@ -151,7 +151,14 @@ function createMainWindow(machineGuid: string): void {
       // Preload has no async top-level (CJS build) so it can't read the
       // persisted machineGuid itself — passed in here instead, the
       // standard Electron pattern for seeding preload config.
-      additionalArguments: [`--machine-guid=${machineGuid}`, `--livekit-url=${LIVEKIT_URL}`, `--server-url=${SERVER_URL}`],
+      // hostname rides along so the renderer's own station:hello reports the
+      // real PC name instead of overwriting it with a browser-xxxx placeholder.
+      additionalArguments: [
+        `--machine-guid=${machineGuid}`,
+        `--livekit-url=${LIVEKIT_URL}`,
+        `--server-url=${SERVER_URL}`,
+        `--hostname=${getHostname()}`,
+      ],
     },
   });
 

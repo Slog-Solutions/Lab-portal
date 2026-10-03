@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { ArrowRight, CheckCircle2, Users2, XCircle } from 'lucide-react';
+import { seatLabel } from '@lab/shared';
 import { controlApi } from '../../lib/control-api';
 import { stationsApi } from '../../lib/stations-api';
 import { classroomApi } from '../../lib/classroom-api';
@@ -211,12 +212,23 @@ export function ClassControlPage() {
     setAssigningId(stationId);
     try {
       await stationsApi.assignSeat({ stationId, seatNo });
-      say(`Assigned seat ${seatNo}`);
+      say(`Assigned seat ${seatLabel(seatNo)}`);
       await lab.refetch();
     } catch (err) {
       say(`Assign seat failed: ${errText(err)}`, 'error');
     } finally {
       setAssigningId(null);
+    }
+  }
+
+  async function handleChangeSeat(stationId: string, seatNo: number): Promise<void> {
+    try {
+      const res = await stationsApi.changeSeat(stationId, seatNo);
+      say(res.swappedWithStationId ? `Swapped — this PC is now seat ${seatLabel(seatNo)}` : `Moved to seat ${seatLabel(seatNo)}`);
+      await lab.refetch();
+    } catch (err) {
+      say(`Change seat failed: ${errText(err)}`, 'error');
+      throw err; // keeps the inspector's picker open so the admin can retry
     }
   }
 
@@ -324,6 +336,8 @@ export function ClassControlPage() {
               onTakeRemoteControl={setRemoteControlTarget}
               onShareToClass={(id) => void handleShareToClass(id, false)}
               onStopSharing={(id) => void handleStopSharing(id)}
+              bySeat={lab.bySeat}
+              onChangeSeat={isAdmin ? handleChangeSeat : undefined}
               onReleaseStudent={async (id) => {
                 try {
                   await classroomApi.releaseStudent(id);

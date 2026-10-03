@@ -101,6 +101,13 @@ export class PresenceService {
     entry.classTeacherId = patch.classTeacherId;
   }
 
+  /** An admin renumbered this station (ControlController.changeSeat) —
+   * keep the cached seat in step. No-op when the station is offline. */
+  setSeatNo(stationId: string, seatNo: number): void {
+    const entry = this.byStation.get(stationId);
+    if (entry) entry.seatNo = seatNo;
+  }
+
   remove(stationId: string): void {
     if (this.byStation.delete(stationId)) this.notify(stationId, false);
   }

@@ -17,6 +17,7 @@ interface ConfigFile {
 // writeTemplateIfMissing's placeholder below).
 const DEV_DEFAULT_SERVER_URL = 'http://localhost:3010';
 const DEV_DEFAULT_LIVEKIT_URL = 'ws://localhost:7880';
+const PLACEHOLDER_SERVER_URL = 'http://CHANGE-ME-TO-SERVER-IP';
 
 /**
  * Mirrors apps/web/docker/40-runtime-config.sh's window.__LAB__.livekitUrl:
@@ -62,7 +63,7 @@ function writeTemplateIfMissing(): void {
           "(the Docker host's HOST_IP:HTTP_PORT from its .env — see docker-compose.yml). " +
           'Restart LabPortal after editing. livekitUrl is optional; derived from ' +
           'serverUrl + /livekit when omitted.',
-        serverUrl: 'http://CHANGE-ME-TO-SERVER-IP',
+        serverUrl: PLACEHOLDER_SERVER_URL,
       },
       null,
       2,
@@ -71,16 +72,33 @@ function writeTemplateIfMissing(): void {
 }
 
 /**
- * Resolution order: LAB_SERVER_URL/LAB_LIVEKIT_URL env vars (dev override,
- * unchanged from before this file existed) > userData/config.json (the
- * packaged-app path) > hardcoded dev defaults.
+ * The server address baked into this installer at build time
+ * (build/server-config.json, shipped via electron-builder's extraResources),
+ * so a fresh install connects with no per-station step. Absent or empty
+ * serverUrl means "not baked" — the placeholder flow above still applies.
+ */
+function readBundledConfig(): ConfigFile {
+  try {
+    return JSON.parse(readFileSync(path.join(process.resourcesPath, 'server-config.json'), 'utf-8')) as ConfigFile;
+  } catch {
+    return {};
+  }
+}
+
+/**
+ * Resolution order (packaged): userData/config.json (set-server-ip.ps1 or a
+ * hand edit — always wins, so a station can be re-pointed without a
+ * reinstall) > the installer's bundled server-config.json. Then
+ * LAB_SERVER_URL/LAB_LIVEKIT_URL env vars (dev override) > hardcoded dev
+ * defaults.
  */
 export function resolveRuntimeConfig(isPackaged: boolean): RuntimeConfig {
   if (isPackaged) {
     writeTemplateIfMissing();
-    const fileConfig = readConfigFile();
-    if (fileConfig.serverUrl && fileConfig.serverUrl !== 'http://CHANGE-ME-TO-SERVER-IP') {
-      return { serverUrl: fileConfig.serverUrl, livekitUrl: fileConfig.livekitUrl ?? deriveLivekitUrl(fileConfig.serverUrl) };
+    for (const fileConfig of [readConfigFile(), readBundledConfig()]) {
+      if (fileConfig.serverUrl && fileConfig.serverUrl !== PLACEHOLDER_SERVER_URL) {
+        return { serverUrl: fileConfig.serverUrl, livekitUrl: fileConfig.livekitUrl ?? deriveLivekitUrl(fileConfig.serverUrl) };
+      }
     }
   }
 

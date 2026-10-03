@@ -26,7 +26,7 @@ function seatClasses(lifecycle: Lifecycle | undefined, isTeacher: boolean, isSel
 function tooltip(station: StationStatusRow | undefined, isAdmin: boolean): string {
   if (!station) return 'No station registered for this seat';
   return (
-    `${station.hostname} · ${station.appVersion ?? 'unknown version'}` +
+    `${station.hostname}${station.ip ? ` (${station.ip})` : ''} · ${station.appVersion ?? 'unknown version'}` +
     (station.currentUser ? ` · ${station.currentUser.fullName} (${station.currentUser.serviceNumber})` : ' · no student seated') +
     (isAdmin && station.liveClass ? ` · ${station.liveClass.title} (${station.liveClass.teacherName})` : '')
   );
@@ -115,6 +115,10 @@ export function SeatGrid({
               <span className="mt-1 max-w-full truncate px-1 text-[10px] font-medium leading-tight opacity-80">
                 {station.currentUser.fullName.split(' ')[0]}
               </span>
+            )}
+            {/* The PC's own name, so it's obvious which physical machine holds this seat. */}
+            {station && (
+              <span className="mt-0.5 max-w-full truncate px-1 font-mono text-[9px] leading-tight opacity-60">{station.hostname}</span>
             )}
             {station && <Badges station={station} selected={isSelected} />}
           </button>

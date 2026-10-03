@@ -13,4 +13,12 @@ export const stationsApi = {
   assignSeat: (dto: StationAssignSeatDto) => apiFetch('/stations/assign-seat', { method: 'POST', body: JSON.stringify(dto) }),
   swapSeats: (stationIdA: string, stationIdB: string) =>
     apiFetch(`/stations/swap-seats/${stationIdA}/${stationIdB}`, { method: 'POST' }),
+  /** Move a station to another seat — swaps when that seat is taken. Served
+   * by ControlController, not StationsController, because it also re-tells
+   * the affected PCs their new number live (needs ControlGateway). */
+  changeSeat: (stationId: string, seatNo: number) =>
+    apiFetch<{ ok: true; swappedWithStationId: string | null }>(`/control/stations/${stationId}/seat`, {
+      method: 'POST',
+      body: JSON.stringify({ seatNo }),
+    }),
 };
