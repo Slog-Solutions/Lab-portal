@@ -251,7 +251,7 @@ class AzureEngine:
 
     # ---- per-stream state -------------------------------------------
 
-    def build_state(self, tgt_lang: str, params: EngineParams, *, speech: bool):  # noqa: ANN201, ARG002
+    def build_state(self, tgt_lang: str, params: EngineParams, *, speech: bool, source_lang: str = ""):  # noqa: ANN201, ARG002
         if not self._loaded:
             raise ModelUnavailable(self.load_error or "Azure engine not loaded")
         entry = AZURE_LANGS.get(tgt_lang)
@@ -259,7 +259,12 @@ class AzureEngine:
             raise ModelUnavailable(f"{tgt_lang} is not in the Azure language table")
 
         speechsdk = self._speechsdk
-        source = AZURE_LANGS.get(settings.azure_source_lang, AZURE_LANGS["eng"])
+        # Per-session, set by the teacher for this class. AZURE_SOURCE_LANG
+        # is only the fallback for a caller that does not say.
+        spoken = source_lang or settings.azure_source_lang
+        source = AZURE_LANGS.get(spoken)
+        if not source:
+            raise ModelUnavailable(f"spoken language {spoken!r} is not in the Azure language table")
 
         cfg = speechsdk.translation.SpeechTranslationConfig(
             subscription=settings.azure_speech_key,

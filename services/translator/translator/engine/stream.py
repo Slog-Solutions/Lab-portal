@@ -61,9 +61,14 @@ class StreamStats:
 class TranslationStream:
     """Not thread-safe by itself — the scheduler owns when `step` runs."""
 
-    def __init__(self, *, lang: str, params: EngineParams) -> None:
+    def __init__(self, *, lang: str, params: EngineParams, source_lang: str = "eng") -> None:
         self.lang = lang
         self.params = params
+        # The language being SPOKEN, per session — the teacher is not
+        # assumed to teach in any particular one. Seamless ignores it (its
+        # encoder is multilingual and the agent is built for tgt_lang
+        # only); Azure needs it up front to pick the recognition locale.
+        self.source_lang = source_lang
         # A language the model cannot synthesise runs captions-only. Same
         # encoder and monotonic decoder, no unit decoder or vocoder: about
         # half the GPU work, and the honest thing to offer rather than
@@ -74,7 +79,7 @@ class TranslationStream:
         # engine answer is what lets Tamil/Punjabi/Gujarati carry real
         # audio on Azure instead of being stuck caption-only.
         self.speech = engine.supports_speech(lang)
-        self.state = engine.build_state(lang, params, speech=self.speech)
+        self.state = engine.build_state(lang, params, speech=self.speech, source_lang=source_lang)
         self.playout = (
             PlayoutBuffer(
                 catch_up_start_ms=params.catch_up_start_ms,

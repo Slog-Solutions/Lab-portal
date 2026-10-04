@@ -66,6 +66,7 @@ class _PushStream:
 
 class _Recognizer:
     def __init__(self, translation_config=None, audio_config=None) -> None:  # noqa: ANN001, ARG002
+        self.cfg = translation_config
         self.recognizing = _Signal()
         self.recognized = _Signal()
         self.synthesizing = _Signal()
@@ -295,3 +296,27 @@ def test_close_state_releases_the_session(engine):  # noqa: ANN001
     engine.close_state(state)
     # And a push after close is a no-op rather than a crash.
     assert engine.push(state, np.zeros(160, dtype=np.float32), is_final=False) == []
+
+
+def test_source_and_target_are_both_per_session(engine):  # noqa: ANN001
+    """Neither side is fixed: the teacher may speak any supported
+    language and the student picks any other, so the recognition locale
+    comes from the session, not AZURE_SOURCE_LANG."""
+    from translator.engine.base import EngineParams
+
+    # Teacher speaking Hindi, student listening in Tamil.
+    hin_to_tam = engine.build_state("tam", EngineParams(), speech=True, source_lang="hin")
+    assert hin_to_tam.recognizer.cfg.speech_recognition_language == "hi-IN"
+    assert hin_to_tam.recognizer.cfg.targets == ["ta"]
+
+    # Same engine, opposite direction, at the same time.
+    tam_to_hin = engine.build_state("hin", EngineParams(), speech=True, source_lang="tam")
+    assert tam_to_hin.recognizer.cfg.speech_recognition_language == "ta-IN"
+    assert tam_to_hin.recognizer.cfg.targets == ["hi"]
+
+
+def test_unknown_spoken_language_fails_clearly(engine):  # noqa: ANN001
+    from translator.engine.base import EngineParams, ModelUnavailable
+
+    with pytest.raises(ModelUnavailable, match="spoken language"):
+        engine.build_state("hin", EngineParams(), speech=True, source_lang="zzz")

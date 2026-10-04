@@ -252,7 +252,7 @@ class TranslationSession:
     async def add_language(self, lang: str, params: EngineParams) -> None:
         if lang in self.channels:
             return
-        stream = TranslationStream(lang=lang, params=params)
+        stream = TranslationStream(lang=lang, params=params, source_lang=self.source_language)
         channel = LanguageChannel(self, stream)
         # Registered with the scheduler BEFORE publishing, so no frame is
         # ever pumped from a buffer that has no producer behind it.

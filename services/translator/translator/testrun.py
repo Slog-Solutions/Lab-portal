@@ -164,7 +164,7 @@ async def _execute(
 
         loop = asyncio.get_running_loop()
         for lang in target_languages:
-            stream = TranslationStream(lang=lang, params=params)
+            stream = TranslationStream(lang=lang, params=params, source_lang=source_language)
             streams[lang] = stream
             scheduler.add(session_id, stream, lambda deltas, l=lang: sink(l, deltas))
 

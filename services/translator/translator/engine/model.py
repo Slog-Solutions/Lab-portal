@@ -120,7 +120,9 @@ class SeamlessEngine:
         genuinely must be closed.
         """
 
-    def build_state(self, tgt_lang: str, params: EngineParams, *, speech: bool) -> Any:
+    def build_state(
+        self, tgt_lang: str, params: EngineParams, *, speech: bool, source_lang: str = "eng"
+    ) -> Any:
         """A fresh agent state for one (session, language) stream.
 
         `speech=False` runs the s2tt task: same encoder and monotonic

@@ -108,7 +108,7 @@ class StubEngine:
     def close_state(self, state) -> None:  # noqa: ANN001, ARG002
         """No-op; see SeamlessEngine.close_state."""
 
-    def build_state(self, tgt_lang: str, params: EngineParams, *, speech: bool):  # noqa: ANN201
+    def build_state(self, tgt_lang: str, params: EngineParams, *, speech: bool, source_lang: str = "eng"):  # noqa: ANN201, ARG002
         if not self._loaded:
             raise ModelUnavailable("stub engine not loaded")
         return _StubState(tgt_lang, speech)
