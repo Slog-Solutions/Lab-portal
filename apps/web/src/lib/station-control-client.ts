@@ -153,6 +153,15 @@ export class StationControlClient {
     this.socket?.emit('interp:selectChannel', payload);
   }
 
+  /** The seat's live-translation language. Fire-and-forget: the server
+   * persists it on the signed-in USER and answers with a fresh
+   * session:snapshot, which is what the UI actually renders from — so a
+   * dropped emit self-heals on the next snapshot rather than leaving the
+   * student on a language the server doesn't know about. */
+  setTranslationLanguage(lang: string): void {
+    this.socket?.emit('translation:setLanguage', { lang });
+  }
+
   private sendHello(): void {
     const machineGuid = getOrCreateBrowserMachineGuid();
     this.socket?.emit(

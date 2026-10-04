@@ -8,6 +8,7 @@ import type {
   StationHelloAck,
   StationStatusRow,
 } from '../types/index.js';
+import type { TranslationEngineHealth, TranslationLangStatus } from '../translation/languages.js';
 
 /**
  * Typed Socket.IO contract for the `/control` namespace (design doc §4.1–4.4).
@@ -76,6 +77,12 @@ export interface StationToServerEvents {
   /** The chairman's own voice activity — the chairman talks continuously, so
    * their turns come from speech, not floor state. Server-stamped. */
   'rt:chairSpeaking': (payload: RtGroupRef & { speaking: boolean }) => void;
+  /** This seat's live-translation language choice. The server validates
+   * it against the admin-enabled list, persists it on the USER (so it
+   * follows the student to another seat), then reconciles the class's GPU
+   * streams and pushes a fresh snapshot. Idempotent: re-sending the
+   * current language is a no-op, which is what a reconnect does. */
+  'translation:setLanguage': (payload: { lang: string }) => void;
 }
 
 export interface RtGroupRef {
@@ -153,6 +160,20 @@ export interface ServerToDashboardEvents {
   'interp:channel': (payload: { sessionId: string; stationId: string; trackSid: string }) => void;
   'rt:floor': (payload: RoundTableFloor) => void;
   'rt:alert': (payload: { sessionId: string; groupId: string; kind: 'chairman_offline' | 'chairman_promoted'; stationId: string }) => void;
+  /** Live-translation state for one of this teacher's classes — which
+   * languages are running, how many seats listen to each, measured lag,
+   * and engine health. Pushed every couple of seconds while translation
+   * is on so the teacher sees degradation as it happens rather than from
+   * a student complaining. */
+  'translation:status': (payload: TranslationStatusPayload) => void;
+}
+
+export interface TranslationStatusPayload {
+  classId: string;
+  enabled: boolean;
+  spokenLang: string;
+  langs: TranslationLangStatus[];
+  engine: TranslationEngineHealth;
 }
 
 // ---- Teacher / Admin dashboards -> Server -------------------------------------------

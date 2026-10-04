@@ -1,0 +1,26 @@
+# Dependencies for TRANSLATOR_ENGINE=azure.
+#
+# No torch, no fairseq2, no seamless_communication, no CUDA, no model
+# weights: Azure does the translation and the synthesis, so this service
+# is reduced to audio plumbing between LiveKit and Azure. That is why it
+# runs on a lab server with no GPU at all.
+#
+#   python -m pip install -r requirements-azure.txt
+#   TRANSLATOR_ENGINE=azure python -m uvicorn translator.app:app --port 8080
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.34,<1.0
+pydantic>=2.10,<3.0
+
+# LiveKit's realtime SDK: joins the class room, subscribes to the
+# teacher's mic and publishes one audio track per target language.
+livekit>=0.19
+
+numpy>=1.26,<3.0
+soxr>=0.5
+soundfile>=0.12
+
+# Azure Speech. Provides TranslationRecognizer, which does
+# speech-to-speech in one call (translated text plus synthesised audio),
+# so no separate STT and TTS stages are needed.
+azure-cognitiveservices-speech>=1.40,<2.0

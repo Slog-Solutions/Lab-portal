@@ -1,8 +1,10 @@
 import { Injectable } from '@nestjs/common';
 import {
   ActivityType,
+  DEFAULT_TRANSLATION_LANGUAGE,
   SessionRole,
   emptyDesiredState,
+  findTranslationLanguage,
   resolveDictionaryEnabled,
   resolveTestPolicy,
   seatLabel,
@@ -17,6 +19,8 @@ import { PrismaService } from '../../prisma/prisma.service';
 import { MediaService } from '../media/media.service';
 import { LockService } from './lock.service';
 import { RoundTableFloorStore } from './round-table-floor.store';
+import { TranslationStateStore } from './translation-state.store';
+import { TranslationSettingsService } from '../translation/translation-settings.service';
 import { projectConfigForStation } from '../../common/served-config';
 
 const LOCK_HEARTBEAT_TTL_MS = 30_000; // design doc §3.3 — 30s without renewal auto-unlocks
@@ -41,12 +45,17 @@ export class SessionStateService {
     private readonly media: MediaService,
     private readonly locks: LockService,
     private readonly roundTableFloors: RoundTableFloorStore,
+    private readonly translationStore: TranslationStateStore,
+    private readonly translationSettings: TranslationSettingsService,
   ) {}
 
   async getDesiredState(stationId: string): Promise<DesiredStationState> {
     const station = await this.prisma.station.findUnique({
       where: { id: stationId },
-      include: { liveClass: { include: { teacher: { select: { fullName: true } } } } },
+      include: {
+        liveClass: { include: { teacher: { select: { fullName: true } } } },
+        currentUser: { select: { listenLanguage: true } },
+      },
     });
     if (!station || !station.enabled) {
       return { ...emptyDesiredState(0), stationEnabled: !!station?.enabled };
@@ -93,6 +102,8 @@ export class SessionStateService {
         })()
       : null;
 
+    const translation = await this.translationState(station.liveClass, station.currentUser?.listenLanguage ?? null);
+
     const member = await this.prisma.sessionMember.findFirst({
       where: { stationId, group: { session: { state: { in: ['ARMED', 'RUNNING', 'PAUSED'] } } } },
       include: {
@@ -133,6 +144,7 @@ export class SessionStateService {
         // No live activity for this seat -> nothing to restrict against
         // (spec §7's per-activity toggle has no activity to read).
         dictionaryEnabled: true,
+        translation,
       };
     }
 
@@ -230,8 +242,36 @@ export class SessionStateService {
       // server-side on every /dictionary/* call regardless of what this
       // snapshot says.
       dictionaryEnabled: resolveDictionaryEnabled(activityType ?? null, member.group.activity?.dictionaryEnabled),
+      translation,
       ...(roundTable ? { roundTable: roundTable.view } : {}),
     };
+  }
+
+  /**
+   * The translation half of a snapshot. Null — so the student console
+   * hides the selector entirely — when the seat is not in a class, or
+   * the teacher has not switched translation on for it. Deliberately
+   * reports a `status` even when that status is bad: a student hearing
+   * the teacher's original audio while expecting Hindi needs to be told
+   * why, and "unavailable" with a reason is the honest answer (the audio
+   * itself never stops either way).
+   */
+  private async translationState(
+    liveClass: { id: string; translationEnabled: boolean; spokenLanguage: string } | null,
+    listenLanguage: string | null,
+  ): Promise<DesiredStationState['translation']> {
+    if (!liveClass) return null;
+    const spokenLang = liveClass.spokenLanguage;
+    const selectedLang = listenLanguage ?? DEFAULT_TRANSLATION_LANGUAGE;
+    const languages = await this.translationSettings.enabledLanguagesFor(spokenLang);
+    if (!liveClass.translationEnabled) {
+      // The selector is still shown (so a student can pre-set their
+      // language before the teacher turns it on) but nothing is running.
+      return { enabled: false, spokenLang, selectedLang, languages, status: 'unavailable', detail: 'Translation is off for this class' };
+    }
+    const speechCapable = findTranslationLanguage(selectedLang)?.speech ?? false;
+    const { status, detail } = this.translationStore.statusFor(liveClass.id, selectedLang, spokenLang, speechCapable);
+    return { enabled: true, spokenLang, selectedLang, languages, status, ...(detail ? { detail } : {}) };
   }
 
   /** SPEC-mcq-test-timed-reveal.md §5.3 — set only for a VOCABULARY_TEST

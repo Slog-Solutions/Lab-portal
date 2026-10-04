@@ -10,10 +10,12 @@ import { RemoteControlSessionService } from './remote-control-session.service';
 import { ScreenShareService } from './screen-share.service';
 import { CommandsService } from './commands.service';
 import { RoundTableFloorStore } from './round-table-floor.store';
+import { TranslationStateStore } from './translation-state.store';
 import { StationsModule } from '../stations/stations.module';
 import { MediaModule } from '../media/media.module';
 import { AuthModule } from '../auth/auth.module';
 import { ClassAccessModule } from '../classroom/class-access.module';
+import { TranslationSettingsModule } from '../translation/translation-settings.module';
 
 @Module({
   imports: [
@@ -21,6 +23,7 @@ import { ClassAccessModule } from '../classroom/class-access.module';
     MediaModule,
     AuthModule,
     ClassAccessModule,
+    TranslationSettingsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       inject: [ConfigService],
@@ -40,6 +43,7 @@ import { ClassAccessModule } from '../classroom/class-access.module';
     ScreenShareService,
     CommandsService,
     RoundTableFloorStore,
+    TranslationStateStore,
   ],
   exports: [
     PresenceService,
@@ -50,6 +54,8 @@ import { ClassAccessModule } from '../classroom/class-access.module';
     CommandsService,
     ControlGateway,
     RoundTableFloorStore,
+    TranslationStateStore,
+    TranslationSettingsModule,
   ],
 })
 export class ControlModule {}

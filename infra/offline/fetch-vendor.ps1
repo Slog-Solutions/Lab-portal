@@ -66,4 +66,17 @@ Write-Host "  At least one Piper voice (e.g. en_GB-alba-medium): https://github.
 Write-Host "Save each into $vendorDir by hand once downloaded."
 
 Write-Host ""
+Write-Host "== Live translation weights (SeamlessStreaming, ~12GB) - ONLY if the lab server has an NVIDIA GPU =="
+Write-Host "  Not fetched here: the checkpoints are gated behind Hugging Face model terms, so they need an"
+Write-Host "  accepted license and an HF_TOKEN, and they only load inside the built translator image."
+Write-Host "  Accept the terms at https://huggingface.co/facebook/seamless-streaming then run, on a connected machine:"
+Write-Host "    docker compose --profile translation build translator"
+Write-Host "    docker run --rm -e HF_TOKEN=hf_xxx -v `"`$PWD/models:/models`" ``"
+Write-Host "      -v `"`$PWD/services/translator/scripts:/scripts:ro`" lab-portal/translator:latest ``"
+Write-Host "      python /scripts/fetch_models.py --out /models"
+Write-Host "  Then copy .\models into the translator-models volume on-site."
+Write-Host "  Full procedure: services/translator/README.md. A server without a GPU needs none of this -"
+Write-Host "  leaving TRANSLATOR_URL empty hides the feature entirely."
+
+Write-Host ""
 Write-Host "Done. See infra/offline/README.md's packaging checklist for what happens next."

@@ -1,0 +1,32 @@
+# SeamlessStreaming translator service.
+#
+# Torch is NOT listed here: it must come from the CUDA-matched index, and
+# the Dockerfile installs it first with an explicit --index-url. Keeping it
+# out avoids pip resolving a CPU-only wheel over the CUDA one.
+#
+# fairseq2 and seamless_communication are likewise installed from pinned
+# URLs in the Dockerfile — fairseq2's wheels are published per
+# torch/CUDA/python combination on a dedicated index, not on PyPI, so a
+# bare `fairseq2==x.y` here would silently fail to match the torch below.
+
+fastapi==0.115.6
+uvicorn[standard]==0.34.0
+pydantic==2.10.4
+
+# LiveKit's Python realtime SDK: joins the class room, subscribes to the
+# teacher's mic and publishes one audio track per target language.
+# Pinned to the version this service's API usage was verified against
+# (room.connect/RoomOptions, AudioSource/AudioStream, publish_data's
+# keyword-only reliable+topic, unpublish_track(sid)). livekit-api is NOT
+# needed: tokens are always minted by the Nest server, never here.
+livekit==1.1.20
+
+# Audio handling. soxr is the resampler (16k model <-> 48k WebRTC);
+# soundfile writes the test-run WAVs. numpy is pinned under 2.0 because
+# fairseq2 0.2.x and torch 2.1.x are both built against the 1.x ABI.
+numpy==1.26.4
+soxr==0.5.0.post1
+soundfile==0.12.1
+
+# Silero VAD is loaded through torch.hub from a vendored TORCH_HOME, so no
+# package is needed for it here.

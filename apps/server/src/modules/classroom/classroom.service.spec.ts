@@ -11,6 +11,7 @@ import type { AuditService } from '../audit/audit.service';
 import type { LockService } from '../control/lock.service';
 import type { ScreenShareService } from '../control/screen-share.service';
 import type { BatchAccessService } from '../batches/batch-access.service';
+import type { TranslationService } from '../translation/translation.service';
 import type { JwtPayload } from '../auth/auth.service';
 
 function makeFakePrisma(overrides: Record<string, unknown> = {}) {
@@ -76,6 +77,14 @@ function makeFakeBatchAccess() {
   return { assertCanUseBatch: vi.fn().mockResolvedValue(undefined) };
 }
 
+/** Translation is a no-op in these tests: markDirty only queues a
+ * reconcile (and does nothing at all when TRANSLATOR_URL is unset, which
+ * is the default), and teardownClass only matters to the GPU. The
+ * classroom lifecycle assertions below are unaffected either way. */
+function makeFakeTranslation() {
+  return { markDirty: vi.fn(), markDirtyForTeacher: vi.fn().mockResolvedValue(undefined), teardownClass: vi.fn().mockResolvedValue(undefined) };
+}
+
 function makeService(deps: {
   prisma: ReturnType<typeof makeFakePrisma>;
   stations: ReturnType<typeof makeFakeStations>;
@@ -87,6 +96,7 @@ function makeService(deps: {
   locks: ReturnType<typeof makeFakeLocks>;
   screenShares?: ReturnType<typeof makeFakeScreenShares>;
   batchAccess?: ReturnType<typeof makeFakeBatchAccess>;
+  translation?: ReturnType<typeof makeFakeTranslation>;
 }): ClassroomService {
   return new ClassroomService(
     deps.prisma as unknown as PrismaService,
@@ -99,6 +109,7 @@ function makeService(deps: {
     deps.locks as unknown as LockService,
     (deps.screenShares ?? makeFakeScreenShares()) as unknown as ScreenShareService,
     (deps.batchAccess ?? makeFakeBatchAccess()) as unknown as BatchAccessService,
+    (deps.translation ?? makeFakeTranslation()) as unknown as TranslationService,
   );
 }
 

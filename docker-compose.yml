@@ -68,6 +68,86 @@ services:
         condition: service_healthy
     networks: [backend]
 
+  # Live class translation (SeamlessStreaming on a GPU). Behind a profile
+  # so a lab server with no NVIDIA GPU still brings the stack up with
+  # `docker compose up` — the API then reports translation as
+  # unconfigured and every surface hides it, rather than failing.
+  #   docker compose --profile translation up -d
+  # GPU translator (SeamlessStreaming). Needs a 12GB+ NVIDIA card; use the
+  # `translator-azure` service below instead on a lab server without one.
+  translator:
+    <<: *restart
+    profiles: [translation]
+    build:
+      context: .
+      dockerfile: services/translator/Dockerfile
+    image: lab-portal/translator:latest
+    environment:
+      # Deliberately NOT `:?required` — compose interpolates the whole
+      # file before it applies profiles, so a required variable here
+      # would break plain `docker compose up` on every GPU-less lab
+      # server, profile or not. The service logs loudly and refuses
+      # unauthenticated control calls if this is empty.
+      TRANSLATOR_API_KEY: ${TRANSLATOR_API_KEY:-}
+      TRANSLATOR_DEVICE: ${TRANSLATOR_DEVICE:-cuda}
+      TRANSLATOR_DTYPE: ${TRANSLATOR_DTYPE:-fp16}
+      # The GPU's own limit, enforced where the GPU is. The admin-facing
+      # maxStreams in AppSetting is a policy on top of this.
+      TRANSLATOR_MAX_STREAMS: ${TRANSLATOR_MAX_STREAMS:-4}
+    # Needs the NVIDIA Container Toolkit (Linux) or Docker Desktop with
+    # WSL2 + an NVIDIA driver (Windows). See services/translator/README.md.
+    gpus: all
+    volumes:
+      # Vendored weights — fetched once by scripts/fetch_models.py on a
+      # machine with internet and copied in. ~12GB.
+      - translator-models:/models
+      # Shared with the server so Translation Lab uploads are addressable
+      # by path on both sides (TRANSLATOR_DATA_ROOT).
+      - lab-data:/data/LabData
+    # No published port: only the server talks to it, over the backend
+    # network. The API key guards against anything else on the host.
+    networks: [backend]
+
+  # Azure-backed translator — same service, same API, no GPU. Start it with
+  #   docker compose --profile translation-azure up -d
+  # Do NOT run this and `translator` at once: the server points
+  # TRANSLATOR_URL at one hostname, so pick the profile that matches the
+  # hardware. Both answer on port 8080 inside the backend network.
+  translator-azure:
+    <<: *restart
+    profiles: [translation-azure]
+    build:
+      context: .
+      dockerfile: services/translator/Dockerfile.azure
+    image: lab-portal/translator:azure
+    environment:
+      TRANSLATOR_API_KEY: ${TRANSLATOR_API_KEY:-}
+      TRANSLATOR_ENGINE: azure
+      TRANSLATOR_MAX_STREAMS: ${TRANSLATOR_MAX_STREAMS:-4}
+      # Azure Speech. The key stays inside this container: it is never
+      # returned by /health, never logged, and never reaches the Nest
+      # server or any browser. Same `:-` (not `:?`) rule as above —
+      # compose interpolates the whole file before applying profiles, so
+      # a required variable here would break `docker compose up` for
+      # every deployment that does not use translation at all.
+      AZURE_SPEECH_KEY: ${AZURE_SPEECH_KEY:-}
+      AZURE_SPEECH_REGION: ${AZURE_SPEECH_REGION:-centralindia}
+      # ISO-639-3 code for the language the teacher speaks.
+      AZURE_SOURCE_LANG: ${AZURE_SOURCE_LANG:-eng}
+    volumes:
+      # Shared with the server so Translation Lab uploads are addressable
+      # by path on both sides (TRANSLATOR_DATA_ROOT).
+      - lab-data:/data/LabData
+    networks: [backend]
+    healthcheck:
+      test: ['CMD-SHELL', 'curl -fsS http://localhost:8080/health || exit 1']
+      # start_period is generous: loading 2.5B params onto the GPU takes
+      # a while, and an unhealthy-on-boot translator would flap.
+      start_period: 180s
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
   server:
     <<: *restart
     build:
@@ -84,6 +164,15 @@ services:
       LIVEKIT_API_SECRET: ${LIVEKIT_API_SECRET}
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-500}
       RUN_SEED: ${RUN_SEED:-false}
+      # Unset these and translation hides itself everywhere (no selector,
+      # no teacher toggle, no tab) — a GPU-less lab is a supported
+      # deployment, not a misconfiguration. Set TRANSLATOR_URL only when
+      # the translator profile is actually running.
+      TRANSLATOR_URL: ${TRANSLATOR_URL:-}
+      TRANSLATOR_API_KEY: ${TRANSLATOR_API_KEY:-}
+      # Where the TRANSLATOR sees the shared LabData volume — both
+      # containers mount it at the same path here.
+      TRANSLATOR_DATA_ROOT: /data/LabData
     volumes:
       - lab-data:/data/LabData
       - lab-updates:/data/updates
@@ -124,3 +213,4 @@ volumes:
   lab-data:
   lab-updates:
   nginx-certs:
+  translator-models:

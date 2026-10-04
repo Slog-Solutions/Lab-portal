@@ -12,6 +12,7 @@ import { ClassDetailPage } from '../features/teacher/ClassDetailPage';
 import { ExercisesPage } from '../features/exercises/ExercisesPage';
 import { ExerciseDetailPage } from '../features/exercises/ExerciseDetailPage';
 import { StudyLibraryPage } from '../features/courseware/StudyLibraryPage';
+import { TranslationPage } from '../features/translation/TranslationPage';
 import { GradebookPage } from '../features/gradebook/GradebookPage';
 import { ReportsPage } from '../features/reports/ReportsPage';
 import { ClassRecordingsPage } from '../features/recordings/ClassRecordingsPage';
@@ -127,6 +128,7 @@ export const router = createHashRouter([
       // live board, keyed by the ActivityInstance id (not a session/group id).
       { path: '/tests/live/:instanceId', element: <LiveTestBoardPage /> },
       { path: '/study-library', element: <StudyLibraryPage /> },
+      { path: '/speech-translation', element: <TranslationPage /> },
       // Ser 4 Content Exercise: ready-made + publisher content, grade/level-wise.
       { path: '/content-exercises', element: <ContentExercisesPage /> },
       { path: '/content-exercises/:id', element: <ContentExerciseReportPage /> },

@@ -1,10 +1,12 @@
 import { useEffect, useRef, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { Track } from 'livekit-client';
+import { isTranslatorIdentity, parseTranslationTrackName } from '@lab/shared/events';
 import { apiFetch } from '../../lib/api-client';
 import { LiveKitRoomClient } from '../../lib/livekit-client';
 import { getLiveKitUrl } from '../../lib/runtime-config';
 import { ClassRecorder, type ClassRecorderState } from './class-recorder';
+import { TranslationControl } from './TranslationControl';
 
 const IDLE_RECORDER_STATE: ClassRecorderState = { status: 'idle', startedAt: null, pendingChunks: 0, withAudio: true, error: null };
 
@@ -47,6 +49,11 @@ export function BroadcastPanel({ isAdmin, classId }: { isAdmin: boolean; classId
   const [now, setNow] = useState(() => Date.now());
   const roomRef = useRef<LiveKitRoomClient | null>(null);
   const audioContainerRef = useRef<HTMLDivElement>(null);
+  // Which translated language the teacher is auditioning, if any. Held in
+  // a ref as well as state because the room's subscription filter runs
+  // from the connect-time closure, not a render.
+  const [monitorLang, setMonitorLang] = useState<string | null>(null);
+  const monitorLangRef = useRef<string | null>(null);
   const recorderRef = useRef<ClassRecorder | null>(null);
   if (!recorderRef.current) recorderRef.current = new ClassRecorder(setRecorderState);
 
@@ -81,9 +88,28 @@ export function BroadcastPanel({ isAdmin, classId }: { isAdmin: boolean; classId
               if (handle.source !== Track.Source.Microphone && handle.source !== Track.Source.ScreenShareAudio) return;
               const el = handle.track.attach();
               el.dataset.participant = handle.participantIdentity;
+              el.dataset.trackName = handle.trackName;
               audioContainerRef.current?.appendChild(el);
             },
             onTrackUnsubscribed: (handle) => handle.track.detach().forEach((el) => el.remove()),
+            /**
+             * Keeps the teacher out of their own translation feedback
+             * loop. Without this, every `tr:<lang>` track the translator
+             * publishes into this room would auto-play on the teacher's
+             * speakers, be picked up by the teacher's own mic, and be fed
+             * straight back into the translator — a loop that also
+             * poisons every student's translation, not just the teacher's
+             * audio. So: translator tracks are subscribed ONLY when the
+             * teacher has explicitly asked to monitor that language
+             * (which the UI pairs with a headphones warning); everything
+             * else in the room — students' mics, screen share — is
+             * allowed through exactly as before.
+             */
+            subscriptionFilter: (info) => {
+              if (!isTranslatorIdentity(info.participantIdentity)) return true;
+              const lang = parseTranslationTrackName(info.trackName);
+              return lang !== null && lang === monitorLangRef.current;
+            },
           });
           await client.connect(getLiveKitUrl(), token);
           if (cancelled) {
@@ -110,6 +136,15 @@ export function BroadcastPanel({ isAdmin, classId }: { isAdmin: boolean; classId
       setMicOn(false);
     };
   }, [connectKey]);
+
+  // Re-runs the room's subscription filter when the teacher picks a
+  // different language to monitor (or stops monitoring), which is what
+  // starts streaming that translation and stops the previous one without
+  // reconnecting.
+  useEffect(() => {
+    monitorLangRef.current = monitorLang;
+    roomRef.current?.refreshSubscriptions();
+  }, [monitorLang]);
 
   // A ticking display for the REC badge — only runs while actually recording.
   useEffect(() => {
@@ -224,6 +259,13 @@ export function BroadcastPanel({ isAdmin, classId }: { isAdmin: boolean; classId
           </button>
         )}
       </div>
+
+      {/* Live translation — only for a real class (the lab-wide ADMIN
+          broadcast room has no LiveClass to scope streams or a spoken
+          language to, and no roster to compute demand from). */}
+      {classId && (
+        <TranslationControl classId={classId} monitorLang={monitorLang} onMonitorLangChange={setMonitorLang} />
+      )}
 
       {/* Recording — a separate control from the broadcast itself (design
           decision: teacher chooses per-recording, not once at start). */}

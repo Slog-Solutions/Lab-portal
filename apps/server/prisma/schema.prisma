@@ -30,6 +30,13 @@ model User {
   active        Boolean  @default(true)
   createdAt     DateTime @default(now())
   updatedAt     DateTime @updatedAt
+  // Live-translation listening language (ISO-639-3, see
+  // packages/shared translation/languages.ts). Persisted on the USER, not
+  // the Station, because lab seats are shared and reassigned — a student
+  // who moves seats, or signs in tomorrow, must not have to re-pick their
+  // own language. Null = never chosen; treated as
+  // DEFAULT_TRANSLATION_LANGUAGE ('eng').
+  listenLanguage String?
 
   enrollments         Enrollment[]
   taughtSessions      ClassSession[]   @relation("SessionTeacher")
@@ -53,6 +60,7 @@ model User {
   sessionMemberships  SessionMember[]  @relation("SessionMemberStudent")
   // CLASS_BROADCAST recordings this user (teacher/admin) started.
   createdRecordings   Recording[]      @relation("RecordingCreatedBy")
+  translationTests    TranslationTestRun[] @relation("TranslationTestTeacher")
 
   @@index([role])
 }
@@ -190,6 +198,16 @@ model LiveClass {
   // Batch must not delete a LiveClass row a station may still reference.
   batchId   String?
   batch     Batch?         @relation(fields: [batchId], references: [id], onDelete: SetNull)
+  // Live machine translation of the teacher's voice. Off by default and
+  // per-class rather than a global setting: it costs GPU streams, and a
+  // teacher whose class is monolingual should never pay for it. Nothing
+  // starts until a student actually selects a language other than
+  // `spokenLanguage` (see TranslationService's demand computation).
+  translationEnabled Boolean @default(false)
+  // What the teacher is TALKING in — the one language never translated.
+  // A student who picks this hears the teacher's own audio directly, so
+  // the common case stays zero-latency.
+  spokenLanguage     String  @default("eng")
 
   stations   Station[]
   // CLASS_BROADCAST recordings made while this class was live.
@@ -784,4 +802,48 @@ model AuditLog {
   @@index([action])
   @@index([actorId])
   @@index([stationId])
+}
+
+// Admin-owned singleton settings, keyed by a well-known string (currently
+// only 'translation' — see TranslationSettings in packages/shared). A
+// generic key/Json table rather than a column-per-setting model: these are
+// operator knobs read once per request and edited rarely, and every new
+// one would otherwise cost a migration. Validated with zod on write
+// (zTranslationSettingsDto), so the Json is never trusted on read.
+model AppSetting {
+  key         String   @id
+  value       Json
+  updatedAt   DateTime @updatedAt
+  updatedById String?
+
+  @@map("app_setting")
+}
+
+// One Translation Lab run: a teacher uploaded an audio file and had the
+// live pipeline translate it. Kept (rather than being purely transient)
+// so measured latency can be compared across engine-parameter changes —
+// that history IS the tuning tool. Output audio lives on disk under
+// LAB_DATA_ROOT/translation-tests/<id>/, not in the DB.
+model TranslationTestRun {
+  id        String   @id @default(cuid())
+  teacherId String
+  teacher   User     @relation("TranslationTestTeacher", fields: [teacherId], references: [id], onDelete: Cascade)
+  fileName  String
+  /// Source language of the uploaded audio (ISO-639-3).
+  sourceLanguage String @default("eng")
+  /// Target language codes requested for this run.
+  langs     String[]
+  /// 'realtime' (paced 1x through LiveKit, latency is meaningful) or 'fast'.
+  mode      String
+  /// queued | running | done | failed
+  status    String   @default("queued")
+  /// Per-language lag percentiles, RTF and transcripts. Shape:
+  /// { rtf, langs: { <code>: { captionLagP50, captionLagP95, speechLagP95, segments } } }
+  metrics   Json?
+  error     String?
+  durationMs Int?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([teacherId, createdAt])
 }

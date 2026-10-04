@@ -23,6 +23,7 @@ import { StudyModulesModule } from './modules/study-modules/study-modules.module
 import { AdminModule } from './modules/admin/admin.module';
 import { BatchesModule } from './modules/batches/batches.module';
 import { ClassroomModule } from './modules/classroom/classroom.module';
+import { TranslationModule } from './modules/translation/translation.module';
 import { RoundTableModule } from './modules/round-table/round-table.module';
 import { DictionaryModule } from './modules/dictionary/dictionary.module';
 import { TimedTestsModule } from './modules/timed-tests/timed-tests.module';
@@ -44,6 +45,7 @@ import { EnglishCourseModule } from './modules/english-course/english-course.mod
     ControlModule,
     BatchesModule,
     ClassroomModule,
+    TranslationModule,
     SessionsModule,
     RoundTableModule,
     RecordingsModule,

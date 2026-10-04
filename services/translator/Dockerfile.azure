@@ -1,0 +1,40 @@
+# Azure-backed translator (live class translation, TRANSLATOR_ENGINE=azure).
+#
+# Deliberately NOT the CUDA image Dockerfile uses. Azure does the
+# recognition, translation and synthesis, so nothing runs locally: no
+# torch, no fairseq2, no 12GB of weights, no GPU. That turns a ~10GB
+# image that only starts on an RTX-class card into a few hundred MB that
+# runs on the lab server as it is.
+#
+# Build from the REPO ROOT, like the other services:
+#   docker build -f services/translator/Dockerfile.azure -t lab-portal/translator:azure .
+FROM python:3.11-slim-bookworm
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    TRANSLATOR_ENGINE=azure
+
+# ffmpeg decodes Translation Lab uploads (mp3/m4a/mp4/whatever a phone
+# produced); libsndfile backs soundfile's WAV writing. ca-certificates is
+# required here and not in the CUDA image: this service makes outbound
+# TLS calls to Azure, where the GPU one was fully air-gapped.
+# libasound2 is a runtime dependency of the Azure Speech SDK even though
+# this service never opens a local audio device.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      ffmpeg libsndfile1 libasound2 ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY services/translator/requirements-azure.txt /app/requirements-azure.txt
+RUN python -m pip install --upgrade pip \
+    && python -m pip install -r /app/requirements-azure.txt
+
+COPY services/translator/translator /app/translator
+WORKDIR /app
+
+EXPOSE 8080
+
+# Single worker, as with the GPU image — but for a different reason here:
+# each worker would open its own Azure recognizer per language and bill
+# for the same audio twice.
+CMD ["python", "-m", "uvicorn", "translator.app:app", "--host", "0.0.0.0", "--port", "8080", "--workers", "1"]

@@ -22,6 +22,7 @@ themselves are a packaging-time artifact, regenerated per deployment.
 | `node-v24-x64.msi` | Node.js runtime | Needed to run the server itself, and `services/lab-agent-svc` |
 | `espeak-ng-x64.msi` | Offline IPA pipeline | `apps/server/src/modules/pronunciation` degrades cleanly without it (see that module's own doc comment) but Ser 7 needs it for a real deployment |
 | `piper-windows-amd64.zip` + at least one `en_GB`/`en_US` ONNX voice | Offline model-audio pipeline | Same module, same degradation story |
+| `models/` (~12 GB, SeamlessStreaming weights) | Live class translation | **Only for a lab server with an NVIDIA GPU (≥12 GB VRAM).** Gated behind Hugging Face model terms, so it needs an accepted licence and an `HF_TOKEN`, and only loads inside the built `translator` image — see `services/translator/README.md`. A server without a GPU needs none of it: leaving `TRANSLATOR_URL` empty hides the feature entirely. |
 
 `fetch-vendor.ps1` in this directory automates pulling all of these from
 their official sources into `vendor/` — run it on a connected machine,

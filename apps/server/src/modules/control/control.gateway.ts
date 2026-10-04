@@ -19,6 +19,7 @@ import {
   sessionRoom,
   stationRoom,
   type ActivityEventPayload,
+  type TranslationStatusPayload,
 } from '@lab/shared/events';
 import {
   StationLifecycle,
@@ -388,6 +389,15 @@ export class ControlGateway implements OnGatewayConnection, OnGatewayDisconnect,
   async sendFullStatusToTeacher(teacherId: string): Promise<void> {
     const rows = await this.controllableStatusRows({ sub: teacherId, role: UserRole.TEACHER });
     this.server.to(dashRoom(teacherId)).emit('lab:status', rows);
+  }
+
+  /** Live-translation status for one of this teacher's classes (see
+   * TranslationService.pushStatuses). Scoped to the owning teacher's own
+   * dashboard room rather than ALL_DASHBOARDS_ROOM: unlike lab:status
+   * deltas, this is not board-wide information — another teacher has no
+   * reason to watch this class's GPU streams. */
+  emitTranslationStatus(teacherId: string, payload: TranslationStatusPayload): void {
+    this.server.to(dashRoom(teacherId)).emit('translation:status', payload);
   }
 
   private async controllableStatusRows(user: Pick<JwtPayload, 'sub' | 'role'>): Promise<StationStatusRow[]> {

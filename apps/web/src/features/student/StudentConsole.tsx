@@ -2,14 +2,17 @@ import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Menu } from 'lucide-react';
 import { Track } from 'livekit-client';
-import type { CommandEnvelope, DesiredStationState, RoundTableFloor, TimedTestState } from '@lab/shared';
+import type { CommandEnvelope, DesiredStationState, RoundTableFloor, TimedTestState, TranslationCaption } from '@lab/shared';
 import { ActivityType, CommandType, seatLabel, shouldHandleDictionaryShortcut } from '@lab/shared';
 import {
   BROADCAST_ROOM,
   REMOTE_CONTROL_DATA_TOPIC,
+  TRANSLATION_CAPTIONS_TOPIC,
   classBroadcastRoom,
   groupMediaRoom,
   interpretingRoom,
+  isTranslatorIdentity,
+  parseTranslationTrackName,
   type ActivityEventPayload,
   type RemoteInputEvent,
 } from '@lab/shared/events';
@@ -32,6 +35,7 @@ import { JoinLiveClassCard } from './JoinLiveClassCard';
 import { StudentSignInScreen } from './StudentSignInScreen';
 import { BrandLogo } from '@/components/brand/BrandLogo';
 import { StudentDrawer, SECTION_TITLES, type StudentSection } from './StudentDrawer';
+import { TranslationBar, shouldMuteOriginal, wantedTranslationLang } from './TranslationBar';
 import { StudentHome } from './StudentHome';
 import { DictionaryPanel } from '../dictionary/DictionaryPanel';
 import { SelectionLookupPopover } from '../dictionary/SelectionLookupPopover';
@@ -114,6 +118,19 @@ export function StudentConsole() {
   // render, so they can't read state directly.
   const talkRoomRef = useRef<string | null>(null);
   const micOnRef = useRef(false);
+  // Live translation. The snapshot is the source of truth for WHICH
+  // language this seat listens in; these hold the pieces the LiveKit
+  // callbacks need, which run from the mount-time closure and so cannot
+  // read `snapshot` directly (same reason as talkRoomRef/micOnRef above).
+  // `translationRef` is read by the class room's subscription filter on
+  // every publication, and by attachTrack to decide whether the teacher's
+  // own mic element starts muted.
+  const translationRef = useRef<DesiredStationState['translation']>(null);
+  const [captions, setCaptions] = useState<TranslationCaption[]>([]);
+  // Audio elements this console has attached from the class room, by
+  // track name, so a language change can mute/unmute what is ALREADY
+  // playing instead of waiting for a re-subscribe round trip.
+  const classAudioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
   const controlRef = useRef<StationControlClient | null>(null);
   const remoteControlRoomRef = useRef<LiveKitRoomClient | null>(null);
   const [remoteControlActive, setRemoteControlActive] = useState(false);
@@ -177,6 +194,33 @@ export function StudentConsole() {
   // fail-open-on-the-client / fail-closed-on-the-server split: the real
   // gate is DictionaryAccessGuard, this is only what hides the panel.
   const dictionaryEnabled = snapshot?.dictionaryEnabled ?? true;
+  const translation = snapshot?.translation ?? null;
+
+  /**
+   * Converges the media plane on whatever language the snapshot says this
+   * seat listens in.
+   *
+   * Runs on every change to the translation block — the student's own
+   * selection, the teacher's toggle, a stream coming up or failing — and
+   * does three things in order: update the ref the LiveKit callbacks read,
+   * re-run the class room's subscription filter (which starts streaming
+   * the new language and stops the old), then mute/unmute the elements
+   * already attached. The last step is what makes a switch audible
+   * immediately rather than after the new track finishes negotiating.
+   */
+  useEffect(() => {
+    const previousLang = translationRef.current?.selectedLang;
+    translationRef.current = translation;
+    if (translation && previousLang && previousLang !== translation.selectedLang) {
+      // Captions are per-language, so the previous language's lines must
+      // not sit under the new one's.
+      setCaptions([]);
+    }
+    const classRoomName = snapshot?.liveClass ? classBroadcastRoom(snapshot.liveClass.id) : null;
+    if (classRoomName) roomsRef.current.get(classRoomName)?.refreshSubscriptions();
+    applyTranslationMuting();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [translation, snapshot?.liveClass?.id]);
 
   useEffect(() => {
     const control = new StationControlClient({
@@ -437,6 +481,7 @@ export function StudentConsole() {
     const livekitUrl = getLiveKitUrl();
     const wantedRoomNames = new Set(snap.media.rooms.map((r) => r.room));
     const interpRoomName = snap.sessionId ? interpretingRoom(snap.sessionId) : null;
+    const classRoomName = snap.liveClass ? classBroadcastRoom(snap.liveClass.id) : null;
     const rtRoomName =
       snap.sessionId && snap.groupId && snap.activity?.type === ActivityType.ROUND_TABLE
         ? groupMediaRoom(snap.sessionId, snap.groupId)
@@ -485,10 +530,24 @@ export function StudentConsole() {
               onActiveSpeakersChanged: (ids) => setRtSpeakers(new Set(ids)),
               onReconnected: () => controlRef.current?.rtSync(rtRef),
             })
-          : new LiveKitRoomClient({
-              onTrackSubscribed: (handle) => attachTrack(handle),
-              onTrackUnsubscribed: (handle) => detachTrack(handle),
-            });
+          : grant.room === classRoomName
+            ? // The class broadcast room is the only room translation
+              // tracks appear in, so it is the only one that needs a
+              // subscription filter. A filter here is authoritative for
+              // EVERY track in the room (autoSubscribe goes false), hence
+              // the explicit allow for screen share and other students.
+              new LiveKitRoomClient({
+                onTrackSubscribed: (handle) => attachTrack(handle),
+                onTrackUnsubscribed: (handle) => detachTrack(handle),
+                subscriptionFilter: (info) => classRoomWants(info.participantIdentity, info.trackName),
+                onDataReceived: (payload, topic) => {
+                  if (topic === TRANSLATION_CAPTIONS_TOPIC) handleCaption(payload);
+                },
+              })
+            : new LiveKitRoomClient({
+                onTrackSubscribed: (handle) => attachTrack(handle),
+                onTrackUnsubscribed: (handle) => detachTrack(handle),
+              });
       roomsRef.current.set(grant.room, client);
       if (isInterpreting) interpretingClientRef.current = client;
       if (isRoundTable) {
@@ -534,6 +593,65 @@ export function StudentConsole() {
     }
   }
 
+  /**
+   * Subscription policy for the class broadcast room.
+   *
+   * Everything that is not a translation track is allowed through
+   * unchanged (the teacher's mic and screen, other students' mics) — the
+   * filter exists only to stop this seat downloading every language's
+   * audio at once. Of the translator's tracks, exactly one is wanted: the
+   * language this seat selected, and only while a translated VOICE is
+   * actually available for it. A captions-only language publishes no
+   * audio track at all, so there is nothing to subscribe to there.
+   */
+  function classRoomWants(participantIdentity: string, trackName: string): boolean {
+    if (!isTranslatorIdentity(participantIdentity)) return true;
+    const trackLang = parseTranslationTrackName(trackName);
+    if (!trackLang) return false; // an unrecognised service track — never play it blind
+    return trackLang === wantedTranslationLang(translationRef.current);
+  }
+
+  function handleCaption(payload: Uint8Array): void {
+    try {
+      const caption = JSON.parse(textDecoder.decode(payload)) as TranslationCaption;
+      // Only this seat's language: the translator publishes captions for
+      // every active language on one topic, since a data message is
+      // cheap next to an audio track and a student switching language
+      // then has the last few lines already in hand.
+      if (caption.lang !== translationRef.current?.selectedLang) return;
+      setCaptions((prev) => {
+        // Bounded: a 45-minute lecture would otherwise grow this array
+        // without limit for no benefit — the bar only renders the last
+        // few segments.
+        const next = [...prev.filter((c) => c.segId !== caption.segId || c.lang !== caption.lang), caption];
+        return next.length > 40 ? next.slice(-40) : next;
+      });
+    } catch {
+      // A malformed caption is not worth disturbing the class over.
+    }
+  }
+
+  /** Applies the current mute decision to the class-room audio elements
+   * already attached. Called when the snapshot changes rather than only
+   * at attach time, because a student switching language must take
+   * effect on the audio that is already playing. */
+  function applyTranslationMuting(): void {
+    const muteOriginal = shouldMuteOriginal(translationRef.current);
+    for (const [trackName, el] of classAudioElsRef.current) {
+      const trackLang = parseTranslationTrackName(trackName);
+      if (trackLang === null) {
+        // The teacher's own mic (or another student's).
+        el.muted = muteOriginal;
+      } else {
+        // A translation track: audible only if it is the selected one.
+        // Belt-and-braces next to the subscription filter — a track that
+        // is mid-unsubscribe must not be briefly audible underneath the
+        // newly selected language.
+        el.muted = trackLang !== wantedTranslationLang(translationRef.current);
+      }
+    }
+  }
+
   function attachTrack(handle: RemoteTrackHandle): void {
     if (handle.source === Track.Source.ScreenShare) {
       const container = screenShareContainerRef.current;
@@ -565,6 +683,18 @@ export function StudentConsole() {
     ) {
       const el = handle.track.attach();
       el.dataset.participant = handle.participantIdentity;
+      el.dataset.trackName = handle.trackName;
+      // Tracked by track name so a language switch can mute what is
+      // already playing — and set BEFORE the element is in the document,
+      // so a translated class never leaks a moment of the teacher's
+      // untranslated voice as the track attaches.
+      const isTranslation = parseTranslationTrackName(handle.trackName) !== null;
+      if (isTranslation || handle.source === Track.Source.Microphone) {
+        classAudioElsRef.current.set(handle.trackName, el as HTMLAudioElement);
+        if (!isTranslation && handle.participantIdentity.startsWith('st:teacher:')) {
+          el.muted = shouldMuteOriginal(translationRef.current);
+        }
+      }
       audioContainerRef.current.appendChild(el);
     }
   }
@@ -576,6 +706,7 @@ export function StudentConsole() {
       screenShareElsRef.current.delete(handle.participantIdentity);
       setScreenShareCount(screenShareElsRef.current.size);
     }
+    classAudioElsRef.current.delete(handle.trackName);
   }
 
   /** Publishes into exactly one room — talkRoomRef (see talkRoomFor) —
@@ -712,6 +843,18 @@ export function StudentConsole() {
               <span className="font-medium">You're in {snapshot.liveClass.title}</span>
               <span className="text-muted-foreground"> · {snapshot.liveClass.teacherName}</span>
             </div>
+          )}
+          {/* Only for a signed-in student in a class: the language is
+              stored against the USER, so an unclaimed seat has nothing to
+              save it to. Absent `translation` means the server has no
+              translator configured at all — the whole control hides
+              rather than offering something that cannot work. */}
+          {student && snapshot?.liveClass && translation && (
+            <TranslationBar
+              translation={translation}
+              captions={captions}
+              onSelectLanguage={(lang) => controlRef.current?.setTranslationLanguage(lang)}
+            />
           )}
 
           <div className="w-full max-h-[60vh]">

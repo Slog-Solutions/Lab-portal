@@ -61,6 +61,36 @@ export interface DesiredStationState {
    * enforces this independently on every /dictionary/* call, so hiding
    * the panel on false is a UX courtesy, not the actual gate. */
   dictionaryEnabled: boolean;
+  /** Live machine translation of the teacher's voice. Absent when the
+   * station is not in a class, or when the server has no translator
+   * configured at all (TRANSLATOR_URL unset) — the student console hides
+   * the whole selector in that case rather than offering a control that
+   * cannot work. */
+  translation?: TranslationStationState | null;
+}
+
+/** The translation half of a station's desired state. Everything the
+ * student console needs to render the selector, decide which audio track
+ * to play and explain itself when translation is unavailable. */
+export interface TranslationStationState {
+  /** The teacher turned translation on for this class. */
+  enabled: boolean;
+  /** Language the class is being taught in — a student who picks this
+   * hears the teacher's own audio with no added latency. */
+  spokenLang: string;
+  /** This seat's current choice (mirrors User.listenLanguage, defaulting
+   * to DEFAULT_TRANSLATION_LANGUAGE). */
+  selectedLang: string;
+  /** Codes an admin has enabled, in catalog order. The console resolves
+   * names/speech flags from TRANSLATION_LANGUAGES itself. */
+  languages: string[];
+  /** Why the student is still hearing the original audio, if they are
+   * despite having picked another language. 'ready' means the translated
+   * track should be playing. */
+  status: 'ready' | 'starting' | 'captions-only' | 'unavailable';
+  /** Operator-facing detail behind a non-ready status (engine down, at
+   * capacity, ...). Shown to the student as a short banner. */
+  detail?: string;
 }
 
 export function emptyDesiredState(seq = 0): DesiredStationState {

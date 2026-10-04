@@ -54,6 +54,52 @@ export interface InterpretingParticipantMetadata {
   lang?: string;
 }
 
+// ---- Live machine translation (SeamlessStreaming) --------------------------
+
+/**
+ * Track name for one machine-translated audio channel in a class
+ * broadcast room. Deliberately a DIFFERENT prefix from
+ * `interpreterTrackName`'s `interp:` — a human interpreter channel and a
+ * machine one must never be confused by a client picking a channel, and
+ * the student console filters its subscriptions on this prefix.
+ */
+export function translationTrackName(langCode: string): string {
+  return `tr:${langCode}`;
+}
+
+/** Parses `tr:<lang>` back to its language code; null for any other name. */
+export function parseTranslationTrackName(trackName: string): string | null {
+  return trackName.startsWith('tr:') ? trackName.slice(3) : null;
+}
+
+/**
+ * Identity prefix for the translator service's own LiveKit participant.
+ * Same convention as the teacher's `st:teacher:<sub>` (see
+ * MediaService.mintToken): a real station's id is a cuid and can never
+ * collide. The service is NOT hidden — students must see its tracks to
+ * subscribe to them.
+ */
+export const TRANSLATOR_IDENTITY_PREFIX = 'svc:translator:';
+
+export function translatorIdentity(scopeId: string): string {
+  return `${TRANSLATOR_IDENTITY_PREFIX}${scopeId}`;
+}
+
+export function isTranslatorIdentity(identity: string): boolean {
+  return identity.startsWith(TRANSLATOR_IDENTITY_PREFIX);
+}
+
+/** Data-channel topic carrying TranslationCaption payloads (JSON). */
+export const TRANSLATION_CAPTIONS_TOPIC = 'tr:captions';
+
+/** Ephemeral room for a Translation Lab test run (teacher-only). */
+export function translationTestRoom(runId: string): string {
+  return `trtest:${runId}`;
+}
+
+/** Track name for the original, untranslated audio in a test room. */
+export const TRANSLATION_SOURCE_TRACK = 'src';
+
 /** Data-channel topic for remote-control input replay (design doc §3.4). */
 export const REMOTE_CONTROL_DATA_TOPIC = 'input';
 

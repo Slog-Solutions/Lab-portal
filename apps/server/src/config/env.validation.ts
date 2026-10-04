@@ -52,6 +52,30 @@ const envSchema = z.object({
   // attempt from locking the dictionary out indefinitely.
   DICTIONARY_TEST_WINDOW_MIN: z.coerce.number().int().positive().default(60),
   DICTIONARY_LOG_RETENTION_DAYS: z.coerce.number().int().positive().default(90),
+  // Live class translation (services/translator — SeamlessStreaming on a
+  // GPU). Optional on purpose, and the same degrade-honestly posture as
+  // the speech-pipeline vars above: unset means the whole feature hides
+  // itself (no language selector, no teacher toggle, no tab) rather than
+  // offering a control that cannot work. A lab server with no GPU is a
+  // supported deployment, not a misconfiguration.
+  TRANSLATOR_URL: z.string().url().optional(),
+  // Shared secret for the server -> translator control API. The
+  // translator publishes no port of its own on the compose network, so
+  // this guards against anything else on the host reaching it, not
+  // against a remote attacker.
+  TRANSLATOR_API_KEY: z.string().min(1).optional(),
+  // The URL the TRANSLATOR uses to reach LiveKit, which is not always the
+  // one the server uses: in compose both are `ws://livekit:7880`, but a
+  // translator on a separate GPU box needs the host's LAN address.
+  // Defaults to LIVEKIT_URL.
+  TRANSLATOR_LIVEKIT_URL: z.string().min(1).optional(),
+  TRANSLATOR_TIMEOUT_MS: z.coerce.number().int().positive().default(8000),
+  // Where the TRANSLATOR sees the shared LabData volume, when that
+  // differs from LAB_DATA_ROOT. Set to /data/LabData under compose
+  // (both containers mount the same volume there); leave unset for a dev
+  // run where both processes read the same local path. Only used to hand
+  // Translation Lab uploads to the translator by path.
+  TRANSLATOR_DATA_ROOT: z.string().min(1).optional(),
 });
 
 export type EnvConfig = z.infer<typeof envSchema>;

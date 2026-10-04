@@ -33,6 +33,12 @@ export const queryKeys = {
   assessments: (type: string) => ['assessments', 'list', type] as const,
   assessment: (id: string) => ['assessments', 'detail', id] as const,
   studyModules: ['study-modules'] as const,
+  translationLanguages: ['translation', 'languages'] as const,
+  translationSettings: ['translation', 'settings'] as const,
+  translationHealth: ['translation', 'health'] as const,
+  translationClassStatus: (classId: string) => ['translation', 'class', classId] as const,
+  translationTestRuns: ['translation', 'test-runs'] as const,
+  translationTestRun: (id: string) => ['translation', 'test-runs', id] as const,
   studentAssignments: ['student', 'assignments'] as const,
   studentStudyLibrary: ['student', 'study-library'] as const,
   /** A student's record of one class (My Classes -> open a class). */

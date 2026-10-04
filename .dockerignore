@@ -9,6 +9,7 @@ apps/server/generated
 apps/server/LabData
 apps/desktop
 services
+!services/translator
 tools
 infra
 docs

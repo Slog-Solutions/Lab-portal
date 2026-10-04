@@ -877,3 +877,67 @@ export const zExportDictionaryWordsDto = z.object({
   words: z.array(z.string().trim().min(1).max(64)).min(1).max(200),
 });
 export type ExportDictionaryWordsDto = z.infer<typeof zExportDictionaryWordsDto>;
+
+// ---- Live class translation (SeamlessStreaming) ---------------------------
+
+/** Validated against the admin-enabled list in TranslationService too —
+ * this only bounds the shape, since the catalog is data, not a literal
+ * union, and an admin can disable a language that is still in a stale
+ * client's dropdown. */
+export const zTranslationLangCode = z
+  .string()
+  .trim()
+  .toLowerCase()
+  .regex(/^[a-z]{3}$/, 'expected a 3-letter ISO-639-3 language code');
+
+export const zSetListenLanguageDto = z.object({ lang: zTranslationLangCode });
+export type SetListenLanguageDto = z.infer<typeof zSetListenLanguageDto>;
+
+/** The teacher's per-class toggle. `spokenLanguage` is what the TEACHER
+ * is talking in — the one language that is never machine-translated. */
+export const zClassTranslationDto = z.object({
+  enabled: z.boolean(),
+  spokenLanguage: zTranslationLangCode.optional(),
+});
+export type ClassTranslationDto = z.infer<typeof zClassTranslationDto>;
+
+export const zTranslationEngineParams = z.object({
+  // 160ms is one 10-frame hop; below that the model spends more time in
+  // overhead than inference and latency gets WORSE, so it is a floor.
+  sourceSegmentSizeMs: z.number().int().min(160).max(2000),
+  decisionThreshold: z.number().min(0).max(1),
+  minStartingWaitMs: z.number().int().min(0).max(5000),
+  catchUpStartMs: z.number().int().min(300).max(10_000),
+  maxCatchUpRate: z.number().min(1).max(2),
+  dropBacklogMs: z.number().int().min(1000).max(30_000),
+});
+
+export const zTranslationSettingsDto = z.object({
+  enabledLanguages: z.array(zTranslationLangCode).min(1).max(40),
+  engineParams: zTranslationEngineParams,
+  // Each stream is a full decoder pass per 320ms of speech; the ceiling
+  // exists so a mis-set value can't wedge the GPU for a live class.
+  maxStreams: z.number().int().min(1).max(16),
+});
+export type TranslationSettingsDto = z.infer<typeof zTranslationSettingsDto>;
+
+/** Translation Lab: `realtime` drives the SAME streaming pipeline a live
+ * class uses, paced at 1x through a LiveKit room, so measured lag is
+ * meaningful. `fast` just runs the file through as quickly as the GPU
+ * allows — useful for checking translation QUALITY without waiting out
+ * the clip. */
+export const zTranslationTestMode = z.enum(['realtime', 'fast']);
+export type TranslationTestMode = z.infer<typeof zTranslationTestMode>;
+
+export const zCreateTranslationTestDto = z.object({
+  /** Multipart field, so this arrives as a comma-separated string — see
+   * the preprocess. Capped at 4: each one is a concurrent GPU stream. */
+  langs: z.preprocess(
+    (v) => (typeof v === 'string' ? v.split(',').map((s) => s.trim()).filter(Boolean) : v),
+    z.array(zTranslationLangCode).min(1).max(4),
+  ),
+  mode: zTranslationTestMode.default('realtime'),
+  /** What the uploaded audio is spoken in. */
+  sourceLanguage: zTranslationLangCode.default('eng'),
+});
+export type CreateTranslationTestDto = z.infer<typeof zCreateTranslationTestDto>;

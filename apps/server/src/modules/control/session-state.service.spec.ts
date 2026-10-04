@@ -4,6 +4,8 @@ import type { PrismaService } from '../../prisma/prisma.service';
 import type { MediaService } from '../media/media.service';
 import type { LockService } from './lock.service';
 import type { RoundTableFloorStore } from './round-table-floor.store';
+import type { TranslationStateStore } from './translation-state.store';
+import type { TranslationSettingsService } from '../translation/translation-settings.service';
 import { findAnswerLeaks } from '../../common/answer-leak.spec-helper';
 
 const STATION_ID = 'st1';
@@ -59,11 +61,18 @@ function makeRig(groupOverride: { session?: Record<string, unknown>; activity?: 
   };
   const locks = { get: vi.fn().mockReturnValue(null) };
   const roundTableFloors = { ensure: vi.fn() };
+  // No translation streams running and the default enabled list — these
+  // tests predate translation and assert the media/lock/activity halves
+  // of the snapshot, so the stubs just have to be inert.
+  const translationStore = { statusFor: vi.fn().mockReturnValue({ status: 'starting' }) };
+  const translationSettings = { enabledLanguagesFor: vi.fn().mockResolvedValue(['eng']) };
   const svc = new SessionStateService(
     prisma as unknown as PrismaService,
     media as unknown as MediaService,
     locks as unknown as LockService,
     roundTableFloors as unknown as RoundTableFloorStore,
+    translationStore as unknown as TranslationStateStore,
+    translationSettings as unknown as TranslationSettingsService,
   );
   return { svc, prisma, media };
 }

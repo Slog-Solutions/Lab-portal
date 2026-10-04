@@ -13,6 +13,7 @@ import { LockService } from '../control/lock.service';
 import { ScreenShareService } from '../control/screen-share.service';
 import { MediaService } from '../media/media.service';
 import { BatchAccessService } from '../batches/batch-access.service';
+import { TranslationService } from '../translation/translation.service';
 import type { JwtPayload } from '../auth/auth.service';
 
 // The alphabet lives in common/random-code.ts, shared with batch join keys.
@@ -53,6 +54,7 @@ export class ClassroomService {
     private readonly locks: LockService,
     private readonly screenShares: ScreenShareService,
     private readonly batchAccess: BatchAccessService,
+    private readonly translation: TranslationService,
   ) {}
 
   /** Idempotent — a teacher who already has an active class just gets it
@@ -91,6 +93,11 @@ export class ClassroomService {
     }
 
     if (dto.batchId) await this.attachAlreadySignedInStudents(liveClass, dto.batchId);
+    // Only does work if this class has translation on (a restarted class
+    // keeps its setting) and someone in it listens in another language —
+    // the debounce also means the 40-station attach above fires one
+    // reconcile, not forty.
+    this.translation.markDirty(liveClass.id);
     return this.toClassView(liveClass);
   }
 
@@ -153,6 +160,10 @@ export class ClassroomService {
       this.gateway.pushSnapshot(member.id, snapshot);
     }
 
+    // Before deleteRoom: the translator is a participant in that room, and
+    // tearing the room out from under it would leave it reconnecting to a
+    // room that no longer exists until its own session is dropped.
+    await this.translation.teardownClass(classId);
     await this.media.deleteRoom(classBroadcastRoom(classId));
     // The LiveKit room is gone, but ScreenShareService's in-memory
     // reservation is a separate piece of state (design doc §2.2) — without
@@ -225,6 +236,9 @@ export class ClassroomService {
     const snapshot = await this.sessionState.getDesiredState(stationId);
     this.gateway.pushSnapshot(stationId, snapshot);
     await this.gateway.sendStatusRow(stationId);
+    // This seat's student brings their own listening language into the
+    // class, which may be a language no stream covers yet.
+    this.translation.markDirty(liveClass.id);
     if (previousTeacherId && previousTeacherId !== liveClass.teacherId) {
       await this.gateway.sendFullStatusToTeacher(previousTeacherId);
     }
@@ -274,7 +288,15 @@ export class ClassroomService {
     this.gateway.emitToStation(stationId, 'student:signed-out', { reason });
     const snapshot = await this.sessionState.getDesiredState(stationId);
     this.gateway.pushSnapshot(stationId, snapshot);
-    if (classTeacherId) await this.gateway.sendFullStatusToTeacher(classTeacherId);
+    // Keyed off the teacher, not the station: release() has already
+    // cleared this station's liveClassId, so the class it just left can
+    // only be found from the departing student's former teacher — the one
+    // piece of that link still in hand. Without this, a language whose
+    // only listener was this seat keeps a GPU stream until the next sweep.
+    if (classTeacherId) {
+      await this.translation.markDirtyForTeacher(classTeacherId);
+      await this.gateway.sendFullStatusToTeacher(classTeacherId);
+    }
   }
 
   private async createWithUniqueCode(teacherId: string, title: string, batchId?: string) {

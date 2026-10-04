@@ -1,0 +1,22 @@
+# Dependencies for TRANSLATOR_ENGINE=stub — the pipeline without the
+# model. Everything here has Windows wheels, which is the point: the real
+# engine needs fairseq2, whose native half (fairseq2n) ships no Windows
+# distribution at all, so this is the only way to run the service on a
+# Windows dev box.
+#
+#   python -m pip install -r requirements-stub.txt
+#   python -m uvicorn translator.app:app --port 8080
+#
+# No torch, no fairseq2, no seamless_communication, no CUDA.
+
+fastapi>=0.115,<1.0
+uvicorn[standard]>=0.34,<1.0
+pydantic>=2.10,<3.0
+
+# LiveKit's realtime SDK. Unpinned minor so pip picks a version with
+# wheels for the local interpreter; the Docker image pins exactly.
+livekit>=0.19
+
+numpy>=1.26,<3.0
+soxr>=0.5
+soundfile>=0.12

@@ -1,7 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { AccessToken, RoomServiceClient, TrackSource, TrackType, type ParticipantInfo } from 'livekit-server-sdk';
-import { BROADCAST_ROOM } from '@lab/shared/events';
+import { BROADCAST_ROOM, translatorIdentity } from '@lab/shared/events';
 import type { EnvConfig } from '../../config/env.validation';
 
 /** How long a room outlives both its last participant leaving and never
@@ -135,6 +135,69 @@ export class MediaService {
       canPublishData: true,
       canUpdateOwnMetadata: false,
       hidden: params.hidden ?? false,
+    });
+    return at.toJwt();
+  }
+
+  /**
+   * A token for a SERVER-SIDE service participant — currently only the
+   * translator (services/translator), which joins a class broadcast room,
+   * subscribes to the teacher's mic and publishes one audio track per
+   * target language plus captions on the data channel.
+   *
+   * Three deliberate differences from mintToken:
+   * - `hidden: false`. A hidden participant's tracks are invisible to
+   *   everyone else, so students could never subscribe to the translation
+   *   — the opposite of the teacher's covert-listen token.
+   * - Only MICROPHONE in canPublishSources. The translated audio IS a mic
+   *   source as far as LiveKit is concerned; granting screen-share to a
+   *   service that never shares a screen is an unused right.
+   * - A longer TTL than a station's 4h. A class can outlive it otherwise,
+   *   and unlike a station the translator has no snapshot loop handing it
+   *   a fresh token — it would have to be torn down and rebuilt mid-class.
+   */
+  async mintServiceToken(params: { scopeId: string; room: string; displayName?: string; ttl?: string }): Promise<string> {
+    const at = new AccessToken(this.apiKey, this.apiSecret, {
+      identity: translatorIdentity(params.scopeId),
+      name: params.displayName ?? 'Live translation',
+      ttl: params.ttl ?? '12h',
+      metadata: JSON.stringify({ role: 'SERVICE' }),
+    });
+    at.addGrant({
+      roomJoin: true,
+      room: params.room,
+      canPublish: true,
+      canPublishSources: [TrackSource.MICROPHONE],
+      canSubscribe: true,
+      canPublishData: true,
+      canUpdateOwnMetadata: false,
+      hidden: false,
+    });
+    return at.toJwt();
+  }
+
+  /**
+   * A listen-only token for a Translation Lab test room — the teacher's
+   * own browser auditioning a test run. canPublish is false throughout:
+   * the audio under test is published by the translator from the uploaded
+   * file, so a publish right here would only risk the teacher's live mic
+   * leaking into a room they are monitoring on speakers.
+   */
+  async mintListenerToken(params: { identity: string; displayName: string; room: string }): Promise<string> {
+    const at = new AccessToken(this.apiKey, this.apiSecret, {
+      identity: params.identity,
+      name: params.displayName,
+      ttl: '2h',
+      metadata: JSON.stringify({ role: 'STUDENT' }),
+    });
+    at.addGrant({
+      roomJoin: true,
+      room: params.room,
+      canPublish: false,
+      canPublishSources: [],
+      canSubscribe: true,
+      canPublishData: false,
+      canUpdateOwnMetadata: false,
     });
     return at.toJwt();
   }

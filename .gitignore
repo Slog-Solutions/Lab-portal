@@ -67,3 +67,21 @@ infra/offline/vendor/
 # fetch-inputs.ts, checksummed in the COMMITTED dictionary-sources.json —
 # see tools/dictionary-build/src/fetch-inputs.ts)
 tools/dictionary-build/inputs/
+
+# Local-only dev overrides (not committed)
+.local/
+
+# Hand-made .env backups — these hold REAL secrets (JWT_SECRET, DATABASE_URL,
+# LiveKit keys) and the plain `.env` rule above does not match them.
+.env.backup*
+*.env.backup*
+
+# Translation model weights, fetched by services/translator/scripts/fetch_models.py.
+# Not needed at all when TRANSLATOR_ENGINE=azure.
+models/
+
+# Python build artifacts (services/translator)
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/

@@ -8,8 +8,24 @@ import {
   type RemoteTrackPublication,
 } from 'livekit-client';
 
+/** What the subscription filter is told about a publication, before any
+ * track exists to inspect. Deliberately only the fields LiveKit gives us
+ * pre-subscribe. */
+export interface TrackPublicationInfo {
+  participantIdentity: string;
+  /** Publisher-set track name — `tr:<lang>` for a translation channel
+   * (see translationTrackName in packages/shared). */
+  trackName: string;
+  source: Track.Source;
+  kind: 'audio' | 'video' | 'unknown';
+}
+
 export interface RemoteTrackHandle {
   participantIdentity: string;
+  /** The publication's track name, needed to tell one translation
+   * language's audio from another's — both are Microphone-source audio
+   * from the same participant, so `source` alone cannot. */
+  trackName: string;
   /** LiveKit participant display name (MediaService.mintToken's
    * `displayName` — "System <n>" for a station, "Teacher (<serviceNumber>)"
    * for a dashboard connection). Used to label a spotlighted screen-share
@@ -44,6 +60,20 @@ export interface LiveKitRoomEvents {
   /** Fires on the first connect and again after LiveKit's own full reconnect. */
   onConnected?: () => void;
   onReconnected?: () => void;
+  /**
+   * Decides, per publication, whether this client subscribes at all.
+   * Returning false means the track is never sent over the network, not
+   * merely muted locally — which is the point: a class with four
+   * translation languages publishes four audio tracks, and a student who
+   * downloaded all of them would waste bandwidth and (worse) have every
+   * language's audio one `attach()` away from playing at once.
+   *
+   * Supplying this switches the room to autoSubscribe:false, so the
+   * filter is authoritative for EVERY track in the room — a filter that
+   * forgets to allow screen share will silently hide the teacher's
+   * screen. Omit it to keep LiveKit's default subscribe-to-everything.
+   */
+  subscriptionFilter?: (info: TrackPublicationInfo) => boolean;
 }
 
 /**
@@ -64,6 +94,16 @@ export class LiveKitRoomClient {
 
   constructor(private readonly events: LiveKitRoomEvents = {}) {
     this.room = new Room({ adaptiveStream: true, dynacast: true });
+    if (events.subscriptionFilter) {
+      // Applied on publish AND on connect (for publications that already
+      // existed), since TrackPublished only fires for tracks published
+      // after we joined — a student joining a class mid-lecture would
+      // otherwise subscribe to nothing at all.
+      this.room.on(RoomEvent.TrackPublished, (publication, participant) => {
+        this.applyFilter(publication, participant.identity);
+      });
+      this.room.on(RoomEvent.Connected, () => this.refreshSubscriptions());
+    }
     this.room.on(RoomEvent.TrackSubscribed, this.handleTrackSubscribed);
     this.room.on(RoomEvent.TrackUnsubscribed, this.handleTrackUnsubscribed);
     this.room.on(RoomEvent.Disconnected, () => this.events.onDisconnected?.());
@@ -101,7 +141,39 @@ export class LiveKitRoomClient {
   }
 
   async connect(url: string, token: string): Promise<void> {
-    await this.room.connect(url, token);
+    // autoSubscribe is inverted by the presence of a filter: with one, the
+    // server sends nothing until we opt in per publication.
+    await this.room.connect(url, token, { autoSubscribe: !this.events.subscriptionFilter });
+  }
+
+  /**
+   * Re-evaluates the subscription filter against every publication
+   * currently in the room. Call this whenever the filter's own inputs
+   * change — the student console calls it when the listener picks a new
+   * translation language, which is what swaps which `tr:<lang>` track is
+   * actually streaming without reconnecting to the room.
+   */
+  refreshSubscriptions(): void {
+    if (!this.events.subscriptionFilter) return;
+    for (const participant of this.room.remoteParticipants.values()) {
+      for (const publication of participant.trackPublications.values()) {
+        this.applyFilter(publication, participant.identity);
+      }
+    }
+  }
+
+  private applyFilter(publication: RemoteTrackPublication, participantIdentity: string): void {
+    const filter = this.events.subscriptionFilter;
+    if (!filter) return;
+    const wanted = filter({
+      participantIdentity,
+      trackName: publication.trackName,
+      source: publication.source,
+      kind: publication.kind === Track.Kind.Audio ? 'audio' : publication.kind === Track.Kind.Video ? 'video' : 'unknown',
+    });
+    // setSubscribed is idempotent in livekit-client, so re-applying the
+    // same decision on every refresh costs nothing.
+    publication.setSubscribed(wanted);
   }
 
   async disconnect(): Promise<void> {
@@ -135,11 +207,23 @@ export class LiveKitRoomClient {
     await this.room.startAudio();
   }
 
-  private handleTrackSubscribed = (track: RemoteTrack, _publication: RemoteTrackPublication, participant: RemoteParticipant): void => {
-    this.events.onTrackSubscribed?.({ participantIdentity: participant.identity, participantName: participant.name ?? participant.identity, source: track.source, track });
+  private handleTrackSubscribed = (track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant): void => {
+    this.events.onTrackSubscribed?.({
+      participantIdentity: participant.identity,
+      participantName: participant.name ?? participant.identity,
+      trackName: publication.trackName,
+      source: track.source,
+      track,
+    });
   };
 
-  private handleTrackUnsubscribed = (track: RemoteTrack, _publication: RemoteTrackPublication, participant: RemoteParticipant): void => {
-    this.events.onTrackUnsubscribed?.({ participantIdentity: participant.identity, participantName: participant.name ?? participant.identity, source: track.source, track });
+  private handleTrackUnsubscribed = (track: RemoteTrack, publication: RemoteTrackPublication, participant: RemoteParticipant): void => {
+    this.events.onTrackUnsubscribed?.({
+      participantIdentity: participant.identity,
+      participantName: participant.name ?? participant.identity,
+      trackName: publication.trackName,
+      source: track.source,
+      track,
+    });
   };
 }

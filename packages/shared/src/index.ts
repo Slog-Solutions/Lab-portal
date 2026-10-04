@@ -2,6 +2,7 @@ export * from './types/index.js';
 export * from './schemas/index.js';
 export * from './text.js';
 export * from './english-course-grading.js';
+export * from './translation/languages.js';
 // Note: ./events and ./activities are intentionally NOT re-exported here.
 // Import them via their own subpaths (`@lab/shared/events`,
 // `@lab/shared/activities`) — events pulls in room-naming helpers that
