@@ -195,6 +195,12 @@ services:
       MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-500}
       TLS_CN: ${TLS_CN:-lab.local}
       TLS_EXTRA_SAN: IP:${HOST_IP}
+      # The HTTP->HTTPS redirect (nginx.conf.template) needs the externally
+      # reachable HTTPS port, not nginx's own internal 443 — on a host
+      # where HTTPS_PORT is remapped (e.g. a VPS sharing 443 with other
+      # services) the redirect would otherwise silently send browsers to
+      # a port nothing is published on.
+      EXTERNAL_HTTPS_PORT: ${HTTPS_PORT:-443}
     ports:
       - '${HTTP_PORT:-80}:80'
       - '${HTTPS_PORT:-443}:443'

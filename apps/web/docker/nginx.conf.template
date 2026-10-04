@@ -1,6 +1,6 @@
 # Rendered by the nginx image's envsubst step. Only ${API_UPSTREAM},
-# ${LIVEKIT_UPSTREAM} and ${MAX_UPLOAD_MB} are substituted; every other
-# $var below is a real nginx variable.
+# ${LIVEKIT_UPSTREAM}, ${MAX_UPLOAD_MB} and ${EXTERNAL_HTTPS_PORT} are
+# substituted; every other $var below is a real nginx variable.
 
 map $http_upgrade $connection_upgrade {
     default upgrade;
@@ -109,7 +109,12 @@ server {
     # SPA (hash router, so no history fallback needed for deep links).
     location / {
         if ($lab_force_https) {
-            return 302 https://$host$request_uri;
+            # Explicit port even when it's 443: harmless there, and the
+            # only correct option when HTTPS_PORT is something else —
+            # $host never carries a port, so without this the redirect
+            # would point at the default 443 regardless of where HTTPS
+            # actually is published.
+            return 302 https://$host:$EXTERNAL_HTTPS_PORT$request_uri;
         }
         try_files $uri $uri/ /index.html;
     }
