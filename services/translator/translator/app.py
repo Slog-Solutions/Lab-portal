@@ -151,6 +151,9 @@ async def upsert_session(session_id: str, payload: UpsertSessionPayload) -> dict
         _sessions[session_id] = session
 
     try:
+        # Before targets: a language that is both newly added and affected
+        # by a spoken-language change must be built against the new source.
+        await session.set_source_language(payload.sourceLanguage, params)
         await session.set_languages(payload.targetLanguages, params)
     except RuntimeError as err:
         # At capacity: report it rather than silently running fewer

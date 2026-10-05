@@ -63,6 +63,10 @@ class TranslationStream:
 
     def __init__(self, *, lang: str, params: EngineParams, source_lang: str = "eng") -> None:
         self.lang = lang
+        # An engine may adjust the shared params to how it delivers audio
+        # (Azure speaks a whole phrase at once; see AzureEngine.tune_params).
+        tune = getattr(engine, "tune_params", None)
+        params = tune(params) if tune else params
         self.params = params
         # The language being SPOKEN, per session — the teacher is not
         # assumed to teach in any particular one. Seamless ignores it (its
@@ -171,11 +175,15 @@ class TranslationStream:
                 text = content if isinstance(content, str) else str(content)
                 if not text.strip():
                     continue
-                # Within a segment the model only ever appends, so the
-                # delta carries the whole segment text and the client
-                # keyed by seg_id replaces rather than concatenating —
-                # that is what keeps captions from flickering or doubling.
-                self._seg_text = f"{self._seg_text} {text}".strip() if self._seg_text else text
+                # The delta always carries the whole segment text and the
+                # client keyed by seg_id replaces rather than concatenating,
+                # which keeps captions from flickering or doubling. Seamless
+                # sends new words (appended here); Azure sends the full
+                # hypothesis each time (replace=True).
+                if getattr(segment, "replace", False):
+                    self._seg_text = text
+                else:
+                    self._seg_text = f"{self._seg_text} {text}".strip() if self._seg_text else text
                 final = bool(getattr(segment, "finished", False)) or is_final
                 lag = self._lag_ms()
                 self._pending_deltas.append(TextDelta(self._seg_id, self._seg_text, final, lag))

@@ -53,6 +53,11 @@ class Settings:
     #: already knows the class's spoken language, so this is the default
     #: for when it does not say.
     azure_source_lang: str
+    #: Silence (ms) that ends a phrase. Azure speaks each phrase's
+    #: translation only once the phrase ends, so this is the main latency
+    #: knob: lower = translated audio sooner, but too low cuts sentences
+    #: mid-thought and hurts accuracy. SDK range 100-5000.
+    azure_segmentation_silence_ms: int
 
     @staticmethod
     def from_env() -> "Settings":
@@ -71,6 +76,7 @@ class Settings:
             azure_speech_key=os.environ.get("AZURE_SPEECH_KEY") or None,
             azure_speech_region=os.environ.get("AZURE_SPEECH_REGION", "centralindia").strip(),
             azure_source_lang=os.environ.get("AZURE_SOURCE_LANG", "eng").strip().lower(),
+            azure_segmentation_silence_ms=min(5000, max(100, int(os.environ.get("AZURE_SEGMENTATION_SILENCE_MS", "400")))),
         )
 
 

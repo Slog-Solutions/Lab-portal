@@ -134,6 +134,9 @@ services:
       AZURE_SPEECH_REGION: ${AZURE_SPEECH_REGION:-centralindia}
       # ISO-639-3 code for the language the teacher speaks.
       AZURE_SOURCE_LANG: ${AZURE_SOURCE_LANG:-eng}
+      # Silence (ms) that ends a phrase; Azure speaks a phrase's translation
+      # when it ends, so lower = sooner audio, too low = cut-off sentences.
+      AZURE_SEGMENTATION_SILENCE_MS: ${AZURE_SEGMENTATION_SILENCE_MS:-400}
     volumes:
       # Shared with the server so Translation Lab uploads are addressable
       # by path on both sides (TRANSLATOR_DATA_ROOT).

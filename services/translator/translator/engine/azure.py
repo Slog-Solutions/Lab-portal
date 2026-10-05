@@ -27,6 +27,7 @@ change to session.py than this engine swap.
 
 from __future__ import annotations
 
+import dataclasses
 import logging
 import threading
 from dataclasses import dataclass, field
@@ -75,6 +76,22 @@ AZURE_LANGS: dict[str, dict[str, str]] = {
     "rus": {"locale": "ru-RU", "target": "ru", "voice": "ru-RU-SvetlanaNeural"},
     "por": {"locale": "pt-BR", "target": "pt", "voice": "pt-BR-FranciscaNeural"},
 }
+
+#: Azure's own floor for Speech_SegmentationMaximumTimeMs (SDK range
+#: 20000-70000). It cannot force short phrases; it only stops a teacher who
+#: never pauses from delaying translated audio indefinitely.
+_MAX_PHRASE_MS = 20000
+
+#: Playout limits for an engine that delivers a whole phrase of speech at
+#: once. The shared defaults are tuned for Seamless, which trickles audio
+#: continuously: its 5s drop threshold discarded everything but the last
+#: 1.5s of any longer Azure phrase, so students heard only sentence
+#: endings. A drop must never fire on a single phrase (up to
+#: _MAX_PHRASE_MS), and catch-up stays mild because it resamples, which
+#: shifts the voice's pitch.
+_PLAYOUT_CATCH_UP_START_MS = 8000
+_PLAYOUT_DROP_BACKLOG_MS = _MAX_PHRASE_MS + 10000
+_PLAYOUT_MAX_CATCH_UP_RATE = 1.08
 
 #: Cap on queued output segments per stream. Azure can burst several
 #: synthesis chunks at once; beyond this the student is too far behind
@@ -251,6 +268,15 @@ class AzureEngine:
 
     # ---- per-stream state -------------------------------------------
 
+    def tune_params(self, params: EngineParams) -> EngineParams:
+        """Playout limits suited to phrase-at-a-time speech; see _PLAYOUT_*."""
+        return dataclasses.replace(
+            params,
+            catch_up_start_ms=_PLAYOUT_CATCH_UP_START_MS,
+            drop_backlog_ms=_PLAYOUT_DROP_BACKLOG_MS,
+            max_catch_up_rate=_PLAYOUT_MAX_CATCH_UP_RATE,
+        )
+
     def build_state(self, tgt_lang: str, params: EngineParams, *, speech: bool, source_lang: str = ""):  # noqa: ANN201, ARG002
         if not self._loaded:
             raise ModelUnavailable(self.load_error or "Azure engine not loaded")
@@ -272,6 +298,17 @@ class AzureEngine:
         )
         cfg.speech_recognition_language = source["locale"]
         cfg.add_target_language(entry["target"])
+        # Azure speaks a phrase's translation only when the phrase ends, so
+        # how soon a phrase ends IS the audio latency. Time-based
+        # segmentation makes the silence timeout and the maximum phrase
+        # length below take effect.
+        props = speechsdk.PropertyId
+        cfg.set_property(props.Speech_SegmentationStrategy, "Time")
+        cfg.set_property(props.Speech_SegmentationSilenceTimeoutMs, str(settings.azure_segmentation_silence_ms))
+        cfg.set_property(props.Speech_SegmentationMaximumTimeMs, str(_MAX_PHRASE_MS))
+        # Partial translations get rewritten as more words arrive; this
+        # holds back the unstable tail so live captions stop flickering.
+        cfg.set_property(props.SpeechServiceResponse_TranslationRequestStablePartialResult, "true")
 
         state = _AzureState(lang=tgt_lang, speech=speech)
         if speech:
@@ -318,7 +355,7 @@ class AzureEngine:
             try:
                 text = evt.result.translations.get(target)
                 if text:
-                    state.offer(TextOut(content=text, finished=False))
+                    state.offer(TextOut(content=text, finished=False, replace=True))
             except Exception:  # noqa: BLE001
                 log.exception("[Translation] recognizing handler failed")
 
@@ -326,7 +363,7 @@ class AzureEngine:
             try:
                 text = evt.result.translations.get(target)
                 if text:
-                    state.offer(TextOut(content=text, finished=True))
+                    state.offer(TextOut(content=text, finished=True, replace=True))
             except Exception:  # noqa: BLE001
                 log.exception("[Translation] recognized handler failed")
 

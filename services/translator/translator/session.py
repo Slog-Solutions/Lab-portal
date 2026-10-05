@@ -249,6 +249,30 @@ class TranslationSession:
             if lang not in self.channels:
                 await self.add_language(lang, params)
 
+    async def set_source_language(self, source_language: str, params: EngineParams) -> None:
+        """Applies a changed spoken language to every running stream.
+
+        A stream's engine state is built for one source language and Azure
+        fixes the recognition locale at construction, so each stream is
+        rebuilt rather than updated. Without this, a teacher switching the
+        spoken language after translation started kept being recognised in
+        the OLD language — e.g. Hindi heard by an English recogniser, which
+        transliterates it, so "English" listeners got romanised Hindi.
+        """
+        if source_language == self.source_language:
+            return
+        log.info(
+            "session %s: spoken language %s -> %s, rebuilding %d stream(s)",
+            self.session_id,
+            self.source_language,
+            source_language,
+            len(self.channels),
+        )
+        self.source_language = source_language
+        for lang in list(self.channels):
+            await self.remove_language(lang)
+            await self.add_language(lang, params)
+
     async def add_language(self, lang: str, params: EngineParams) -> None:
         if lang in self.channels:
             return

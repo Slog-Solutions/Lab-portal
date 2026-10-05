@@ -92,6 +92,10 @@ class _TranslationConfig:
         self.voice_name = None
         self.targets: list[str] = []
         self.output_format = None
+        self.props: dict = {}
+
+    def set_property(self, prop, value) -> None:  # noqa: ANN001
+        self.props[prop] = value
 
     def add_target_language(self, code: str) -> None:
         self.targets.append(code)
@@ -141,6 +145,15 @@ def _install_fake_sdk(voices: list[tuple[str, str]]) -> types.ModuleType:
     translation_mod.SpeechTranslationConfig = _TranslationConfig
     translation_mod.TranslationRecognizer = _Recognizer
 
+    class PropertyId:
+        Speech_SegmentationStrategy = "Speech_SegmentationStrategy"
+        Speech_SegmentationSilenceTimeoutMs = "Speech_SegmentationSilenceTimeoutMs"
+        Speech_SegmentationMaximumTimeMs = "Speech_SegmentationMaximumTimeMs"
+        SpeechServiceResponse_TranslationRequestStablePartialResult = (
+            "SpeechServiceResponse_TranslationRequestStablePartialResult"
+        )
+
+    speech.PropertyId = PropertyId
     speech.ResultReason = ResultReason
     speech.SpeechSynthesisOutputFormat = SpeechSynthesisOutputFormat
     speech.SpeechConfig = SpeechConfig
@@ -320,3 +333,36 @@ def test_unknown_spoken_language_fails_clearly(engine):  # noqa: ANN001
 
     with pytest.raises(ModelUnavailable, match="spoken language"):
         engine.build_state("hin", EngineParams(), speech=True, source_lang="zzz")
+
+
+def test_captions_replace_rather_than_append(engine):  # noqa: ANN001
+    """Azure re-sends the whole hypothesis on every partial. Marking it
+    replace=True is what stops captions repeating every prefix."""
+    from translator.engine.base import EngineParams, TextOut
+
+    state = engine.build_state("eng", EngineParams(), speech=False, source_lang="hin")
+    state.recognizer.recognizing.fire(_Evt(_Result({"en": "because"})))
+    state.recognizer.recognized.fire(_Evt(_Result({"en": "because I want English"})))
+    out = [o for o in engine.push(state, np.zeros(160, dtype=np.float32), is_final=False) if isinstance(o, TextOut)]
+    assert all(o.replace for o in out)
+
+
+def test_phrases_end_quickly_and_partials_are_stable(engine):  # noqa: ANN001
+    from translator.engine.base import EngineParams
+
+    cfg = engine.build_state("eng", EngineParams(), speech=True, source_lang="hin").recognizer.cfg
+    assert cfg.props["Speech_SegmentationStrategy"] == "Time"
+    assert cfg.props["Speech_SegmentationSilenceTimeoutMs"] == "400"
+    # The SDK refuses anything under 20000.
+    assert cfg.props["Speech_SegmentationMaximumTimeMs"] == "20000"
+    assert cfg.props["SpeechServiceResponse_TranslationRequestStablePartialResult"] == "true"
+
+
+def test_playout_never_drops_a_single_phrase(engine):  # noqa: ANN001
+    """Seamless's 5s drop threshold cut everything but the last 1.5s of any
+    longer Azure phrase."""
+    from translator.engine.base import EngineParams
+
+    tuned = engine.tune_params(EngineParams())
+    assert tuned.drop_backlog_ms > 20000  # longer than the longest phrase Azure will emit
+    assert tuned.catch_up_start_ms > EngineParams().catch_up_start_ms

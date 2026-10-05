@@ -68,6 +68,11 @@ class TextOut:
     content: str
     finished: bool = False
     data_type: str = "text"
+    #: True when `content` is the WHOLE current segment rather than new
+    #: words to append. Seamless emits only new tokens; Azure re-sends the
+    #: full hypothesis on every partial, which appended naively repeats
+    #: every prefix ("a", "a b", "a b c" -> "a a b a b c").
+    replace: bool = False
 
 
 @dataclass
