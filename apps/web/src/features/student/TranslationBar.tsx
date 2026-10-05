@@ -8,6 +8,7 @@ import {
 } from '@lab/shared';
 import { NativeSelect } from '@/components/ui/native-select';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 
 /** Captions kept on screen. Two finished lines plus the one still being
  * revised is what fits a glanceable strip without becoming a transcript
@@ -24,6 +25,10 @@ export interface TranslationBarProps {
   /** Latest caption deltas for the selected language, newest last. */
   captions: TranslationCaption[];
   onSelectLanguage: (lang: string) => void;
+  /** Keep the teacher's own voice playing under the translated one. Off by
+   * default — two voices saying the same thing at once is confusing. */
+  hearTeacher: boolean;
+  onHearTeacherChange: (hear: boolean) => void;
   /** Disabled while the station socket is down — the choice could not be
    * sent, and silently keeping the old language is less confusing than a
    * selector that springs back. */
@@ -38,12 +43,23 @@ export interface TranslationBarProps {
  * translation off all converge without any recovery logic here — the same
  * reason DesiredStationState is declarative. The one piece of local state
  * is `showCaptions`, a per-viewer display preference the server has no
- * reason to know about.
+ * reason to know about (`hearTeacher` is the same kind of preference, but
+ * lives in StudentConsole because that is where the audio is muted).
  */
-export function TranslationBar({ translation, captions, onSelectLanguage, disabled }: TranslationBarProps) {
+export function TranslationBar({
+  translation,
+  captions,
+  onSelectLanguage,
+  hearTeacher,
+  onHearTeacherChange,
+  disabled,
+}: TranslationBarProps) {
   const [showCaptions, setShowCaptions] = useState(true);
   const { selectedLang, spokenLang, languages, status, detail, enabled } = translation;
   const listeningToOriginal = selectedLang === spokenLang;
+  // Only a language with a translated VOICE has anything to mix the
+  // teacher under — a captions-only language always keeps the teacher.
+  const hasTranslatedVoice = !listeningToOriginal && (findTranslationLanguage(selectedLang)?.speech ?? false);
 
   const options = useMemo(
     () =>
@@ -89,6 +105,12 @@ export function TranslationBar({ translation, captions, onSelectLanguage, disabl
         {!listeningToOriginal && (
           <>
             <StatusChip status={status} detail={detail} enabled={enabled} />
+            {hasTranslatedVoice && (
+              <label className="flex items-center gap-2 text-sm">
+                <Checkbox checked={hearTeacher} onCheckedChange={(v) => onHearTeacherChange(v === true)} />
+                Also hear the teacher&apos;s voice
+              </label>
+            )}
             <Button
               type="button"
               size="sm"
@@ -209,19 +231,27 @@ function useVisibleCaptions(captions: TranslationCaption[], selectedLang: string
   return lines;
 }
 
-/** Whether a student's selection means the teacher's own audio should be
- * silenced locally. Exported so StudentConsole applies exactly this rule
- * to the <audio> elements, with no second interpretation of `status` that
- * could drift from what the bar is telling the student.
+/** Whether the teacher's own mic should be silenced locally. Exported so
+ * StudentConsole applies exactly this rule to the <audio> elements, with
+ * no second interpretation that could drift from what the bar shows.
  *
- * Only ever true when a translated VOICE is actually playing: a
- * captions-only language, a stream still starting, or an unavailable
- * engine all keep the teacher audible, because the alternative is a
- * student sitting in silence. */
-export function shouldMuteOriginal(translation: TranslationStationState | null | undefined): boolean {
+ * Only ever true while the selected language's translated voice is
+ * actually attached on this seat (`translatedVoiceAttached`) and the
+ * student has not ticked "Also hear the teacher's voice". Keyed on the
+ * attached track rather than on `status` alone so the two voices never
+ * overlap: the teacher goes quiet the moment the translation arrives, and
+ * comes straight back if it disappears (engine restart, language switch)
+ * instead of leaving the student in silence. A captions-only language
+ * publishes no track, and an unavailable engine is not trusted, so both
+ * keep the teacher audible. */
+export function shouldMuteOriginal(
+  translation: TranslationStationState | null | undefined,
+  { hearTeacher, translatedVoiceAttached }: { hearTeacher: boolean; translatedVoiceAttached: boolean },
+): boolean {
+  if (hearTeacher || !translatedVoiceAttached) return false;
   if (!translation || !translation.enabled) return false;
   if (translation.selectedLang === translation.spokenLang) return false;
-  if (translation.status !== 'ready') return false;
+  if (translation.status === 'unavailable') return false;
   return findTranslationLanguage(translation.selectedLang)?.speech ?? false;
 }
 

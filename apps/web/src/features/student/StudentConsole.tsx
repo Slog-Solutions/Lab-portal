@@ -127,10 +127,18 @@ export function StudentConsole() {
   // own mic element starts muted.
   const translationRef = useRef<DesiredStationState['translation']>(null);
   const [captions, setCaptions] = useState<TranslationCaption[]>([]);
-  // Audio elements this console has attached from the class room, by
-  // track name, so a language change can mute/unmute what is ALREADY
-  // playing instead of waiting for a re-subscribe round trip.
-  const classAudioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  // "Also hear the teacher's voice" under the translation — off by default,
+  // since two voices saying the same thing at once is confusing. Mirrored
+  // in a ref for attachTrack, which runs from the mount-time closure.
+  const [hearTeacher, setHearTeacher] = useState(false);
+  const hearTeacherRef = useRef(false);
+  // Audio elements this console has attached from the class room, so a
+  // language change can mute/unmute what is ALREADY playing instead of
+  // waiting for a re-subscribe round trip. Keyed by element, not track
+  // name: every mic is published unnamed, so a name key let any classmate's
+  // mic overwrite (or its detach delete) the teacher's entry — which then
+  // could never be muted, and the student heard teacher + translation.
+  const classAudioElsRef = useRef<Map<HTMLMediaElement, { participantIdentity: string; trackName: string }>>(new Map());
   const controlRef = useRef<StationControlClient | null>(null);
   const remoteControlRoomRef = useRef<LiveKitRoomClient | null>(null);
   const [remoteControlActive, setRemoteControlActive] = useState(false);
@@ -238,6 +246,11 @@ export function StudentConsole() {
     applyTranslationMuting();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [translation, snapshot?.liveClass?.id]);
+
+  useEffect(() => {
+    hearTeacherRef.current = hearTeacher;
+    applyTranslationMuting();
+  }, [hearTeacher]);
 
   useEffect(() => {
     const control = new StationControlClient({
@@ -558,7 +571,7 @@ export function StudentConsole() {
               // EVERY track in the room (autoSubscribe goes false), hence
               // the explicit allow for screen share and other students.
               new LiveKitRoomClient({
-                onTrackSubscribed: (handle) => attachTrack(handle),
+                onTrackSubscribed: (handle) => attachTrack(handle, true),
                 onTrackUnsubscribed: (handle) => detachTrack(handle),
                 subscriptionFilter: (info) => classRoomWants(info.participantIdentity, info.trackName),
                 onDataReceived: (payload, topic) => {
@@ -653,27 +666,35 @@ export function StudentConsole() {
   }
 
   /** Applies the current mute decision to the class-room audio elements
-   * already attached. Called when the snapshot changes rather than only
-   * at attach time, because a student switching language must take
-   * effect on the audio that is already playing. */
+   * already attached. Called when the snapshot changes, when the "hear the
+   * teacher" box is toggled, and whenever a class-room audio track comes or
+   * goes — the teacher is muted exactly while the translated voice is
+   * actually attached, so its arrival or loss must take effect at once. */
   function applyTranslationMuting(): void {
-    const muteOriginal = shouldMuteOriginal(translationRef.current);
-    for (const [trackName, el] of classAudioElsRef.current) {
+    const wanted = wantedTranslationLang(translationRef.current);
+    const tracks = [...classAudioElsRef.current.values()];
+    const translatedVoiceAttached = wanted !== null && tracks.some((t) => parseTranslationTrackName(t.trackName) === wanted);
+    const muteTeacher = shouldMuteOriginal(translationRef.current, {
+      hearTeacher: hearTeacherRef.current,
+      translatedVoiceAttached,
+    });
+    for (const [el, { participantIdentity, trackName }] of classAudioElsRef.current) {
       const trackLang = parseTranslationTrackName(trackName);
-      if (trackLang === null) {
-        // The teacher's own mic (or another student's).
-        el.muted = muteOriginal;
-      } else {
+      if (trackLang !== null) {
         // A translation track: audible only if it is the selected one.
         // Belt-and-braces next to the subscription filter — a track that
         // is mid-unsubscribe must not be briefly audible underneath the
         // newly selected language.
-        el.muted = trackLang !== wantedTranslationLang(translationRef.current);
+        el.muted = trackLang !== wanted;
+      } else if (participantIdentity.startsWith('st:teacher:')) {
+        // Only the teacher's voice is what the translation replaces —
+        // classmates' mics are never translated, so they stay audible.
+        el.muted = muteTeacher;
       }
     }
   }
 
-  function attachTrack(handle: RemoteTrackHandle): void {
+  function attachTrack(handle: RemoteTrackHandle, fromClassRoom = false): void {
     if (handle.source === Track.Source.ScreenShare) {
       const container = screenShareContainerRef.current;
       if (!container) return;
@@ -705,29 +726,33 @@ export function StudentConsole() {
       const el = handle.track.attach();
       el.dataset.participant = handle.participantIdentity;
       el.dataset.trackName = handle.trackName;
-      // Tracked by track name so a language switch can mute what is
-      // already playing — and set BEFORE the element is in the document,
-      // so a translated class never leaks a moment of the teacher's
-      // untranslated voice as the track attaches.
+      // Tracked so a language switch can mute what is already playing —
+      // and muted BEFORE the element is in the document, so a translated
+      // class never leaks a moment of the teacher's untranslated voice as
+      // the track attaches. A translated track arriving re-runs the whole
+      // rule, which is what silences a teacher mic attached earlier.
       const isTranslation = parseTranslationTrackName(handle.trackName) !== null;
-      if (isTranslation || handle.source === Track.Source.Microphone) {
-        classAudioElsRef.current.set(handle.trackName, el as HTMLAudioElement);
-        if (!isTranslation && handle.participantIdentity.startsWith('st:teacher:')) {
-          el.muted = shouldMuteOriginal(translationRef.current);
-        }
+      if (fromClassRoom && (isTranslation || handle.source === Track.Source.Microphone)) {
+        classAudioElsRef.current.set(el, { participantIdentity: handle.participantIdentity, trackName: handle.trackName });
+        applyTranslationMuting();
       }
       audioContainerRef.current.appendChild(el);
     }
   }
 
   function detachTrack(handle: RemoteTrackHandle): void {
-    handle.track.detach().forEach((el) => el.remove());
+    let classAudioChanged = false;
+    handle.track.detach().forEach((el) => {
+      classAudioChanged = classAudioElsRef.current.delete(el) || classAudioChanged;
+      el.remove();
+    });
     if (handle.source === Track.Source.ScreenShare) {
       screenShareElsRef.current.get(handle.participantIdentity)?.remove();
       screenShareElsRef.current.delete(handle.participantIdentity);
       setScreenShareCount(screenShareElsRef.current.size);
     }
-    classAudioElsRef.current.delete(handle.trackName);
+    // Losing the translated voice must bring the teacher straight back.
+    if (classAudioChanged) applyTranslationMuting();
   }
 
   /** Publishes into exactly one room — talkRoomRef (see talkRoomFor) —
@@ -886,6 +911,8 @@ export function StudentConsole() {
               translation={translation}
               captions={captions}
               onSelectLanguage={(lang) => controlRef.current?.setTranslationLanguage(lang)}
+              hearTeacher={hearTeacher}
+              onHearTeacherChange={setHearTeacher}
             />
           )}
 
