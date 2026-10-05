@@ -184,7 +184,8 @@ export function TranslationControl({ classId, monitorLang, onMonitorLangChange }
           The translation service is unreachable{engine.detail ? `: ${engine.detail}` : ''}. Students keep hearing you directly.
         </p>
       )}
-      {engine?.reachable && !engine.gpu && (
+      {/* Only a local model needs a GPU; Azure runs in the cloud and always reports gpu: false. */}
+      {engine?.reachable && !engine.gpu && engine.engine !== 'azure' && (
         <p className="flex items-center gap-1.5 text-xs text-amber-700 dark:text-amber-300">
           <TriangleAlert className="h-3.5 w-3.5 shrink-0" />
           Running without a GPU — translation will lag badly.{engine.detail ? ` ${engine.detail}` : ''}

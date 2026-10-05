@@ -88,6 +88,19 @@ export class ClassRecorder {
     if (withAudio) {
       this.audioContext = new AudioContext();
       this.mixDestination = this.audioContext.createMediaStreamDestination();
+      // A destination with nothing connected (mic off, no screen audio)
+      // emits no audio frames at all, and MediaRecorder's WebM muxer then
+      // waits on the audio track forever and writes nothing — every
+      // "with audio" recording made with the mic off finished with zero
+      // chunks ("Failed — nothing captured"). A silent, always-running
+      // source keeps frames flowing; real tracks mix in on top of it.
+      const silence = this.audioContext.createConstantSource();
+      silence.offset.value = 0;
+      silence.connect(this.mixDestination);
+      silence.start();
+      // Created after an await, so the autoplay policy may hand back a
+      // suspended context, which produces no frames either.
+      if (this.audioContext.state !== 'running') await this.audioContext.resume().catch(() => undefined);
       this.connectSource(Track.Source.Microphone);
       this.connectSource(Track.Source.ScreenShareAudio);
       const onPublished = () => {

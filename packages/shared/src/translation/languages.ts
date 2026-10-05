@@ -159,6 +159,9 @@ export interface TranslationEngineHealth {
   reachable: boolean;
   /** False when the service is up but running without CUDA. */
   gpu: boolean;
+  /** Which engine the translator runs ('seamless', 'azure', 'stub').
+   * Azure translates in the cloud, so `gpu: false` is normal for it. */
+  engine?: string;
   device?: string;
   vramUsedMb?: number;
   vramTotalMb?: number;
