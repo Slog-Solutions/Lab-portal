@@ -22,6 +22,8 @@ export default defineConfig({
   entry: {
     'main/index': 'src/main/index.ts',
     'preload/index': 'src/preload/index.ts',
+    // Utility process that injects remote-control input (see the file).
+    'main/input-replay-worker': 'src/main/input-replay-worker.ts',
   },
   format: ['cjs'],
   target: 'node22',

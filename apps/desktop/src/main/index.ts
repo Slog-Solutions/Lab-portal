@@ -1,6 +1,5 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, nativeImage, powerMonitor, screen, session, Tray } from 'electron';
+import { app, BrowserWindow, desktopCapturer, ipcMain, Menu, nativeImage, powerMonitor, screen, session, Tray, utilityProcess, type UtilityProcess } from 'electron';
 import path from 'node:path';
-import { loadNativeBridge } from '@lab/native-bridge';
 import type { RemoteInputEvent } from '@lab/shared/events';
 import { registerAppScheme, handleAppScheme, applyContentSecurityPolicy, APP_SCHEME } from './protocol';
 import { ControlClient } from './control-client';
@@ -105,11 +104,25 @@ function unlockInput(): void {
   }
 }
 
-// Real nut.js-backed replay today (verified: moves the actual OS cursor —
-// see build session notes); resolves to KoffiNativeBridge's real
-// user32!BlockInput automatically once that tier loads (native-bridge's
-// loadNativeBridge() tries it before falling back here).
-const nativeBridge = loadNativeBridge();
+// Remote-control input is injected from a utility process, never from this
+// one — see input-replay-worker.ts for why LabPortal's own window could not
+// be minimized otherwise. Spawned on first use and respawned if it exits.
+let replayWorker: UtilityProcess | null = null;
+
+function replayInput(event: RemoteInputEvent): void {
+  if (!replayWorker) {
+    const worker = utilityProcess.fork(path.join(__dirname, 'input-replay-worker.js'), [], { serviceName: 'LabPortal input replay' });
+    worker.on('exit', (code) => {
+      if (replayWorker === worker) replayWorker = null;
+      if (!isQuitting) {
+        // eslint-disable-next-line no-console
+        console.error(`[main] input replay worker exited (${code}); it restarts on the next event`);
+      }
+    });
+    replayWorker = worker;
+  }
+  replayWorker.postMessage(event);
+}
 
 // Dev-only cap: auto-release input locally after this many ms so a
 // developer who locks their own PC is never permanently stuck.
@@ -260,6 +273,7 @@ if (!gotSingleInstanceLock) {
     controlClient?.disconnect();
     softLock.destroy();
     workstationController?.destroy();
+    replayWorker?.kill();
   });
 
   app.whenReady().then(async () => {
@@ -280,12 +294,7 @@ if (!gotSingleInstanceLock) {
   // LiveKit data-channel events (it must, since nut.js/native addons are
   // unreachable from a sandboxed, contextIsolated renderer) and forwards
   // them here, where the real OS-level replay happens.
-  ipcMain.on('agent:replay-input', (_event, payload: RemoteInputEvent) => {
-    void nativeBridge.replayInput(payload).catch((err: unknown) => {
-      // eslint-disable-next-line no-console
-      console.error('[main] replayInput failed', err);
-    });
-  });
+  ipcMain.on('agent:replay-input', (_event, payload: RemoteInputEvent) => replayInput(payload));
 
   // Auto-resolves getDisplayMedia with NO OS picker dialog — required
   // for a kiosk seat: neither the teacher's broadcast nor a
