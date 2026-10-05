@@ -162,6 +162,42 @@ class TranslationStream:
             self.playout.mark_drained()
         return self._pending_deltas
 
+    def settled(self) -> bool:
+        """No input left to process and nothing more coming from the engine.
+
+        For a synchronous engine "no input left" is enough. Azure answers
+        after the input, so it also has to report idle.
+        """
+        if self.ready():
+            return False
+        idle = getattr(engine, "idle", None)
+        return idle(self.state) if idle else True
+
+    def poll(self) -> list[TextDelta]:
+        """Collects output an asynchronous engine produced with no new input.
+
+        Azure returns a phrase's translation and speech AFTER the phrase
+        ends, i.e. while the teacher is silent. WebRTC sends no audio
+        during silence, so step() is never called then, and that output sat
+        queued until the teacher spoke again — then arrived as one burst
+        together with the next phrase. Engines without poll() (Seamless,
+        stub) produce output only in response to input, so this is a no-op
+        for them.
+        """
+        poll = getattr(engine, "poll", None)
+        if poll is None or self.error is not None:
+            return []
+        try:
+            output = poll(self.state)
+        except Exception as err:  # noqa: BLE001 — one stream failing must not take the class down
+            self.error = f"{type(err).__name__}: {err}"
+            log.exception("stream %s failed", self.lang)
+            return []
+        self._pending_deltas = []
+        if output:
+            self._absorb(output, is_final=False)
+        return self._pending_deltas
+
     def _absorb(self, output, *, is_final: bool) -> None:
         """Turns one agent output into caption deltas and playout audio."""
         segments = output if isinstance(output, list) else [output]

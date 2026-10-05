@@ -30,6 +30,7 @@ from __future__ import annotations
 import dataclasses
 import logging
 import threading
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -93,6 +94,16 @@ _PLAYOUT_CATCH_UP_START_MS = 8000
 _PLAYOUT_DROP_BACKLOG_MS = _MAX_PHRASE_MS + 10000
 _PLAYOUT_MAX_CATCH_UP_RATE = 1.08
 
+#: Azure ends a phrase only when it RECEIVES silence. WebRTC sends no audio
+#: at all while the teacher pauses, so without help the last sentence before
+#: every pause waited until they spoke again. After this long with no input
+#: the engine feeds silence itself. Comfortably above the 320ms gap between
+#: real source segments, so it never splices silence into speech.
+_SILENCE_FEED_AFTER_S = 0.6
+#: Total silence fed per pause: enough to pass the segmentation timeout with
+#: margin, and capped because Azure bills for every second of audio sent.
+_SILENCE_FEED_MAX_S = 2.0
+
 #: Cap on queued output segments per stream. Azure can burst several
 #: synthesis chunks at once; beyond this the student is too far behind
 #: for the audio to still be worth playing and PlayoutBuffer would drop
@@ -126,6 +137,15 @@ class _AzureState:
     #: that believes it is being translated but is not is the failure
     #: mode this whole service is written to avoid.
     error: str | None = None
+    #: Set once the source has ended (end of a test-run file) and the push
+    #: stream was closed, which tells Azure to finish the last phrase.
+    input_closed: bool = False
+    #: Azure has emitted everything it will for this session.
+    stopped: threading.Event = field(default_factory=threading.Event)
+    #: monotonic() of the last write to Azure (real audio or fed silence).
+    last_write: float = field(default_factory=time.monotonic)
+    #: Silence fed since the last real audio — see _SILENCE_FEED_MAX_S.
+    silence_fed_s: float = 0.0
 
     def offer(self, item) -> None:  # noqa: ANN001
         with self.lock:
@@ -375,14 +395,24 @@ class AzureEngine:
             except Exception:  # noqa: BLE001
                 log.exception("[Translation] synthesizing handler failed")
 
+        end_of_stream = self._speechsdk.CancellationReason.EndOfStream
+
         def on_canceled(evt) -> None:  # noqa: ANN001
+            # EndOfStream is how Azure reports a normal finish once the
+            # input is closed — not a failure. Treating it as one marked
+            # every completed test run as failed.
+            if getattr(evt, "reason", None) == end_of_stream:
+                state.stopped.set()
+                return
             # Never log evt itself: cancellation details can echo request
             # metadata, and the subscription key must not reach the logs.
             detail = getattr(evt, "error_details", None) or getattr(evt, "reason", "cancelled")
             state.error = str(detail)
+            state.stopped.set()
             log.error("[Translation] Azure cancelled %s: %s", state.lang, detail)
 
         def on_stopped(_evt) -> None:  # noqa: ANN001
+            state.stopped.set()
             log.info("[Translation] Azure session stopped: %s", state.lang)
 
         recognizer.recognizing.connect(on_recognizing)
@@ -428,11 +458,57 @@ class AzureEngine:
             samples = np.asarray(pcm_16k, dtype=np.float32).reshape(-1)
             if samples.size and state.push_stream is not None:
                 state.push_stream.write(_to_int16_bytes(samples))
+                state.last_write = time.monotonic()
+                state.silence_fed_s = 0.0
+        elif not state.input_closed and state.push_stream is not None:
+            # The source ended (only a test run signals this; a live class
+            # never does). Closing the input makes Azure finish the last
+            # phrase instead of waiting for silence that will never come.
+            state.push_stream.close()
+            state.input_closed = True
 
         # Whatever Azure has produced since the last call. Results lag the
         # audio that caused them — that lag is the number the stream
         # reports to the teacher's console.
         return state.drain()
+
+    def idle(self, states) -> bool:  # noqa: ANN001
+        """Nothing more will arrive: Azure finished after the input closed
+        and every result has been collected. A live stream (input never
+        closed) has nothing to flush, so it counts as idle."""
+        state: _AzureState = states
+        if state.closed or not state.input_closed:
+            return True
+        with state.lock:
+            pending = bool(state.pending)
+        return state.stopped.is_set() and not pending
+
+    def poll(self, states):  # noqa: ANN001, ANN201
+        """Results that arrived with no new input — see TranslationStream.poll.
+
+        Cheap: a lock and a list swap, so the scheduler can call it on
+        every idle pass.
+        """
+        state: _AzureState = states
+        if state.error:
+            raise ModelUnavailable(f"Azure stream failed: {state.error}")
+        if state.closed:
+            return []
+        self._feed_pause_silence(state)
+        return state.drain()
+
+    def _feed_pause_silence(self, state: _AzureState) -> None:
+        """Lets Azure finish the phrase in progress when input has stopped."""
+        if state.input_closed or state.push_stream is None:
+            return
+        now = time.monotonic()
+        gap = now - state.last_write
+        if gap < _SILENCE_FEED_AFTER_S or state.silence_fed_s >= _SILENCE_FEED_MAX_S:
+            return
+        seconds = min(gap, _SILENCE_FEED_MAX_S - state.silence_fed_s)
+        state.push_stream.write(bytes(int(seconds * MODEL_SAMPLE_RATE) * 2))  # 16-bit zeros
+        state.silence_fed_s += seconds
+        state.last_write = now
 
     # ---- reporting ---------------------------------------------------
 

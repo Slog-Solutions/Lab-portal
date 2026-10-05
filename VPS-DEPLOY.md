@@ -132,6 +132,29 @@ https://72.60.204.211:8058/    <- same, self-signed cert, click through
 If a browser can't reach either, it's almost certainly the provider's
 cloud firewall from step 5, not Compose.
 
+## 6b. Dictionary (one-time copy)
+
+The student dictionary needs `dictionary.db` (49 MB). It is gitignored, so
+`git clone` never brings it and the server reports "Dictionary unavailable"
+until it is copied onto the persistent data volume once. It survives
+rebuilds after that.
+
+From the Windows PC that has the repo (PowerShell):
+```powershell
+scp "D:\Lab Management\apps\server\LabData\dictionary\dictionary.db" "D:\Lab Management\apps\server\LabData\dictionary\dictionary.manifest.json" root@72.60.204.211:/tmp/
+```
+
+On the VPS:
+```bash
+cd ~/Lab-Management/Lab-portal
+docker compose exec server mkdir -p /data/LabData/dictionary
+docker compose cp /tmp/dictionary.db server:/data/LabData/dictionary/dictionary.db
+docker compose cp /tmp/dictionary.manifest.json server:/data/LabData/dictionary/dictionary.manifest.json
+docker compose restart server
+docker compose logs server | grep -i dictionary
+```
+Expect `dictionary.db loaded from /data/LabData/dictionary/dictionary.db`.
+
 ## 7. The Electron side — already done, nothing to configure
 
 `apps/desktop/build/server-config.json` is baked with

@@ -47,9 +47,10 @@ class _Result:
 
 
 class _Evt:
-    def __init__(self, result=None, error_details=None) -> None:  # noqa: ANN001
+    def __init__(self, result=None, error_details=None, reason=None) -> None:  # noqa: ANN001
         self.result = result
         self.error_details = error_details
+        self.reason = reason
 
 
 class _PushStream:
@@ -153,6 +154,11 @@ def _install_fake_sdk(voices: list[tuple[str, str]]) -> types.ModuleType:
             "SpeechServiceResponse_TranslationRequestStablePartialResult"
         )
 
+    class CancellationReason:
+        EndOfStream = "EndOfStream"
+        Error = "Error"
+
+    speech.CancellationReason = CancellationReason
     speech.PropertyId = PropertyId
     speech.ResultReason = ResultReason
     speech.SpeechSynthesisOutputFormat = SpeechSynthesisOutputFormat
@@ -366,3 +372,65 @@ def test_playout_never_drops_a_single_phrase(engine):  # noqa: ANN001
     tuned = engine.tune_params(EngineParams())
     assert tuned.drop_backlog_ms > 20000  # longer than the longest phrase Azure will emit
     assert tuned.catch_up_start_ms > EngineParams().catch_up_start_ms
+
+
+def test_results_are_collected_with_no_new_input(engine):  # noqa: ANN001
+    """Azure answers after the phrase ends, while the teacher is silent and
+    no audio arrives. poll() must surface it without a push."""
+    from translator.engine.base import EngineParams, SpeechOut
+
+    state = engine.build_state("hin", EngineParams(), speech=True)
+    state.recognizer.synthesizing.fire(_Evt(_Result(audio=np.zeros(1600, dtype=np.int16).tobytes())))
+    assert any(isinstance(o, SpeechOut) for o in engine.poll(state))
+    assert engine.poll(state) == []
+
+
+def test_normal_end_of_stream_is_not_a_failure(engine):  # noqa: ANN001
+    from translator.engine.base import EngineParams
+
+    state = engine.build_state("hin", EngineParams(), speech=True)
+    engine.push(state, np.zeros(0, dtype=np.float32), is_final=True)
+    assert state.push_stream.closed  # the input end reaches Azure
+    assert not engine.idle(state)  # still waiting for Azure to finish
+
+    state.recognizer.canceled.fire(_Evt(reason="EndOfStream"))
+    assert state.error is None
+    assert engine.idle(state)
+    assert engine.poll(state) == []  # and nothing raises
+
+
+def test_a_live_stream_is_never_waiting_to_flush(engine):  # noqa: ANN001
+    from translator.engine.base import EngineParams
+
+    assert engine.idle(engine.build_state("hin", EngineParams(), speech=True))
+
+
+def test_pause_silence_lets_azure_finish_the_last_phrase(engine, monkeypatch):  # noqa: ANN001
+    """WebRTC sends nothing while the teacher pauses, and Azure only ends a
+    phrase on silence it receives, so the engine feeds a little itself."""
+    import translator.engine.azure as az
+    from translator.engine.base import EngineParams
+
+    clock = [1000.0]
+    monkeypatch.setattr(az.time, "monotonic", lambda: clock[0])
+    state = engine.build_state("hin", EngineParams(), speech=True)
+    engine.push(state, np.full(1600, 0.1, dtype=np.float32), is_final=False)
+    real = len(state.push_stream.written)
+
+    clock[0] += 0.3  # a normal gap between source segments: never filled
+    engine.poll(state)
+    assert len(state.push_stream.written) == real
+
+    clock[0] += 0.5  # 0.8s with no input: the teacher paused
+    engine.poll(state)
+    assert len(state.push_stream.written) > real
+    assert set(bytes(state.push_stream.written[real:])) == {0}
+
+    for _ in range(20):  # a long silence costs at most 2s of audio
+        clock[0] += 1.0
+        engine.poll(state)
+    fed = (len(state.push_stream.written) - real) / 2 / 16000
+    assert fed == pytest.approx(2.0, abs=0.01)
+
+    engine.push(state, np.full(1600, 0.1, dtype=np.float32), is_final=False)  # speech resumes
+    assert state.silence_fed_s == 0.0

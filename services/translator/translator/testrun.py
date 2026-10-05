@@ -353,7 +353,10 @@ async def _feed_fast(audio: np.ndarray, streams: dict[str, TranslationStream]) -
 async def _await_drain(streams: dict[str, TranslationStream], timeout_s: float = 120) -> None:
     deadline = asyncio.get_running_loop().time() + timeout_s
     while asyncio.get_running_loop().time() < deadline:
-        if all(not s.ready() for s in streams.values()):
+        # Settled (input processed AND the engine done - Azure answers after
+        # the input ends) and every playout buffer played out, so the saved
+        # WAV is not cut off at whatever the 1x pump had reached.
+        if all(s.settled() and (s.playout is None or s.playout.backlog_ms() == 0) for s in streams.values()):
             return
         await asyncio.sleep(0.05)
     log.warning("test run drain timed out with audio still queued")

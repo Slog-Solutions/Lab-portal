@@ -34,9 +34,14 @@ RUN mkdir -p /usr/local/piper/voices \
     && wget -qO /usr/local/piper/voices/en_GB.onnx.json https://huggingface.co/rhasspy/piper-voices/resolve/main/en/en_GB/alba/medium/en_GB-alba-medium.onnx.json \
     && apt-get purge -y --auto-remove wget
 
+# DICTIONARY_DB_PATH points at the persistent lab-data volume rather than
+# the default path inside the image: dictionary.db is gitignored (49MB,
+# built by tools/dictionary-build), so it is never in the build context and
+# has to be copied onto the volume once per deployment.
 ENV NODE_ENV=production \
     PORT=3000 \
     LAB_DATA_ROOT=/data/LabData \
+    DICTIONARY_DB_PATH=/data/LabData/dictionary/dictionary.db \
     UPDATES_DIR=/data/updates \
     ESPEAK_NG_BIN=/usr/bin/espeak-ng \
     PIPER_BIN=/usr/local/piper/piper \

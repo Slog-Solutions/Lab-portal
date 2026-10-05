@@ -128,7 +128,18 @@ class GpuScheduler:
                 with self._lock:
                     stream = self._streams.get(key)
                     sink = self._sinks.get(key)
-                if stream is None or sink is None or not stream.ready():
+                if stream is None or sink is None:
+                    continue
+                if not stream.ready():
+                    # No new audio, but an asynchronous engine may have
+                    # finished a phrase while the teacher was silent.
+                    deltas = stream.poll()
+                    if deltas:
+                        did_work = True
+                        try:
+                            sink(deltas)
+                        except Exception:  # noqa: BLE001
+                            log.exception("caption sink failed for %s/%s", key[0], key[1])
                     continue
                 began = time.perf_counter()
                 deltas = stream.step()

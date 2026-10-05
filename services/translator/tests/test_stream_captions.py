@@ -93,3 +93,26 @@ def test_engines_without_tuning_use_shared_params(monkeypatch, missing):  # noqa
     monkeypatch.setattr(stream_mod, "engine", _ScriptedEngine([]))
     s = stream_mod.TranslationStream(lang="eng", params=EngineParams())
     assert s.params == EngineParams()
+
+
+def test_poll_delivers_output_produced_without_input(monkeypatch):  # noqa: ANN001
+    class _Async(_ScriptedEngine):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.ready = [TextOut("translated after the pause", finished=True, replace=True)]
+
+        def poll(self, state):  # noqa: ANN001, ANN201, ARG002
+            out, self.ready = self.ready, []
+            return out
+
+    monkeypatch.setattr(stream_mod, "engine", _Async())
+    s = stream_mod.TranslationStream(lang="hin", params=EngineParams())
+    assert not s.ready()  # no input queued...
+    assert [d.text for d in s.poll()] == ["translated after the pause"]  # ...yet output arrives
+
+
+def test_poll_is_a_no_op_for_synchronous_engines(monkeypatch):  # noqa: ANN001
+    monkeypatch.setattr(stream_mod, "engine", _ScriptedEngine([[TextOut("x")]]))
+    s = stream_mod.TranslationStream(lang="hin", params=EngineParams())
+    assert s.poll() == []
+    assert s.settled()
