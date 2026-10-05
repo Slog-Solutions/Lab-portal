@@ -41,6 +41,7 @@ model User {
   enrollments         Enrollment[]
   taughtSessions      ClassSession[]   @relation("SessionTeacher")
   mediaAssets         MediaAsset[]
+  mediaFolders        MediaFolder[]
   contentPackages     ContentPackage[]
   curricula           Curriculum[]
   exercisesAuthored   Exercise[]       @relation("ExerciseTeacher")
@@ -440,11 +441,31 @@ model MediaAsset {
   // reads as "everyone" — the one exposure this must never fall into. A dangling
   // id simply matches nobody.
   sharedBatchIds String[]        @default([])
+  // Teacher-made folder in the Study Library (organisation only — students
+  // never see folders). Deleting a folder leaves its files unfiled.
+  folderId       String?
+  folder         MediaFolder?    @relation(fields: [folderId], references: [id], onDelete: SetNull)
   createdAt      DateTime        @default(now())
 
   items Item[]
 
   @@index([scope])
+  @@index([ownerId])
+  @@index([folderId])
+}
+
+// A Study Library folder for one kind of content (audio, video, text, image).
+// Lab-wide like DEPARTMENT/INSTITUTION files: every teacher sees every folder;
+// only its creator or an admin may delete it.
+model MediaFolder {
+  id        String       @id @default(cuid())
+  name      String
+  kind      String // 'audio' | 'video' | 'text' | 'image'
+  ownerId   String
+  owner     User         @relation(fields: [ownerId], references: [id])
+  createdAt DateTime     @default(now())
+  assets    MediaAsset[]
+
   @@index([ownerId])
 }
 

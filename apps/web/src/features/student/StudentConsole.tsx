@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { Menu } from 'lucide-react';
+import { ArrowLeft, Menu } from 'lucide-react';
 import { Track } from 'livekit-client';
 import type { CommandEnvelope, DesiredStationState, RoundTableFloor, TimedTestState, TranslationCaption } from '@lab/shared';
 import { ActivityType, CommandType, seatLabel, shouldHandleDictionaryShortcut } from '@lab/shared';
@@ -182,6 +182,23 @@ export function StudentConsole() {
   // in progress lives in its panel's own state, and the screen-share/audio
   // containers must never move or unmount (see router.tsx's doc comment).
   const [section, setSection] = useState<StudentSection>('home');
+  // Sections visited before the current one, for the header's Back button.
+  // Recorded from `section` itself so every way of switching (drawer, Home
+  // tiles, a teacher starting a broadcast) is covered. Home is the root:
+  // reaching it clears the trail.
+  const sectionHistoryRef = useRef<StudentSection[]>([]);
+  const prevSectionRef = useRef<StudentSection>(section);
+  const goingBackRef = useRef(false);
+  useEffect(() => {
+    if (section === 'home') sectionHistoryRef.current = [];
+    else if (prevSectionRef.current !== section && !goingBackRef.current) sectionHistoryRef.current.push(prevSectionRef.current);
+    goingBackRef.current = false;
+    prevSectionRef.current = section;
+  }, [section]);
+  function goBack(): void {
+    goingBackRef.current = true;
+    setSection(sectionHistoryRef.current.pop() ?? 'home');
+  }
   const [openRequest, setOpenRequest] = useState<{ assignmentId: string; nonce: number } | null>(null);
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [signingOut, setSigningOut] = useState(false);
@@ -305,7 +322,11 @@ export function StudentConsole() {
       setHeldTest(null);
     }
     prevStudentIdRef.current = studentId;
-    setSection(studentId && (screenShareCount > 0 || activityInstanceId) ? 'class' : 'home');
+    const startSection: StudentSection = studentId && (screenShareCount > 0 || activityInstanceId) ? 'class' : 'home';
+    // The previous student's trail must not carry over to the Back button.
+    sectionHistoryRef.current = [];
+    prevSectionRef.current = startSection;
+    setSection(startSection);
     setDrawerOpen(false);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [studentId]);
@@ -751,6 +772,17 @@ export function StudentConsole() {
           <BrandLogo variant="mark" decorative className="h-8 w-8 shrink-0" />
           {student && (
             <>
+              {section !== 'home' && (
+                <button
+                  type="button"
+                  onClick={goBack}
+                  aria-label="Back"
+                  title="Back"
+                  className="rounded-control p-2 text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+                >
+                  <ArrowLeft className="h-5 w-5" />
+                </button>
+              )}
               <button
                 type="button"
                 onClick={() => setDrawerOpen(true)}

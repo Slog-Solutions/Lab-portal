@@ -15,7 +15,7 @@ import {
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request, Response } from 'express';
-import { UserRole, zUpdateMediaAssetDto, zUploadMediaAssetDto } from '@lab/shared';
+import { UserRole, zCreateMediaFolderDto, zUpdateMediaAssetDto, zUploadMediaAssetDto } from '@lab/shared';
 import { Roles } from '../../common/decorators/roles.decorator';
 import { CurrentUser } from '../../common/decorators/current-user.decorator';
 import { StationOrStaffGuard } from '../../common/guards/station-or-staff.guard';
@@ -71,6 +71,29 @@ export class MediaAssetsController {
   @Get()
   async list(@CurrentUser() user: JwtPayload) {
     return this.assets.list({ id: user.sub, role: user.role });
+  }
+
+  // Folder routes are declared before ':id' so 'folders' isn't read as an asset id.
+  @Roles(UserRole.TEACHER, UserRole.ADMIN)
+  @Get('folders')
+  async listFolders() {
+    return this.assets.listFolders();
+  }
+
+  @Roles(UserRole.TEACHER, UserRole.ADMIN)
+  @Post('folders')
+  async createFolder(
+    @Body(new ZodValidationPipe(zCreateMediaFolderDto)) dto: ReturnType<typeof zCreateMediaFolderDto.parse>,
+    @CurrentUser() user: JwtPayload,
+  ) {
+    return this.assets.createFolder({ id: user.sub, role: user.role }, dto);
+  }
+
+  @Roles(UserRole.TEACHER, UserRole.ADMIN)
+  @Delete('folders/:id')
+  async removeFolder(@Param('id') id: string, @CurrentUser() user: JwtPayload) {
+    await this.assets.removeFolder(id, { id: user.sub, role: user.role });
+    return { ok: true };
   }
 
   @Roles()

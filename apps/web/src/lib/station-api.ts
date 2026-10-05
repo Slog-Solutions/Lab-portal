@@ -161,9 +161,12 @@ export const stationApi = {
     >('/study-modules/library', token),
 
   /** Loose library files the teacher switched on for students (not attached
-   * to any module) — same station auth as `studyLibrary`. */
+   * to any module) — same station auth as `studyLibrary`. `folder` is the
+   * teacher's Study Library folder it is filed in (null = none). */
   studyLibraryFiles: (token: string | null) =>
-    stationFetch<Array<{ id: string; title: string; filename: string; kind: string; mimeType: string; sizeBytes: number }>>(
+    stationFetch<
+      Array<{ id: string; title: string; filename: string; kind: string; mimeType: string; sizeBytes: number; folder?: { id: string; name: string } | null }>
+    >(
       '/study-modules/library/files',
       token,
     ),

@@ -1,6 +1,6 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import path from 'node:path';
-import { MediaAssetScope, UserRole, type UploadMediaAssetDto, type UpdateMediaAssetDto } from '@lab/shared';
+import { MediaAssetScope, UserRole, type CreateMediaFolderDto, type UploadMediaAssetDto, type UpdateMediaAssetDto } from '@lab/shared';
 import { PrismaService } from '../../prisma/prisma.service';
 import { StorageService } from '../../common/storage/storage.service';
 import { AuditService } from '../audit/audit.service';
@@ -46,6 +46,7 @@ export class MediaAssetsService {
     const sharedBatchIds = dto.sharedBatchIds ?? [];
     this.assertStudentVisibleAllowed(dto.scope, studentVisible);
     await this.assertClassesShareable(sharedBatchIds, requester);
+    if (dto.folderId) await this.assertFolderFits(dto.folderId, dto.kind);
     const ext = path.extname(upload.originalName) || '';
     const asset = await this.prisma.mediaAsset.create({
       data: {
@@ -53,6 +54,7 @@ export class MediaAssetsService {
         scope: dto.scope,
         studentVisible,
         sharedBatchIds,
+        folderId: dto.folderId,
         kind: dto.kind,
         title: dto.title,
         filename: upload.originalName,
@@ -102,6 +104,7 @@ export class MediaAssetsService {
     // Hiding is the safe direction: making a file PRIVATE without saying
     // anything about students just takes it off their list, instead of
     // bouncing the teacher with an error about a flag they never touched.
+    if (dto.folderId) await this.assertFolderFits(dto.folderId, asset.kind);
     const studentVisible = dto.studentVisible ?? (dto.scope === MediaAssetScope.PRIVATE ? false : asset.studentVisible);
     this.assertStudentVisibleAllowed(dto.scope ?? asset.scope, studentVisible);
     return this.prisma.mediaAsset.update({ where: { id }, data: { ...dto, studentVisible } });
@@ -117,6 +120,36 @@ export class MediaAssetsService {
     // attempts that expect the audio to keep existing for review. Orphan
     // sweep is a hardening item (Phase 5), not required for the library
     // to function correctly today.
+  }
+
+  // ---- Folders --------------------------------------------------------------
+
+  listFolders() {
+    return this.prisma.mediaFolder.findMany({ orderBy: [{ kind: 'asc' }, { name: 'asc' }] });
+  }
+
+  async createFolder(requester: { id: string; role: string }, dto: CreateMediaFolderDto) {
+    const folder = await this.prisma.mediaFolder.create({ data: { name: dto.name, kind: dto.kind, ownerId: requester.id } });
+    await this.audit.log({ actorId: requester.id, action: 'media_folder.create', detail: { folderId: folder.id, kind: dto.kind } });
+    return folder;
+  }
+
+  /** Files in the folder are kept, just unfiled (onDelete: SetNull). */
+  async removeFolder(id: string, requester: { id: string; role: string }): Promise<void> {
+    const folder = await this.prisma.mediaFolder.findUnique({ where: { id } });
+    if (!folder) throw new NotFoundException('Folder not found');
+    if (requester.role !== UserRole.ADMIN && folder.ownerId !== requester.id) {
+      throw new ForbiddenException("Only the folder's creator or an admin may delete it");
+    }
+    await this.prisma.mediaFolder.delete({ where: { id } });
+    await this.audit.log({ actorId: requester.id, action: 'media_folder.delete', detail: { folderId: id } });
+  }
+
+  /** A folder holds one kind of content only. */
+  private async assertFolderFits(folderId: string, kind: string): Promise<void> {
+    const folder = await this.prisma.mediaFolder.findUnique({ where: { id: folderId } });
+    if (!folder) throw new BadRequestException('That folder no longer exists');
+    if (folder.kind !== kind) throw new BadRequestException(`The folder "${folder.name}" only holds ${folder.kind} files`);
   }
 
   resolveFilePath(asset: { path: string }): string {

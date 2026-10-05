@@ -153,7 +153,10 @@ export class GradebookService {
 
     await this.prisma.attempt.update({
       where: { id: dto.attemptId },
-      data: { rawScore: dto.newScore, status: AttemptStatus.SCORED },
+      // An override is always a 0-100 percentage (every caller sends one),
+      // so the scale moves with it — keeping the activity's native maxScore
+      // (e.g. 5 for pronunciation) made 10% display as 10/5 = 200%.
+      data: { rawScore: dto.newScore, maxScore: 100, status: AttemptStatus.SCORED },
     });
 
     return override;

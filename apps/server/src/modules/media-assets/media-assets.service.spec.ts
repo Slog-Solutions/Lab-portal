@@ -11,6 +11,7 @@ const OWNER = { id: 'teacher1', role: UserRole.TEACHER };
 const ADMIN = { id: 'admin1', role: UserRole.ADMIN };
 const CLASS_A = 'clh3am1r30000qzrmn831i7a';
 const CLASS_B = 'clh3am1r30000qzrmn831i7b';
+const AUDIO_FOLDER = { id: 'clh3am1r30000qzrmn831f01', name: 'Listening', kind: AssetKind.AUDIO, ownerId: 'teacher1' };
 const UPLOAD = { tempPath: '/tmp/x', originalName: 'notes.md', mimeType: 'text/markdown' };
 
 function stored(over: Record<string, unknown> = {}) {
@@ -24,6 +25,11 @@ function makeSvc(existing = stored(), taughtBatchIds: string[] = [CLASS_A]) {
       create: vi.fn().mockImplementation(({ data }) => ({ id: 'a1', ...data })),
       update: vi.fn().mockImplementation(({ data }) => ({ ...existing, ...data })),
       findUnique: vi.fn().mockResolvedValue(existing),
+    },
+    mediaFolder: {
+      findUnique: vi.fn().mockImplementation(({ where }) => (where.id === AUDIO_FOLDER.id ? AUDIO_FOLDER : null)),
+      create: vi.fn().mockImplementation(({ data }) => ({ id: 'f2', ...data })),
+      delete: vi.fn(),
     },
   };
   const storage = { commitFile: vi.fn().mockResolvedValue({ relativePath: 'media/a1.md', sizeBytes: 10 }) };
@@ -171,5 +177,42 @@ describe('zUploadMediaAssetDto studentVisible', () => {
   it('is optional and rejects other strings', () => {
     expect(zUploadMediaAssetDto.parse(base).studentVisible).toBeUndefined();
     expect(() => zUploadMediaAssetDto.parse({ ...base, studentVisible: 'yes' })).toThrow();
+  });
+});
+
+describe('MediaAssetsService — folders', () => {
+  const AUDIO_UPLOAD = { ...UPLOAD, originalName: 'track.mp3', mimeType: 'audio/mpeg' };
+
+  it('files an upload into a folder of the same kind', async () => {
+    const { svc, prisma } = makeSvc();
+    await svc.create(OWNER, { kind: AssetKind.AUDIO, scope: MediaAssetScope.INSTITUTION, folderId: AUDIO_FOLDER.id }, AUDIO_UPLOAD);
+    expect(prisma.mediaAsset.create).toHaveBeenCalledWith({ data: expect.objectContaining({ folderId: AUDIO_FOLDER.id }) });
+  });
+
+  it('refuses an upload whose kind does not match the folder, before anything is written', async () => {
+    const { svc, prisma } = makeSvc();
+    await expect(
+      svc.create(OWNER, { kind: AssetKind.TEXT, scope: MediaAssetScope.INSTITUTION, folderId: AUDIO_FOLDER.id }, UPLOAD),
+    ).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.mediaAsset.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses moving a file into a folder of another kind', async () => {
+    const { svc, prisma } = makeSvc(stored({ kind: AssetKind.TEXT }));
+    await expect(svc.update('a1', { folderId: AUDIO_FOLDER.id }, OWNER)).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.mediaAsset.update).not.toHaveBeenCalled();
+  });
+
+  it('moves a file out of its folder with folderId null', async () => {
+    const { svc, prisma } = makeSvc(stored({ kind: AssetKind.AUDIO, folderId: AUDIO_FOLDER.id }));
+    await svc.update('a1', { folderId: null }, OWNER);
+    expect(prisma.mediaAsset.update).toHaveBeenCalledWith({ where: { id: 'a1' }, data: expect.objectContaining({ folderId: null }) });
+  });
+
+  it('only the folder creator or an admin may delete a folder', async () => {
+    const { svc, prisma } = makeSvc();
+    await expect(svc.removeFolder(AUDIO_FOLDER.id, { id: 'teacher2', role: UserRole.TEACHER })).rejects.toBeInstanceOf(ForbiddenException);
+    await svc.removeFolder(AUDIO_FOLDER.id, ADMIN);
+    expect(prisma.mediaFolder.delete).toHaveBeenCalledWith({ where: { id: AUDIO_FOLDER.id } });
   });
 });

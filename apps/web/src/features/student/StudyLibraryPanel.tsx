@@ -1,4 +1,5 @@
-import { useState } from 'react';
+import { useMemo, useState } from 'react';
+import { ChevronDown, ChevronRight, Folder } from 'lucide-react';
 import type { StationControlClient } from '../../lib/station-control-client';
 import { stationApi, type StartedAttempt } from '../../lib/station-api';
 import { VocabularyTestPlayer } from '../activities/VocabularyTestPlayer';
@@ -8,6 +9,8 @@ import { StudyMaterialItem } from './StudyMaterialItem';
 import { useStudyLibrary } from './use-study-library';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+
+type LibraryFile = Awaited<ReturnType<typeof stationApi.studyLibraryFiles>>[number];
 
 /**
  * Annexure-I Ser 1: "content management library... self-study even when
@@ -35,6 +38,31 @@ export function StudyLibraryPanel({ control, active }: { control: StationControl
   const library = useStudyLibrary(control, { active, paused: started !== null });
   const modules = library.data?.modules;
   const files = library.data?.files;
+  // The teacher's Study Library folders, in name order, each with its files;
+  // files in no folder are listed after them, as before.
+  const { folders, unfiled } = useMemo(() => {
+    const byId = new Map<string, { id: string; name: string; files: LibraryFile[] }>();
+    const loose: LibraryFile[] = [];
+    for (const file of (files ?? []) as LibraryFile[]) {
+      if (!file.folder) {
+        loose.push(file);
+        continue;
+      }
+      const group = byId.get(file.folder.id) ?? { id: file.folder.id, name: file.folder.name, files: [] };
+      group.files.push(file);
+      byId.set(file.folder.id, group);
+    }
+    return { folders: [...byId.values()].sort((a, b) => a.name.localeCompare(b.name)), unfiled: loose };
+  }, [files]);
+  const [openFolders, setOpenFolders] = useState<Set<string>>(new Set());
+  function toggleFolder(id: string): void {
+    setOpenFolders((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }
 
   async function startExercise(exerciseId: string): Promise<void> {
     setError(null);
@@ -112,7 +140,34 @@ export function StudyLibraryPanel({ control, active }: { control: StationControl
           <div>
             <p className="mb-1.5 text-sm font-medium">Files from your teachers</p>
             <div className="space-y-1.5">
-              {files.map((file) => (
+              {folders.map((folder) => {
+                const open = openFolders.has(folder.id);
+                return (
+                  <div key={folder.id}>
+                    <button
+                      type="button"
+                      onClick={() => toggleFolder(folder.id)}
+                      aria-expanded={open}
+                      className="flex w-full items-center gap-2 rounded-md border border-border p-2 text-left transition-colors hover:bg-accent"
+                    >
+                      <Folder className="h-4 w-4 shrink-0 text-brand" />
+                      <span className="flex-1 text-sm font-medium">{folder.name}</span>
+                      <span className="text-xs text-muted-foreground">
+                        {folder.files.length} {folder.files.length === 1 ? 'file' : 'files'}
+                      </span>
+                      {open ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+                    </button>
+                    {open && (
+                      <div className="mt-1.5 space-y-1.5 border-l-2 border-border pl-3">
+                        {folder.files.map((file) => (
+                          <StudyMaterialItem key={file.id} material={file} token={control.getToken()} />
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+              {unfiled.map((file) => (
                 <StudyMaterialItem key={file.id} material={file} token={control.getToken()} />
               ))}
             </div>

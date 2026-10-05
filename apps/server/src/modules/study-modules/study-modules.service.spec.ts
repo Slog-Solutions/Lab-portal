@@ -224,6 +224,18 @@ describe('StudyModulesService.libraryFiles (loose files students see)', () => {
 
     const files = await svc.libraryFiles('station1');
 
-    expect(files).toEqual([{ id: ASSET2, title: `${ASSET2}.pdf`, filename: `${ASSET2}.pdf`, kind: 'text', mimeType: 'application/pdf', sizeBytes: 2048 }]);
+    expect(files).toEqual([{ id: ASSET2, title: `${ASSET2}.pdf`, filename: `${ASSET2}.pdf`, kind: 'text', mimeType: 'application/pdf', sizeBytes: 2048, folder: null }]);
+  });
+
+  it('tells the student which teacher folder each file is in', async () => {
+    const { svc, prisma } = makeSvc();
+    const folder = { id: 'clh3am1r30000qzrmn831f01', name: 'A1 Listening' };
+    prisma.mediaAsset.findMany.mockResolvedValue([asset(ASSET1, { folder })]);
+    prisma.studyModule.findMany.mockResolvedValue([]);
+
+    const files = await svc.libraryFiles('station1');
+
+    expect(prisma.mediaAsset.findMany).toHaveBeenCalledWith(expect.objectContaining({ select: expect.objectContaining({ folder: { select: { id: true, name: true } } }) }));
+    expect(files[0]?.folder).toEqual(folder);
   });
 });

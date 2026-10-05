@@ -121,6 +121,9 @@ export class StudyModulesService {
    * narrows what is *listed*; it is not an access check on the file itself —
    * a station token can still open any non-PRIVATE asset by id, as it can for
    * module files.
+   *
+   * Each file carries the Study Library folder the teacher filed it in (or
+   * null), so the student sees the same folders the teacher made.
    */
   async libraryFiles(stationId: string) {
     const classIds = await this.enrolledBatchIds(stationId);
@@ -132,12 +135,12 @@ export class StudyModulesService {
           OR: [{ sharedBatchIds: { isEmpty: true } }, { sharedBatchIds: { hasSome: classIds } }],
         },
         orderBy: { createdAt: 'desc' },
-        select: MATERIAL_SELECT,
+        select: { ...MATERIAL_SELECT, folder: { select: { id: true, name: true } } },
       }),
       this.prisma.studyModule.findMany({ select: { materialAssetIds: true } }),
     ]);
     const inModules = new Set(modules.flatMap((m) => m.materialAssetIds));
-    return visible.filter((a) => !inModules.has(a.id)).map(toMaterial);
+    return visible.filter((a) => !inModules.has(a.id)).map((a) => ({ ...toMaterial(a), folder: a.folder ?? null }));
   }
 
   /** Classes of the student currently seated at this station (none if the seat is unclaimed). */

@@ -17,6 +17,7 @@ export const queryKeys = {
   myClasses: ['my-classes'] as const,
   classStudents: (id: string) => ['my-classes', id, 'students'] as const,
   mediaAssets: ['media-assets'] as const,
+  mediaFolders: ['media-folders'] as const,
   mediaAsset: (id: string) => ['media-assets', id] as const,
   contentPackages: ['content-packages'] as const,
   exercises: ['exercises'] as const,

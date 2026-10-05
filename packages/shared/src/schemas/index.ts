@@ -544,6 +544,8 @@ export const zUploadMediaAssetDto = z.object({
     .optional(),
   /** Only students enrolled in one of these classes see it; omitted or empty = all students. */
   sharedBatchIds: zSharedBatchIds.optional(),
+  /** Study Library folder to file it in; its kind must match. Omitted = unfiled. */
+  folderId: z.string().cuid2().optional(),
 });
 export type UploadMediaAssetDto = z.infer<typeof zUploadMediaAssetDto>;
 
@@ -552,8 +554,17 @@ export const zUpdateMediaAssetDto = z.object({
   scope: zMediaAssetScope.optional(),
   studentVisible: z.boolean().optional(),
   sharedBatchIds: zSharedBatchIds.optional(),
+  /** Move to this folder (its kind must match), or null to unfile. */
+  folderId: z.string().cuid2().nullable().optional(),
 });
 export type UpdateMediaAssetDto = z.infer<typeof zUpdateMediaAssetDto>;
+
+/** POST /media-assets/folders — a Study Library folder for one kind of content. */
+export const zCreateMediaFolderDto = z.object({
+  name: z.string().trim().min(1).max(100),
+  kind: z.enum([AssetKind.AUDIO, AssetKind.VIDEO, AssetKind.TEXT, AssetKind.IMAGE]),
+});
+export type CreateMediaFolderDto = z.infer<typeof zCreateMediaFolderDto>;
 
 /** POST /class-recordings — a teacher starting a recording of their own
  * class broadcast. See ClassRecordingsController. */
